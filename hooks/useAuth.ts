@@ -39,7 +39,7 @@ export function useAuth() {
         .maybeSingle() as any
 
       // atualiza último acesso sem bloquear
-      supabase.from('usuarios').update({ ultimo_acesso: new Date().toISOString() }).eq('id', u.id)
+      ;(supabase as any).from('usuarios').update({ ultimo_acesso: new Date().toISOString() }).eq('id', u.id)
 
       return {
         ...u,
@@ -134,7 +134,7 @@ export function useAuth() {
       const { error: err } = await supabase.auth.updateUser({ password: newPassword })
       if (err) throw err
       if (user) {
-        await supabase.from('usuarios').update({ troca_senha_obrigatoria: false }).eq('id', user.id)
+        await (supabase as any).from('usuarios').update({ troca_senha_obrigatoria: false }).eq('id', user.id)
         setUser({ ...user, troca_senha_obrigatoria: false })
       }
     } catch (err) {
