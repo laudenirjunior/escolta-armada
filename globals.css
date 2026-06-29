@@ -1,0 +1,112 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..150,100..900;1,9..150,100..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: #f0f2f5;
+    --foreground: #111827;
+    --sidebar-bg: #0c0e14;
+    --topbar-bg: #0c0e14;
+    --surface: #ffffff;
+    --surface-alt: #f8fafc;
+    --border: #e5e7eb;
+    --border-strong: #d1d5db;
+    --text-primary: #111827;
+    --text-secondary: #6b7280;
+    --text-muted: #9ca3af;
+    --primary: #3b82f6;
+    --primary-dark: #2563eb;
+    --status-success: #10b981;
+    --status-warning: #f59e0b;
+    --status-error: #ef4444;
+    --status-info: #3b82f6;
+    --shadow-card: 0 1px 3px 0 rgba(0,0,0,.08), 0 1px 2px -1px rgba(0,0,0,.04);
+    --shadow-md: 0 4px 12px -2px rgba(0,0,0,.1), 0 2px 6px -2px rgba(0,0,0,.05);
+    --shadow-lg: 0 10px 24px -4px rgba(0,0,0,.12), 0 4px 10px -4px rgba(0,0,0,.06);
+  }
+
+  html { @apply scroll-smooth; }
+
+  body {
+    background: var(--sidebar-bg);
+    color: var(--foreground);
+    font-family: var(--font-sans, 'DM Sans', system-ui, sans-serif);
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+@layer components {
+  /* ── Card light (área de conteúdo) ── */
+  .card-light {
+    @apply bg-white rounded-xl border border-gray-200;
+    box-shadow: var(--shadow-card);
+  }
+
+  /* ── Card KPI (fundo escuro gradiente) ── */
+  .card-kpi {
+    @apply rounded-xl border border-white/5 p-5 relative overflow-hidden;
+    background: linear-gradient(135deg, #1e2537 0%, #141720 100%);
+    box-shadow: 0 4px 20px -4px rgba(0,0,0,.4);
+  }
+
+  /* ── Tabela conteúdo ── */
+  .table-content th {
+    @apply px-4 py-3 text-left text-[11px] font-bold text-gray-400 uppercase tracking-wider;
+    background: #f8fafc;
+    border-bottom: 1px solid #e5e7eb;
+  }
+  .table-content td {
+    @apply px-4 py-3 text-sm text-gray-700 border-b border-gray-100;
+  }
+  .table-content tr:last-child td { @apply border-0; }
+  .table-content tbody tr { @apply hover:bg-blue-50/40 transition-colors; }
+
+  /* ── Badge ── */
+  .badge-success { @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200; }
+  .badge-warning { @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 ring-1 ring-amber-200; }
+  .badge-danger  { @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-red-50 text-red-700 ring-1 ring-red-200; }
+  .badge-info    { @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700 ring-1 ring-blue-200; }
+  .badge-neutral { @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-gray-100 text-gray-600 ring-1 ring-gray-200; }
+
+  /* ── Page heading ── */
+  .page-title   { @apply text-2xl font-black text-gray-900 tracking-tight; }
+  .page-subtitle { @apply text-xs text-gray-400 mt-0.5 uppercase tracking-widest; }
+
+  /* ── Input light ── */
+  .input-light {
+    @apply w-full px-3 py-2 text-sm bg-white border border-gray-300 rounded-lg text-gray-900 placeholder-gray-400
+    focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400 transition-all;
+  }
+
+  /* ── Btn gradient primary ── */
+  .btn-gradient {
+    @apply inline-flex items-center gap-2 px-4 py-2 text-sm font-bold text-white rounded-lg
+    shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40 transition-all active:scale-95;
+    background: linear-gradient(135deg, #667eea 0%, #3b82f6 100%);
+  }
+
+  /* ── Btn outline ── */
+  .btn-outline {
+    @apply inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700
+    bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors active:scale-95;
+  }
+
+  /* ── Section label ── */
+  .section-label {
+    @apply text-[10px] font-black uppercase tracking-[0.2em] text-white/25 px-3 py-2 mt-2;
+  }
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,.1); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,.2); }
+
+/* Scrollbar inside light area */
+.content-scroll::-webkit-scrollbar-track { background: #f0f2f5; }
+.content-scroll::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+.content-scroll::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
