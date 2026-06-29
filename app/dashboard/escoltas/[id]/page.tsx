@@ -1864,7 +1864,7 @@ export default function EscoltaDetalhePage() {
     )
   }
 
-  const perfil = user?.perfil?.codigo ?? ''
+  const perfil = (user?.perfil?.codigo ?? '') as any
   const isSupervisorOrOperador = ['supervisor', 'operador'].includes(perfil)
   const isUnstarted = ['rascunho', 'agendada', 'em_pre_inicio'].includes(escolta.status)
 

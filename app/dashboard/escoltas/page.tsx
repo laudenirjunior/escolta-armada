@@ -53,7 +53,7 @@ export default function EscoltasPage() {
   const [loading, setLoading] = useState(true)
   const { user } = useAuth()
   const router = useRouter()
-  const perfil = user?.perfil?.codigo ?? ''
+  const perfil = (user?.perfil?.codigo ?? '') as any
 
   const carregar = useCallback(async () => {
     setLoading(true)

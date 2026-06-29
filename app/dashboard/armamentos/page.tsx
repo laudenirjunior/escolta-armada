@@ -53,7 +53,7 @@ export default function ArmamentosPage() {
   const [erro, setErro] = useState('')
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
-  const perfil = user?.perfil?.codigo ?? ''
+  const perfil = (user?.perfil?.codigo ?? '') as any
   const podeEditar = PODE_EDITAR.includes(perfil)
 
   const carregar = useCallback(async () => {
