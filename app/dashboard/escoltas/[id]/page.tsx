@@ -198,10 +198,28 @@ function CameraInput({
   const [erro, setErro] = useState<string | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const agora = new Date()
+    const tsStr = agora.toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    const namedFile = new File([file], `${prefixoNome}_${tsStr}.jpg`, { type: 'image/jpeg' })
+    const novas = [...fotos, { file: namedFile, url: URL.createObjectURL(file) }]
+    setFotos(novas)
+    onChange(novas.map(f => f.file))
+    e.target.value = ''
+  }
 
   const abrirCamera = async () => {
     if (fotos.length >= max) return
     setErro(null)
+    // Fallback para dispositivos móveis sem suporte a getUserMedia
+    if (!navigator.mediaDevices?.getUserMedia) {
+      fileInputRef.current?.click()
+      return
+    }
     setAberto(true)
     try {
       const s = await navigator.mediaDevices.getUserMedia({
@@ -210,7 +228,9 @@ function CameraInput({
       })
       setStream(s)
     } catch {
-      setErro('Permissão de câmera negada ou câmera não encontrada.')
+      // getUserMedia falhou — usa seletor de arquivo nativo (câmera no mobile)
+      setAberto(false)
+      fileInputRef.current?.click()
     }
   }
 
@@ -270,6 +290,15 @@ function CameraInput({
 
   return (
     <>
+      {/* Input file hidden — fallback mobile para getUserMedia */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        style={{ display: 'none' }}
+        onChange={handleFileInput}
+      />
       {fotos.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: '6px', marginBottom: '6px' }}>
           {fotos.map((f, idx) => (
@@ -311,9 +340,13 @@ function CameraInput({
       {aberto && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 99999, backgroundColor: 'rgba(0,0,0,0.95)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '1rem', padding: '1rem' }}>
           {erro ? (
-            <div style={{ textAlign: 'center', color: '#fff' }}>
-              <p style={{ fontSize: '14px', marginBottom: '1rem' }}>{erro}</p>
-              <button type="button" onClick={fechar} style={{ padding: '0.5rem 1.5rem', backgroundColor: '#53648A', color: '#fff', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Fechar</button>
+            <div style={{ textAlign: 'center', color: '#fff', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
+              <p style={{ fontSize: '14px' }}>{erro}</p>
+              <button type="button" onClick={() => { fechar(); fileInputRef.current?.click() }}
+                style={{ padding: '0.75rem 1.5rem', backgroundColor: '#1E7C52', color: '#fff', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Camera size={14} /> Selecionar Foto
+              </button>
+              <button type="button" onClick={fechar} style={{ padding: '0.5rem 1.5rem', backgroundColor: '#53648A', color: '#fff', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em' }}>Cancelar</button>
             </div>
           ) : (
             <>
@@ -855,6 +888,14 @@ export default function EscoltaDetalhePage() {
       status_novo: proximo.status,
       observacao: motivoAvanco.trim() || null,
       alterado_por: user?.id ?? null,
+    })
+
+    // Notificar Telegram sobre mudança de status
+    const statusLabel = STATUS_INFO[proximo.status]?.label ?? proximo.status
+    notificarTelegram({
+      titulo: proximo.label,
+      status_atual: statusLabel,
+      descricao: motivoAvanco.trim() || undefined,
     })
 
     setDialogAvanco(false)
@@ -3388,8 +3429,8 @@ export default function EscoltaDetalhePage() {
 
       {/* ── Dialog: Avançar Status ── */}
       {dialogAvanco && (
-        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
-          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', borderRadius: '0' }}>
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden rounded-t-2xl sm:rounded-2xl" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
               <h2 className="font-bold text-base" style={{ color: '#1E2D35' }}>{proximo?.label}</h2>
             </div>
@@ -3413,7 +3454,7 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
-            <div className="px-6 py-4 border-t flex flex-col sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
+            <div className="px-6 py-4 pb-6 sm:pb-4 border-t flex flex-col sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => setDialogAvanco(false)} className="btn-outline w-full sm:w-auto order-2 sm:order-1">Cancelar</button>
               <button onClick={avancarStatus} disabled={avancando} className="btn-gradient w-full sm:w-auto order-1 sm:order-2">
                 {avancando ? 'Processando...' : 'Confirmar'}
@@ -3425,8 +3466,8 @@ export default function EscoltaDetalhePage() {
 
       {/* ── Dialog: Cancelar / Reagendar ── */}
       {dialogCancelar && (
-        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
-          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.2)', maxHeight: '92vh', overflowY: 'auto' }}>
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden rounded-t-2xl sm:rounded-2xl" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.2)', maxHeight: '92vh', overflowY: 'auto' }}>
             {/* Header */}
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
               <h2 className="font-bold text-base" style={{ color: '#1E2D35' }}>O que deseja fazer com esta escolta?</h2>
@@ -3564,8 +3605,8 @@ export default function EscoltaDetalhePage() {
 
       {/* ── Dialog: Start Base (Sair da Base) ── */}
       {dialogStartBase && (
-        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
-          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden rounded-t-2xl sm:rounded-2xl" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
               <h2 className="font-bold text-base text-[#0E1A33]">Iniciar Operação (Saída da Base)</h2>
             </div>
@@ -3628,8 +3669,8 @@ export default function EscoltaDetalhePage() {
 
       {/* ── Dialog: Check-in Periódico ── */}
       {dialogCheckin && (
-        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
-          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)' }}>
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden rounded-t-2xl sm:rounded-2xl" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)' }}>
 
             {/* Header */}
             <div className="px-6 py-4 border-b flex items-center gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F0FAF5' }}>
@@ -3719,8 +3760,8 @@ export default function EscoltaDetalhePage() {
 
       {/* ── Dialog: Parada ── */}
       {dialogParada && (
-        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
-          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden rounded-t-2xl sm:rounded-2xl" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
               <h2 className="font-bold text-base text-[#0E1A33]">Registrar Parada na Rota</h2>
             </div>
@@ -3781,8 +3822,8 @@ export default function EscoltaDetalhePage() {
 
       {/* ── Dialog: Chegada na Origem ── */}
       {dialogChegadaOrigem && (
-        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
-          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden rounded-t-2xl sm:rounded-2xl" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
               <h2 className="font-bold text-base text-[#0E1A33]">Confirmar Chegada na Origem</h2>
             </div>
@@ -3857,8 +3898,8 @@ export default function EscoltaDetalhePage() {
 
       {/* ── Dialog: Chegada no Destino ── */}
       {dialogChegadaDestino && (
-        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
-          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden rounded-t-2xl sm:rounded-2xl" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
               <h2 className="font-bold text-base text-[#0E1A33]">Confirmar Chegada no Destino</h2>
             </div>
@@ -3906,8 +3947,8 @@ export default function EscoltaDetalhePage() {
 
       {/* ── Dialog: Iniciar Retorno ── */}
       {dialogIniciarRetorno && (
-        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
-          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden rounded-t-2xl sm:rounded-2xl" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
               <h2 className="font-bold text-base text-[#0E1A33]">Iniciar Retorno da Escolta</h2>
             </div>
@@ -3952,8 +3993,8 @@ export default function EscoltaDetalhePage() {
 
       {/* ── Dialog: Chegada na Base ── */}
       {dialogChegadaBase && (
-        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
-          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden rounded-t-2xl sm:rounded-2xl" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
               <h2 className="font-bold text-base text-[#0E1A33]">Confirmar Chegada na Base (Retorno)</h2>
             </div>
@@ -4006,8 +4047,8 @@ export default function EscoltaDetalhePage() {
 
       {/* ── Dialog: Finalizacao ── */}
       {dialogFinalizacao && (
-        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
-          <div className="w-full sm:max-w-lg sm:mx-4 mx-0 bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)' }}>
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-lg sm:mx-4 mx-0 bg-white overflow-hidden rounded-t-2xl sm:rounded-2xl" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
               <h2 className="font-bold text-base text-[#0E1A33]">Finalizar Escolta e Relatório Diário</h2>
             </div>
