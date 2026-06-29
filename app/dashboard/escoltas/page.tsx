@@ -108,15 +108,6 @@ export default function EscoltasPage() {
   const ativas = escoltasFiltradas.filter(e => ['em_andamento', 'na_origem', 'no_destino', 'retornando', 'na_base'].includes(e.status))
   const concluidas = escoltasFiltradas.filter(e => ['finalizada', 'cancelada'].includes(e.status))
 
-  const formatarPlaca = (placa: string) => {
-    if (!placa) return ''
-    const limpa = placa.replace(/[^A-Za-zA-Z0-9]/g, '').toUpperCase()
-    if (limpa.length === 7) {
-      return `${limpa.slice(0, 3)}-${limpa.slice(3)}`
-    }
-    return placa
-  }
-
   const renderTabelaEscoltas = (lista: EscoltaRow[], tituloVazio: string) => {
     if (lista.length === 0) {
       return (
@@ -127,102 +118,186 @@ export default function EscoltasPage() {
     }
 
     return (
-      <div className="card-light overflow-x-auto">
-        <table className="table-content">
-          <thead>
-            <tr>
-              <th>Código</th>
-              <th>Cliente</th>
-              <th className="hidden md:table-cell">Origem → Destino</th>
-              <th className="hidden lg:table-cell">Data / Hora</th>
-              <th>Status</th>
-              <th className="text-right">Ações</th>
-            </tr>
-          </thead>
-          <tbody>
-            {lista.map((e) => {
-              const s = STATUS_MAP[e.status] ?? { label: e.status, cls: 'badge-neutral' }
-              const cor = e.cliente?.cor_destaque ?? '#4A90A4'
-              return (
-                <tr
-                  key={e.id}
-                  onClick={() => router.push(`/dashboard/escoltas/${e.id}`)}
-                  style={{ cursor: 'pointer', borderLeft: `3px solid ${cor}` }}
-                >
-                  <td>
-                    <span className="font-mono text-xs font-bold" style={{ color: '#1E2D35' }}>
+      <>
+        {/* Tabela — visível apenas em desktop (md+) */}
+        <div className="hidden md:block card-light overflow-x-auto">
+          <table className="table-content">
+            <thead>
+              <tr>
+                <th>Código</th>
+                <th>Cliente</th>
+                <th className="hidden md:table-cell">Origem → Destino</th>
+                <th className="hidden lg:table-cell">Data / Hora</th>
+                <th>Status</th>
+                <th className="text-right">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lista.map((e) => {
+                const s = STATUS_MAP[e.status] ?? { label: e.status, cls: 'badge-neutral' }
+                const cor = e.cliente?.cor_destaque ?? '#4A90A4'
+                return (
+                  <tr
+                    key={e.id}
+                    onClick={() => router.push(`/dashboard/escoltas/${e.id}`)}
+                    style={{ cursor: 'pointer', borderLeft: `3px solid ${cor}` }}
+                  >
+                    <td>
+                      <span className="font-mono text-xs font-bold" style={{ color: '#1E2D35' }}>
+                        {e.codigo_escolta ?? 'Pendente'}
+                      </span>
+                      {e.checklist_pendente_no_inicio && (
+                        <span className="badge-warning ml-2">Checklist</span>
+                      )}
+                    </td>
+                    <td>
+                      <span className="text-sm font-medium" style={{ color: '#1E2D35' }}>
+                        {e.cliente?.nome_cliente ?? '—'}
+                      </span>
+                    </td>
+                    <td className="hidden md:table-cell">
+                      <div className="flex items-center gap-2 max-w-xs">
+                        <MapPin size={11} style={{ color: '#C8D5DC', flexShrink: 0 }} />
+                        <span className="text-xs truncate" style={{ color: '#6B7E8A' }}>{e.origem_endereco}</span>
+                        <ArrowRight size={11} style={{ color: '#C8D5DC', flexShrink: 0 }} />
+                        <span className="text-xs truncate" style={{ color: '#6B7E8A' }}>{e.destino_endereco}</span>
+                      </div>
+                    </td>
+                    <td className="hidden lg:table-cell">
+                      <span className="text-xs" style={{ color: '#6B7E8A' }}>
+                        {new Date(e.data_hora_prevista).toLocaleDateString('pt-BR')}
+                        {' '}
+                        {new Date(e.data_hora_prevista).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={s.cls}>{s.label}</span>
+                    </td>
+                    <td>
+                      <div className="flex items-center justify-end gap-1" onClick={(ev) => ev.stopPropagation()}>
+                        <button
+                          onClick={() => router.push(`/dashboard/escoltas/${e.id}`)}
+                          className="flex items-center justify-center transition-all"
+                          style={{ color: '#6B7E8A', width: '36px', height: '36px', borderRadius: '2px' }}
+                          onMouseEnter={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = '#EBF3FC'; (ev.currentTarget as HTMLElement).style.color = '#2166A8' }}
+                          onMouseLeave={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = ''; (ev.currentTarget as HTMLElement).style.color = '#6B7E8A' }}
+                          title="Ver detalhes"
+                          aria-label="Ver detalhes da escolta"
+                        >
+                          <Eye size={14} />
+                        </button>
+                        <button
+                          onClick={() => router.push(`/dashboard/escoltas/${e.id}?acao=editar`)}
+                          className="flex items-center justify-center transition-all"
+                          style={{ color: '#6B7E8A', width: '36px', height: '36px', borderRadius: '2px' }}
+                          onMouseEnter={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = '#EBF7F1'; (ev.currentTarget as HTMLElement).style.color = '#1E7C52' }}
+                          onMouseLeave={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = ''; (ev.currentTarget as HTMLElement).style.color = '#6B7E8A' }}
+                          title="Editar"
+                          aria-label="Editar escolta"
+                        >
+                          <Pencil size={13} />
+                        </button>
+                        <button
+                          onClick={() => printEscolta(e.id)}
+                          className="flex items-center justify-center transition-all"
+                          style={{ color: '#6B7E8A', width: '36px', height: '36px', borderRadius: '2px' }}
+                          onMouseEnter={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = '#F0F4FA'; (ev.currentTarget as HTMLElement).style.color = '#1A2F4A' }}
+                          onMouseLeave={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = ''; (ev.currentTarget as HTMLElement).style.color = '#6B7E8A' }}
+                          title="Exportar PDF"
+                          aria-label="Exportar PDF da escolta"
+                        >
+                          <FileDown size={13} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Cards mobile — visível apenas em telas menores que md */}
+        <div className="md:hidden space-y-3">
+          {lista.map((e) => {
+            const s = STATUS_MAP[e.status] ?? { label: e.status, cls: 'badge-neutral' }
+            const cor = e.cliente?.cor_destaque ?? '#4A90A4'
+            return (
+              <div
+                key={e.id}
+                className="bg-white rounded-xl p-4 shadow-sm border border-gray-100"
+                style={{ borderLeft: `4px solid ${cor}` }}
+                onClick={() => router.push(`/dashboard/escoltas/${e.id}`)}
+              >
+                {/* Linha 1: código + status */}
+                <div className="flex items-start justify-between gap-2 mb-2">
+                  <div>
+                    <span className="font-mono text-sm font-black" style={{ color: '#1E2D35' }}>
                       {e.codigo_escolta ?? 'Pendente'}
                     </span>
                     {e.checklist_pendente_no_inicio && (
-                      <span className="badge-warning ml-2">Checklist</span>
+                      <span className="badge-warning ml-2 text-[10px]">Checklist</span>
                     )}
-                  </td>
-                  <td>
-                    <span className="text-sm font-medium" style={{ color: '#1E2D35' }}>
-                      {e.cliente?.nome_cliente ?? '—'}
-                    </span>
-                  </td>
-                  <td className="hidden md:table-cell">
-                    <div className="flex items-center gap-2 max-w-xs">
-                      <MapPin size={11} style={{ color: '#C8D5DC', flexShrink: 0 }} />
-                      <span className="text-xs truncate" style={{ color: '#6B7E8A' }}>{e.origem_endereco}</span>
-                      <ArrowRight size={11} style={{ color: '#C8D5DC', flexShrink: 0 }} />
-                      <span className="text-xs truncate" style={{ color: '#6B7E8A' }}>{e.destino_endereco}</span>
-                    </div>
-                  </td>
-                  <td className="hidden lg:table-cell">
-                    <span className="text-xs" style={{ color: '#6B7E8A' }}>
-                      {new Date(e.data_hora_prevista).toLocaleDateString('pt-BR')}
-                      {' '}
-                      {new Date(e.data_hora_prevista).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  </td>
-                  <td>
-                    <span className={s.cls}>{s.label}</span>
-                  </td>
-                  <td>
-                    <div className="flex items-center justify-end gap-1" onClick={(ev) => ev.stopPropagation()}>
-                      <button
-                        onClick={() => router.push(`/dashboard/escoltas/${e.id}`)}
-                        className="flex items-center justify-center transition-all"
-                        style={{ color: '#6B7E8A', width: '36px', height: '36px', borderRadius: '2px' }}
-                        onMouseEnter={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = '#EBF3FC'; (ev.currentTarget as HTMLElement).style.color = '#2166A8' }}
-                        onMouseLeave={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = ''; (ev.currentTarget as HTMLElement).style.color = '#6B7E8A' }}
-                        title="Ver detalhes"
-                        aria-label="Ver detalhes da escolta"
-                      >
-                        <Eye size={14} />
-                      </button>
-                      <button
-                        onClick={() => router.push(`/dashboard/escoltas/${e.id}?acao=editar`)}
-                        className="flex items-center justify-center transition-all"
-                        style={{ color: '#6B7E8A', width: '36px', height: '36px', borderRadius: '2px' }}
-                        onMouseEnter={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = '#EBF7F1'; (ev.currentTarget as HTMLElement).style.color = '#1E7C52' }}
-                        onMouseLeave={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = ''; (ev.currentTarget as HTMLElement).style.color = '#6B7E8A' }}
-                        title="Editar"
-                        aria-label="Editar escolta"
-                      >
-                        <Pencil size={13} />
-                      </button>
-                      <button
-                        onClick={() => printEscolta(e.id)}
-                        className="flex items-center justify-center transition-all"
-                        style={{ color: '#6B7E8A', width: '36px', height: '36px', borderRadius: '2px' }}
-                        onMouseEnter={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = '#F0F4FA'; (ev.currentTarget as HTMLElement).style.color = '#1A2F4A' }}
-                        onMouseLeave={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = ''; (ev.currentTarget as HTMLElement).style.color = '#6B7E8A' }}
-                        title="Exportar PDF"
-                        aria-label="Exportar PDF da escolta"
-                      >
-                        <FileDown size={13} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
+                  </div>
+                  <span className={s.cls}>{s.label}</span>
+                </div>
+
+                {/* Linha 2: cliente */}
+                <p className="text-sm font-semibold mb-1" style={{ color: '#0E1A33' }}>
+                  {e.cliente?.nome_cliente ?? '—'}
+                </p>
+
+                {/* Linha 3: data/hora */}
+                <p className="text-xs mb-2" style={{ color: '#5A6A80' }}>
+                  {new Date(e.data_hora_prevista).toLocaleDateString('pt-BR')}
+                  {' às '}
+                  {new Date(e.data_hora_prevista).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                </p>
+
+                {/* Linha 4: origem → destino */}
+                <div className="flex items-start gap-1 mb-3">
+                  <MapPin size={11} className="mt-0.5 shrink-0" style={{ color: '#ABB5C9' }} />
+                  <p className="text-xs leading-snug" style={{ color: '#5A6A80' }}>
+                    <span className="font-medium">{e.origem_endereco}</span>
+                    <ArrowRight size={10} className="inline mx-1" style={{ color: '#ABB5C9' }} />
+                    <span>{e.destino_endereco}</span>
+                  </p>
+                </div>
+
+                {/* Botões de ação */}
+                <div className="flex gap-2 pt-2 border-t border-gray-100" onClick={(ev) => ev.stopPropagation()}>
+                  <button
+                    onClick={() => router.push(`/dashboard/escoltas/${e.id}`)}
+                    className="flex-1 flex items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors"
+                    style={{ minHeight: '44px', backgroundColor: '#EBF3FC', color: '#2166A8' }}
+                    aria-label="Ver detalhes da escolta"
+                  >
+                    <Eye size={14} />
+                    Ver
+                  </button>
+                  <button
+                    onClick={() => router.push(`/dashboard/escoltas/${e.id}?acao=editar`)}
+                    className="flex-1 flex items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors"
+                    style={{ minHeight: '44px', backgroundColor: '#EBF7F1', color: '#1E7C52' }}
+                    aria-label="Editar escolta"
+                  >
+                    <Pencil size={13} />
+                    Editar
+                  </button>
+                  <button
+                    onClick={() => printEscolta(e.id)}
+                    className="flex items-center justify-center rounded-lg transition-colors"
+                    style={{ minHeight: '44px', minWidth: '44px', backgroundColor: '#F0F4FA', color: '#1A2F4A' }}
+                    aria-label="Exportar PDF da escolta"
+                  >
+                    <FileDown size={14} />
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </>
     )
   }
 
@@ -247,7 +322,8 @@ export default function EscoltasPage() {
             className="btn-gradient"
           >
             <Plus size={15} />
-            Nova Escolta
+            <span className="hidden sm:inline">Nova Escolta</span>
+            <span className="sm:hidden">Nova</span>
           </button>
         )}
       </div>
@@ -375,7 +451,7 @@ export default function EscoltasPage() {
                   {c.label}
                 </p>
                 <p
-                  className="text-[10px] mt-0.5"
+                  className="text-[10px] mt-0.5 hidden sm:block"
                   style={{ color: c.dark ? 'rgba(255,255,255,0.25)' : '#ABB5C9' }}
                 >
                   {c.sub}
@@ -388,16 +464,16 @@ export default function EscoltasPage() {
 
       {/* ── Filtros ── */}
       <div className="card-light p-4">
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-col md:flex-row gap-3">
           {/* Search */}
-          <div className="relative flex-1 min-w-48">
+          <div className="relative flex-1">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: '#A8B8C2' }} />
             <input
               type="text"
               placeholder="Buscar por código, endereço ou cliente..."
               value={busca}
               onChange={(e) => setBusca(e.target.value)}
-              className="input-light pl-9"
+              className="input-light pl-9 w-full"
             />
           </div>
 
@@ -405,7 +481,7 @@ export default function EscoltasPage() {
           <select
             value={filtroStatus}
             onChange={(e) => setFiltroStatus(e.target.value)}
-            className="select-light"
+            className="select-light w-full md:w-auto"
             style={{ minWidth: '160px' }}
           >
             {STATUS_OPTIONS.map((opt) => (

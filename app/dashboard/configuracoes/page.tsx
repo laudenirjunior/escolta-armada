@@ -75,7 +75,7 @@ export default function ConfiguracoesPage() {
   )
 
   const SectionHeader = ({ icon, title, subtitle }: { icon: React.ReactNode; title: string; subtitle: string }) => (
-    <div className="flex items-center gap-3 px-5 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
+    <div className="flex items-center gap-3 px-4 sm:px-5 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
       <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
         style={{ backgroundColor: '#EBF3FC' }}>
         <span style={{ color: '#2166A8' }}>{icon}</span>
@@ -92,20 +92,20 @@ export default function ConfiguracoesPage() {
   }: {
     label: string; description?: string; children: React.ReactNode
   }) => (
-    <div className="flex items-center justify-between px-5 py-3.5 border-b last:border-0"
+    <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b last:border-0"
       style={{ borderColor: '#E2E8EC' }}>
-      <div>
+      <div className="flex-1 min-w-0 pr-3">
         <p className="text-sm font-medium" style={{ color: '#1E2D35' }}>{label}</p>
         {description && (
-          <p className="text-[11px] mt-0.5" style={{ color: '#6B7E8A' }}>{description}</p>
+          <p className="text-[11px] mt-0.5 leading-relaxed" style={{ color: '#6B7E8A' }}>{description}</p>
         )}
       </div>
-      <div className="shrink-0 ml-4">{children}</div>
+      <div className="shrink-0">{children}</div>
     </div>
   )
 
   return (
-    <div className="space-y-5 max-w-2xl">
+    <div className="space-y-5 w-full max-w-2xl">
 
       {/* ── Header ── */}
       <div>
@@ -141,16 +141,16 @@ export default function ConfiguracoesPage() {
           title="Aparência"
           subtitle="Tema visual e preferências de exibição"
         />
-        <div className="px-5 py-4">
+        <div className="px-4 sm:px-5 py-4">
           <p className="text-xs font-semibold mb-3 uppercase tracking-wider" style={{ color: '#6B7E8A' }}>
             Tema Ativo
           </p>
-          <div className="flex gap-3">
+          <div className="grid grid-cols-2 gap-3">
             {/* SlateTech theme (active) */}
-            <div className="flex-1 rounded-xl p-3 cursor-pointer border-2"
+            <div className="rounded-xl p-3 cursor-pointer border-2"
               style={{ backgroundColor: '#1C2B35', borderColor: '#4A90A4' }}>
               <div className="flex items-center gap-2 mb-2">
-                <div className="w-5 h-5 rounded-full flex items-center justify-center"
+                <div className="w-5 h-5 rounded-full flex items-center justify-center shrink-0"
                   style={{ backgroundColor: '#4A90A4' }}>
                   <Check size={10} className="text-white" />
                 </div>
@@ -164,10 +164,10 @@ export default function ConfiguracoesPage() {
             </div>
 
             {/* Classic theme (coming soon) */}
-            <div className="flex-1 rounded-xl p-3 border border-dashed opacity-40"
+            <div className="rounded-xl p-3 border border-dashed opacity-40"
               style={{ backgroundColor: '#F4F4F9', borderColor: '#C8D5DC' }}>
               <div className="flex items-center gap-2 mb-2">
-                <div className="w-5 h-5 rounded-full border-2" style={{ borderColor: '#C8D5DC' }} />
+                <div className="w-5 h-5 rounded-full border-2 shrink-0" style={{ borderColor: '#C8D5DC' }} />
                 <span className="text-xs font-bold" style={{ color: '#6B7E8A' }}>Clássico</span>
               </div>
               <div className="flex gap-1">
@@ -188,15 +188,15 @@ export default function ConfiguracoesPage() {
           title="Meu Perfil"
           subtitle="Informações da sua conta"
         />
-        <div className="px-5 py-4 space-y-3">
+        <div className="px-4 sm:px-5 py-4 space-y-3">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-full flex items-center justify-center shrink-0 text-white font-black text-base"
               style={{ background: 'linear-gradient(135deg, #4A90A4, #5C6B73)' }}>
               {user?.nome_completo?.split(' ').slice(0, 2).map(n => n[0]).join('').toUpperCase() ?? 'U'}
             </div>
-            <div>
-              <p className="text-sm font-bold" style={{ color: '#1E2D35' }}>{user?.nome_completo}</p>
-              <p className="text-xs" style={{ color: '#6B7E8A' }}>{user?.email}</p>
+            <div className="min-w-0">
+              <p className="text-sm font-bold truncate" style={{ color: '#1E2D35' }}>{user?.nome_completo}</p>
+              <p className="text-xs truncate" style={{ color: '#6B7E8A' }}>{user?.email}</p>
               <span className="badge-neutral mt-1">{user?.perfil?.nome_exibicao ?? '—'}</span>
             </div>
           </div>
@@ -225,7 +225,7 @@ export default function ConfiguracoesPage() {
           subtitle="Informações técnicas e manutenção"
         />
 
-        <div className="px-5 py-4 space-y-3">
+        <div className="px-4 sm:px-5 py-4 space-y-3">
           {/* Info grid */}
           <div className="grid grid-cols-2 gap-3">
             {[
@@ -270,9 +270,9 @@ export default function ConfiguracoesPage() {
       </div>
 
       {/* ── Save ── */}
-      <div className="flex items-center justify-end gap-3 pb-4">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end pb-4">
         {salvo && (
-          <span className="flex items-center gap-1.5 text-sm font-medium"
+          <span className="flex items-center gap-1.5 text-sm font-medium justify-center sm:justify-start"
             style={{ color: '#1E7C52' }}>
             <Check size={14} /> Preferências salvas
           </span>
@@ -280,7 +280,7 @@ export default function ConfiguracoesPage() {
         <button
           onClick={salvarPreferencias}
           disabled={salvando}
-          className="btn-primary"
+          className="btn-primary w-full sm:w-auto"
         >
           {salvando ? 'Salvando...' : 'Salvar Preferências'}
         </button>

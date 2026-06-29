@@ -389,13 +389,13 @@ export default function NovaEscoltaPage() {
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
-    <div className="max-w-3xl mx-auto space-y-5 pb-10">
+    <div className="max-w-3xl mx-auto space-y-5 pb-10 px-3 md:px-0">
 
       {/* Header */}
       <div className="flex items-center gap-3">
         <button
           onClick={() => router.back()}
-          className="w-9 h-9 flex items-center justify-center border transition-colors"
+          className="w-9 h-9 flex items-center justify-center border transition-colors shrink-0"
           style={{ borderColor: P.border, borderRadius: '2px', backgroundColor: P.surface, color: P.sub }}
           onMouseEnter={e => { (e.currentTarget as HTMLElement).style.backgroundColor = P.navy; (e.currentTarget as HTMLElement).style.color = '#fff'; (e.currentTarget as HTMLElement).style.borderColor = P.navy }}
           onMouseLeave={e => { (e.currentTarget as HTMLElement).style.backgroundColor = P.surface; (e.currentTarget as HTMLElement).style.color = P.sub; (e.currentTarget as HTMLElement).style.borderColor = P.border }}
@@ -430,12 +430,12 @@ export default function NovaEscoltaPage() {
                 backgroundColor: active ? P.steel : completed ? P.success : 'transparent',
               }} />
               <div className="flex items-center justify-between">
-                <span className="text-[9px] font-black uppercase tracking-widest" style={{ color: P.sub }}>
+                <span className="text-[9px] md:text-[10px] font-black uppercase tracking-widest" style={{ color: P.sub }}>
                   FASE 0{s}
                 </span>
                 {completed && <CheckCircle size={12} style={{ color: P.success }} />}
               </div>
-              <p className="text-xs font-black uppercase tracking-wide mt-1 truncate"
+              <p className="text-[10px] md:text-xs font-black uppercase tracking-wide mt-1 leading-tight"
                 style={{ color: active ? P.navy : completed ? P.success : P.sub }}>
                 {STEPS[s-1]}
               </p>
@@ -460,8 +460,8 @@ export default function NovaEscoltaPage() {
       {/* ══════════ STEP 1 ══════════ */}
       {step === 1 && (
         <div
-          className="animate-in fade-in zoom-in-95"
-          style={{ backgroundColor: P.surface, border: `1px solid ${P.border}`, borderRadius: '2px', padding: '24px', animationDuration: '400ms', animationFillMode: 'both' }}
+          className="animate-in fade-in zoom-in-95 p-4 md:p-6"
+          style={{ backgroundColor: P.surface, border: `1px solid ${P.border}`, borderRadius: '2px', animationDuration: '400ms', animationFillMode: 'both' }}
         >
 
           {/* Divider label */}
@@ -501,7 +501,7 @@ export default function NovaEscoltaPage() {
                   type="date"
                   value={dados.data_prevista}
                   onChange={e => setDados(d => ({ ...d, data_prevista: e.target.value }))}
-                  className="w-full text-sm font-medium px-3 py-2.5 transition-all outline-none"
+                  className="w-full text-sm font-medium px-3 h-12 md:h-11 transition-all outline-none"
                   style={{
                     backgroundColor: P.surface, border: `1.5px solid ${P.border}`,
                     borderRadius: '2px', color: P.text,
@@ -514,7 +514,7 @@ export default function NovaEscoltaPage() {
               <div>
                 <FieldLabel required>Hora de Partida</FieldLabel>
                 <div
-                  className="flex items-center gap-2 px-3 py-2.5"
+                  className="flex items-center gap-2 px-3 h-12 md:h-11"
                   style={{ backgroundColor: P.surface, border: `1.5px solid ${P.border}`, borderRadius: '2px' }}
                 >
                   <select
@@ -586,7 +586,7 @@ export default function NovaEscoltaPage() {
                   value={dados.observacoes}
                   onChange={e => setDados(d => ({ ...d, observacoes: e.target.value }))}
                   placeholder="Instruções especiais, contatos, restrições de rota..."
-                  className="bg-transparent border-0 outline-none w-full text-sm font-medium resize-none"
+                  className="bg-transparent border-0 outline-none w-full text-sm font-medium resize-none min-h-[100px]"
                   style={{ color: P.text }}
                 />
               </div>
@@ -622,7 +622,7 @@ export default function NovaEscoltaPage() {
                     Visível apenas supervisores+
                   </span>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <FieldLabel>Valor Cobrado do Cliente (R$)</FieldLabel>
                     <FieldWrap icon={<DollarSign size={13} />}>
@@ -678,7 +678,8 @@ export default function NovaEscoltaPage() {
           {viaturas.map((viatura, vi) => (
             <div
               key={viatura.uid}
-              style={{ backgroundColor: P.surface, border: `1px solid ${P.border}`, borderRadius: '2px', padding: '20px' }}
+              className="p-4 md:p-5"
+              style={{ backgroundColor: P.surface, border: `1px solid ${P.border}`, borderRadius: '2px' }}
             >
               {/* Viatura header */}
               <div className="flex items-center justify-between mb-4">
@@ -691,8 +692,8 @@ export default function NovaEscoltaPage() {
                 {viaturas.length > 1 && (
                   <button
                     onClick={() => setViaturas(vs => vs.filter(v => v.uid !== viatura.uid))}
-                    className="flex items-center gap-1 text-[11px] px-2.5 py-1.5 font-bold transition-all"
-                    style={{ color: P.error, border: `1px solid #EAB5B0`, borderRadius: '2px', backgroundColor: '#FAEAE9' }}
+                    className="flex items-center gap-1 text-[11px] px-3 font-bold transition-all"
+                    style={{ color: P.error, border: `1px solid #EAB5B0`, borderRadius: '2px', backgroundColor: '#FAEAE9', minHeight: '44px' }}
                   >
                     <Trash2 size={11} /> Remover
                   </button>
@@ -724,8 +725,8 @@ export default function NovaEscoltaPage() {
                     <FieldLabel required>Efetivo da Viatura</FieldLabel>
                     <button
                       onClick={() => addM(viatura.uid)}
-                      className="flex items-center gap-1 text-[11px] px-2.5 py-1 font-bold transition-all"
-                      style={{ color: P.navy, border: `1px solid ${P.border}`, borderRadius: '2px', backgroundColor: P.surface }}
+                      className="flex items-center gap-1 text-[11px] px-3 font-bold transition-all"
+                      style={{ color: P.navy, border: `1px solid ${P.border}`, borderRadius: '2px', backgroundColor: P.surface, minHeight: '44px' }}
                       onMouseEnter={e => { (e.currentTarget as HTMLElement).style.backgroundColor = P.navy; (e.currentTarget as HTMLElement).style.color = '#fff'; (e.currentTarget as HTMLElement).style.borderColor = P.navy }}
                       onMouseLeave={e => { (e.currentTarget as HTMLElement).style.backgroundColor = P.surface; (e.currentTarget as HTMLElement).style.color = P.navy; (e.currentTarget as HTMLElement).style.borderColor = P.border }}
                     >
@@ -740,8 +741,13 @@ export default function NovaEscoltaPage() {
                   ) : (
                     <div className="space-y-2">
                       {viatura.membros.map(m => (
-                        <div key={m.uid} className="flex items-center gap-2 flex-wrap">
-                          <div style={{ flex: '1 1 160px', minWidth: '160px' }}>
+                        <div
+                          key={m.uid}
+                          className="flex flex-col sm:flex-row sm:items-center gap-2"
+                          style={{ paddingBottom: '8px', borderBottom: `1px solid ${P.border}` }}
+                        >
+                          {/* Seleção de vigilante — full-width */}
+                          <div className="w-full sm:flex-1 sm:min-w-0">
                             <FieldWrap icon={<Shield size={14} />}>
                               <select
                                 value={m.vigilante_id}
@@ -753,7 +759,7 @@ export default function NovaEscoltaPage() {
                                     valor_pago: verFinanceiro && vig?.valor_padrao_pago != null ? vig.valor_padrao_pago.toString() : m.valor_pago,
                                   })
                                 }}
-                                className={inputCls} style={{ ...inputStyle, cursor: 'pointer' }}
+                                className={inputCls} style={{ ...inputStyle, cursor: 'pointer', height: '44px' }}
                               >
                                 <option value="">Selecione o vigilante...</option>
                                 {vigilantes.map(v => (
@@ -764,40 +770,44 @@ export default function NovaEscoltaPage() {
                               </select>
                             </FieldWrap>
                           </div>
-                          <div style={{ width: '140px' }}>
-                            <FieldWrap icon={<UserCheck size={14} />}>
-                              <select
-                                value={m.papel_na_escolta}
-                                onChange={e => updM(viatura.uid, m.uid, { papel_na_escolta: e.target.value as 'comandante'|'operador' })}
-                                className={inputCls} style={{ ...inputStyle, cursor: 'pointer' }}
-                              >
-                                <option value="operador">Operador</option>
-                                <option value="comandante">Comandante</option>
-                              </select>
-                            </FieldWrap>
-                          </div>
-                          {verFinanceiro && (
-                            <div style={{ width: '110px' }}>
-                              <FieldWrap icon={<DollarSign size={13} />}>
-                                <input
-                                  type="number" min="0" step="0.01"
-                                  value={m.valor_pago}
-                                  onChange={e => updM(viatura.uid, m.uid, { valor_pago: e.target.value })}
-                                  placeholder="0,00"
-                                  className={inputCls} style={{ ...inputStyle, fontSize: '12px' }}
-                                />
+
+                          {/* Papel + valor + botão remover em linha no mobile */}
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 sm:w-[140px] sm:flex-none">
+                              <FieldWrap icon={<UserCheck size={14} />}>
+                                <select
+                                  value={m.papel_na_escolta}
+                                  onChange={e => updM(viatura.uid, m.uid, { papel_na_escolta: e.target.value as 'comandante'|'operador' })}
+                                  className={inputCls} style={{ ...inputStyle, cursor: 'pointer', height: '44px' }}
+                                >
+                                  <option value="operador">Operador</option>
+                                  <option value="comandante">Comandante</option>
+                                </select>
                               </FieldWrap>
                             </div>
-                          )}
-                          <button
-                            onClick={() => rmM(viatura.uid, m.uid)}
-                            className="w-9 h-9 flex items-center justify-center transition-all"
-                            style={{ color: P.sub, border: `1px solid ${P.border}`, borderRadius: '2px', backgroundColor: P.surface, flexShrink: 0 }}
-                            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = P.error; (e.currentTarget as HTMLElement).style.borderColor = '#EAB5B0'; (e.currentTarget as HTMLElement).style.backgroundColor = '#FAEAE9' }}
-                            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = P.sub; (e.currentTarget as HTMLElement).style.borderColor = P.border; (e.currentTarget as HTMLElement).style.backgroundColor = P.surface }}
-                          >
-                            <Trash2 size={13} />
-                          </button>
+                            {verFinanceiro && (
+                              <div className="w-[100px] shrink-0">
+                                <FieldWrap icon={<DollarSign size={13} />}>
+                                  <input
+                                    type="number" min="0" step="0.01"
+                                    value={m.valor_pago}
+                                    onChange={e => updM(viatura.uid, m.uid, { valor_pago: e.target.value })}
+                                    placeholder="0,00"
+                                    className={inputCls} style={{ ...inputStyle, fontSize: '12px', height: '44px' }}
+                                  />
+                                </FieldWrap>
+                              </div>
+                            )}
+                            <button
+                              onClick={() => rmM(viatura.uid, m.uid)}
+                              className="flex items-center justify-center transition-all shrink-0"
+                              style={{ color: P.sub, border: `1px solid ${P.border}`, borderRadius: '2px', backgroundColor: P.surface, width: '44px', height: '44px' }}
+                              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = P.error; (e.currentTarget as HTMLElement).style.borderColor = '#EAB5B0'; (e.currentTarget as HTMLElement).style.backgroundColor = '#FAEAE9' }}
+                              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = P.sub; (e.currentTarget as HTMLElement).style.borderColor = P.border; (e.currentTarget as HTMLElement).style.backgroundColor = P.surface }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -830,7 +840,7 @@ export default function NovaEscoltaPage() {
             <p className="text-sm font-black text-white uppercase tracking-wide">Confirme todos os dados antes de criar a operação</p>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
             {/* Dados da missão */}
             <div style={{ backgroundColor: P.surface, border: `1px solid ${P.border}`, borderRadius: '2px' }}>
               <div className="flex items-center gap-2 px-4 py-3" style={{ borderBottom: `1px solid ${P.border}`, backgroundColor: '#F5F7FA' }}>
@@ -916,10 +926,10 @@ export default function NovaEscoltaPage() {
       )}
 
       {/* ── Navegação ── */}
-      <div className="flex items-center justify-between pt-4" style={{ borderTop: `1px solid ${P.border}` }}>
+      <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 pt-4" style={{ borderTop: `1px solid ${P.border}` }}>
         <button
           onClick={step === 1 ? () => router.back() : voltar}
-          className="flex items-center gap-2 px-4 py-2.5 text-sm font-bold uppercase tracking-wider transition-all"
+          className="flex items-center justify-center gap-2 px-4 text-sm font-bold uppercase tracking-wider transition-all h-12 md:h-11 w-full sm:w-auto"
           style={{ color: P.sub, border: `1.5px solid ${P.border}`, borderRadius: '2px', backgroundColor: P.surface }}
           onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = P.navy; (e.currentTarget as HTMLElement).style.color = P.navy }}
           onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = P.border; (e.currentTarget as HTMLElement).style.color = P.sub }}
@@ -931,7 +941,7 @@ export default function NovaEscoltaPage() {
         {step < 3 ? (
           <button
             onClick={avancar}
-            className="flex items-center gap-2 px-6 py-2.5 text-sm font-black uppercase tracking-wider text-white transition-all"
+            className="flex items-center justify-center gap-2 px-6 text-sm font-black uppercase tracking-wider text-white transition-all h-12 md:h-11 w-full sm:w-auto"
             style={{ backgroundColor: P.navy, borderRadius: '2px' }}
             onMouseEnter={e => (e.currentTarget as HTMLElement).style.backgroundColor = P.navyMid}
             onMouseLeave={e => (e.currentTarget as HTMLElement).style.backgroundColor = P.navy}
@@ -942,8 +952,8 @@ export default function NovaEscoltaPage() {
           <button
             onClick={salvar}
             disabled={salvando}
-            className="flex items-center gap-2 px-6 py-2.5 text-sm font-black uppercase tracking-wider text-white transition-all disabled:opacity-50"
-            style={{ backgroundColor: P.success, borderRadius: '2px' }}
+            className="flex items-center justify-center gap-2 px-6 text-sm font-black uppercase tracking-wider text-white transition-all disabled:opacity-50 w-full sm:w-auto"
+            style={{ backgroundColor: P.success, borderRadius: '2px', minHeight: '56px' }}
           >
             <CheckCircle size={14} />
             {salvando ? 'Criando...' : 'Confirmar e Criar Escolta'}

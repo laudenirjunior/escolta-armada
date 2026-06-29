@@ -1990,7 +1990,7 @@ export default function EscoltaDetalhePage() {
                     setErro(null)
                     setWizardStep(2)
                   }}
-                  className="btn-gradient px-6"
+                  className="btn-gradient px-6 w-full sm:w-auto"
                 >
                   Avançar Passo
                 </button>
@@ -2087,8 +2087,8 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
 
-              <div className="flex justify-between pt-3 border-t">
-                <button type="button" onClick={() => { setErro(null); setWizardStep(1) }} className="btn-outline px-5">
+              <div className="flex flex-col-reverse sm:flex-row justify-between gap-2 pt-3 border-t">
+                <button type="button" onClick={() => { setErro(null); setWizardStep(1) }} className="btn-outline px-5 w-full sm:w-auto">
                   Voltar
                 </button>
                 <button
@@ -2100,7 +2100,7 @@ export default function EscoltaDetalhePage() {
                     setErro(null)
                     setWizardStep(3)
                   }}
-                  className="btn-gradient px-6"
+                  className="btn-gradient px-6 w-full sm:w-auto"
                 >
                   Viatura Liberada — Avançar
                 </button>
@@ -2147,15 +2147,15 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
 
-              <div className="flex justify-between pt-3 border-t">
-                <button type="button" onClick={() => setWizardStep(2)} className="btn-outline px-5">
+              <div className="flex flex-col-reverse sm:flex-row justify-between gap-2 pt-3 border-t">
+                <button type="button" onClick={() => setWizardStep(2)} className="btn-outline px-5 w-full sm:w-auto">
                   Voltar
                 </button>
                 <button
                   type="button"
                   onClick={handleWizardSubmit}
                   disabled={loading}
-                  className="btn-gradient px-6"
+                  className="btn-gradient px-6 w-full sm:w-auto"
                 >
                   {loading ? 'Iniciando...' : 'Confirmar e Iniciar Escolta'}
                 </button>
@@ -2196,69 +2196,73 @@ export default function EscoltaDetalhePage() {
           {/* ── Header Card ── */}
           <div className="card-light overflow-visible" style={{ borderLeft: `4px solid ${cor}` }}>
             <div className="p-5">
-              <div className="flex items-start justify-between gap-4 flex-wrap">
+              {/* Mobile: flex-col; Desktop: flex-row */}
+              <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+                {/* Linha superior: botão voltar + código/status */}
                 <div className="flex items-start gap-3">
-              <button
-                onClick={() => router.back()}
-                className="w-8 h-8 flex items-center justify-center rounded mt-0.5 transition-colors"
-                style={{ color: '#6B7E8A' }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = '#F0F2F4' }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = '' }}
-              >
-                <ArrowLeft size={16} />
-              </button>
-              <div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-mono text-sm font-bold" style={{ color: '#1E2D35' }}>
-                    {escolta.codigo_escolta ?? 'Sem código'}
-                  </span>
-                  <span className={si.cls}>{si.label}</span>
-                  {escolta.checklist_pendente_no_inicio && (
-                    <span className="badge-warning">Checklist pendente</span>
+                  <button
+                    onClick={() => router.back()}
+                    className="w-8 h-8 flex items-center justify-center rounded mt-0.5 transition-colors flex-shrink-0"
+                    style={{ color: '#6B7E8A' }}
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = '#F0F2F4' }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.backgroundColor = '' }}
+                  >
+                    <ArrowLeft size={16} />
+                  </button>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-mono text-sm font-bold" style={{ color: '#1E2D35' }}>
+                        {escolta.codigo_escolta ?? 'Sem código'}
+                      </span>
+                      <span className={si.cls}>{si.label}</span>
+                      {escolta.checklist_pendente_no_inicio && (
+                        <span className="badge-warning">Checklist pendente</span>
+                      )}
+                    </div>
+                    {escolta.cliente && (
+                      <p className="text-sm mt-0.5" style={{ color: '#6B7E8A' }}>
+                        {escolta.cliente.nome_cliente}
+                        {escolta.cliente.telefone && ` · ${escolta.cliente.telefone}`}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Linha inferior no mobile / lateral no desktop: botões de ação */}
+                <div className="flex flex-col sm:flex-row md:flex-row md:items-center gap-2 md:flex-shrink-0">
+                  {/* Botão PDF — compacto, não é ação principal */}
+                  <button
+                    onClick={() => printEscolta(escolta.id)}
+                    className="flex items-center justify-center gap-1.5 font-black text-[10px] uppercase tracking-widest px-4 py-2 transition-all active:scale-95"
+                    style={{ backgroundColor: '#F0F4FA', color: '#1A2F4A', border: '1px solid #D0DAEB', borderRadius: '1px' }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.backgroundColor = '#E2EAF7' }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.backgroundColor = '#F0F4FA' }}
+                    title="Exportar PDF"
+                  >
+                    <FileDown size={13} /> PDF
+                  </button>
+                  {PODE_CANCELAR.includes(perfil) && !isFinalizado && (
+                    <button
+                      onClick={() => { setErro(null); setDialogCancelar(true) }}
+                      className="bg-[#FAEAE9] hover:bg-[#F5D5D3] text-[#B83832] border border-[#EAB5B0] font-black text-[10px] uppercase tracking-widest px-4 py-2 flex items-center justify-center gap-1.5 transition-all active:scale-95"
+                      style={{ borderRadius: '1px' }}
+                    >
+                      <XCircle size={14} /> Cancelar
+                    </button>
+                  )}
+                  {PODE_AVANCAR.includes(perfil) && proximo && (
+                    <button
+                      onClick={() => { setErro(null); setDialogAvanco(true) }}
+                      className="text-white font-black text-[10px] uppercase tracking-widest px-5 py-3 md:py-2 flex items-center justify-center gap-1.5 transition-all active:scale-95"
+                      style={{ backgroundColor: '#1E7C52', borderRadius: '1px', boxShadow: '0 2px 8px rgba(30,124,82,0.35)' }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.backgroundColor = '#166040' }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.backgroundColor = '#1E7C52' }}
+                    >
+                      {proximo.label} <ChevronRight size={14} />
+                    </button>
                   )}
                 </div>
-                {escolta.cliente && (
-                  <p className="text-sm mt-0.5" style={{ color: '#6B7E8A' }}>
-                    {escolta.cliente.nome_cliente}
-                    {escolta.cliente.telefone && ` · ${escolta.cliente.telefone}`}
-                  </p>
-                )}
               </div>
-            </div>
-
-            <div className="flex items-center gap-2.5 flex-shrink-0">
-              <button
-                onClick={() => printEscolta(escolta.id)}
-                className="flex items-center gap-1.5 font-black text-[10px] uppercase tracking-widest px-4 py-2 transition-all active:scale-95"
-                style={{ backgroundColor: '#F0F4FA', color: '#1A2F4A', border: '1px solid #D0DAEB', borderRadius: '1px' }}
-                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.backgroundColor = '#E2EAF7' }}
-                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.backgroundColor = '#F0F4FA' }}
-                title="Exportar PDF"
-              >
-                <FileDown size={13} /> PDF
-              </button>
-              {PODE_CANCELAR.includes(perfil) && !isFinalizado && (
-                <button
-                  onClick={() => { setErro(null); setDialogCancelar(true) }}
-                  className="bg-[#FAEAE9] hover:bg-[#F5D5D3] text-[#B83832] border border-[#EAB5B0] font-black text-[10px] uppercase tracking-widest px-4 py-2 flex items-center gap-1.5 transition-all active:scale-95"
-                  style={{ borderRadius: '1px' }}
-                >
-                  <XCircle size={14} /> Cancelar
-                </button>
-              )}
-              {PODE_AVANCAR.includes(perfil) && proximo && (
-                <button
-                  onClick={() => { setErro(null); setDialogAvanco(true) }}
-                  className="text-white font-black text-[10px] uppercase tracking-widest px-5 py-2 flex items-center gap-1.5 transition-all active:scale-95"
-                  style={{ backgroundColor: '#1A294A', borderRadius: '1px', boxShadow: '0 2px 8px rgba(26,41,74,0.25)' }}
-                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.backgroundColor = '#253562' }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.backgroundColor = '#1A294A' }}
-                >
-                  {proximo.label} <ChevronRight size={14} />
-                </button>
-              )}
-            </div>
-          </div>
 
           {/* ── Jornada: barra de progresso visual ── */}
           <div className="mt-5 pt-4 border-t" style={{ borderColor: '#E2E8EC' }}>
@@ -2425,13 +2429,13 @@ export default function EscoltaDetalhePage() {
             </div>
           </div>
 
-          <div className="flex gap-2 flex-wrap">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:flex md:flex-wrap gap-2">
             {/* Iniciar Operação: esta ação só é acessível via o wizard de pré-início (checklist obrigatório) */}
 
             {/* Check-in Periódico */}
             {['em_andamento', 'na_origem', 'no_destino', 'retornando'].includes(escolta.status) && (
               <button onClick={abrirDialogCheckin}
-                className="h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center gap-2 text-white active:scale-95 transition-all"
+                className="h-11 md:h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 text-white active:scale-95 transition-all"
                 style={{
                   backgroundColor: minutosAteCheckin !== null && minutosAteCheckin <= 0 ? '#B83832' : '#1E7C52',
                   boxShadow: minutosAteCheckin !== null && minutosAteCheckin <= 0 ? '0 2px 8px rgba(184,56,50,0.35)' : '0 2px 8px rgba(30,124,82,0.25)',
@@ -2446,7 +2450,7 @@ export default function EscoltaDetalhePage() {
             {/* 2. Registrar Parada */}
             {['em_andamento', 'na_origem', 'no_destino', 'retornando'].includes(escolta.status) && (
               <button onClick={() => { setErro(null); setDialogParada(true) }}
-                className="h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center gap-2 active:scale-95 transition-all"
+                className="h-11 md:h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-all"
                 style={{ backgroundColor: '#FBF3DE', color: '#8B6914', border: '1.5px solid rgba(139,105,20,0.25)' }}
                 onMouseEnter={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#F5E8B8'}
                 onMouseLeave={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#FBF3DE'}>
@@ -2457,7 +2461,7 @@ export default function EscoltaDetalhePage() {
             {/* 3. Chegada na Origem */}
             {escolta.status === 'em_andamento' && (
               <button onClick={() => { setErro(null); setDialogChegadaOrigem(true) }}
-                className="h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center gap-2 text-white active:scale-95 transition-all"
+                className="h-11 md:h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 text-white active:scale-95 transition-all"
                 style={{ backgroundColor: '#53648A', boxShadow: '0 2px 8px rgba(83,100,138,0.25)' }}
                 onMouseEnter={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#3F4E6D'}
                 onMouseLeave={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#53648A'}>
@@ -2468,7 +2472,7 @@ export default function EscoltaDetalhePage() {
             {/* 4. Chegada no Destino */}
             {escolta.status === 'na_origem' && (
               <button onClick={() => { setErro(null); setDialogChegadaDestino(true) }}
-                className="h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center gap-2 text-white active:scale-95 transition-all"
+                className="h-11 md:h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 text-white active:scale-95 transition-all"
                 style={{ backgroundColor: '#9F906D', boxShadow: '0 2px 8px rgba(159,144,109,0.25)' }}
                 onMouseEnter={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#7A6D51'}
                 onMouseLeave={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#9F906D'}>
@@ -2479,7 +2483,7 @@ export default function EscoltaDetalhePage() {
             {/* 5. Iniciar Retorno */}
             {escolta.status === 'no_destino' && (
               <button onClick={() => { setErro(null); setDialogIniciarRetorno(true) }}
-                className="h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center gap-2 text-white active:scale-95 transition-all"
+                className="h-11 md:h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 text-white active:scale-95 transition-all"
                 style={{ backgroundColor: '#53648A', boxShadow: '0 2px 8px rgba(83,100,138,0.25)' }}
                 onMouseEnter={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#3F4E6D'}
                 onMouseLeave={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#53648A'}>
@@ -2490,7 +2494,7 @@ export default function EscoltaDetalhePage() {
             {/* 6. Chegada na Base */}
             {escolta.status === 'retornando' && (
               <button onClick={() => { setErro(null); setDialogChegadaBase(true) }}
-                className="h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center gap-2 text-white active:scale-95 transition-all"
+                className="h-11 md:h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 text-white active:scale-95 transition-all"
                 style={{ backgroundColor: '#1A294A', boxShadow: '0 2px 8px rgba(26,41,74,0.25)' }}
                 onMouseEnter={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#253562'}
                 onMouseLeave={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#1A294A'}>
@@ -2501,7 +2505,7 @@ export default function EscoltaDetalhePage() {
             {/* 7. Finalizar Escolta */}
             {escolta.status === 'na_base' && (
               <button onClick={() => { setErro(null); setDialogFinalizacao(true) }}
-                className="h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center gap-2 text-white active:scale-95 transition-all"
+                className="h-11 md:h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 text-white active:scale-95 transition-all"
                 style={{ backgroundColor: '#1E7C52', boxShadow: '0 2px 8px rgba(30,124,82,0.3)' }}
                 onMouseEnter={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#166040'}
                 onMouseLeave={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#1E7C52'}>
@@ -2568,16 +2572,16 @@ export default function EscoltaDetalhePage() {
       </div>
 
       {/* ── Tabs ── */}
-      <div className="flex gap-0 border-b overflow-x-auto" style={{ borderColor: '#E2E8EC' }}>
+      <div className="flex gap-0 border-b overflow-x-auto scrollbar-hide" style={{ borderColor: '#E2E8EC', WebkitOverflowScrolling: 'touch' }}>
         {TABS.map((t) => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className="px-4 py-2.5 text-xs font-semibold whitespace-nowrap border-b-2 -mb-px transition-colors"
+            className="px-4 py-3 md:py-2.5 text-xs font-semibold whitespace-nowrap border-b-2 -mb-px transition-colors flex-shrink-0"
             style={
               tab === t.key
-                ? { color: '#53648A', borderBottomColor: '#53648A', backgroundColor: 'transparent' }
-                : { color: '#6B7E8A', borderBottomColor: 'transparent', backgroundColor: 'transparent' }
+                ? { color: '#53648A', borderBottomColor: '#53648A', backgroundColor: 'transparent', minWidth: '72px' }
+                : { color: '#6B7E8A', borderBottomColor: 'transparent', backgroundColor: 'transparent', minWidth: '72px' }
             }
           >
             {t.label}
@@ -2657,25 +2661,25 @@ export default function EscoltaDetalhePage() {
               <h3 className="text-[10px] font-black uppercase tracking-widest mb-3" style={{ color: '#5A6A80' }}>Histórico de Status</h3>
               <div>
                 {[...historico].reverse().map((h) => (
-                  <div key={h.id} className="flex items-center py-2 border-b last:border-0" style={{ borderColor: '#EEF0F5' }}>
-                    {/* Badge ANTERIOR — largura fixa */}
-                    <div style={{ width: '110px', flexShrink: 0 }}>
-                      <span className={STATUS_INFO[h.status_anterior]?.cls ?? 'badge-neutral'} style={{ width: '100%', justifyContent: 'center' }}>
+                  <div key={h.id} className="flex items-center py-2 border-b last:border-0 gap-1 overflow-x-auto" style={{ borderColor: '#EEF0F5' }}>
+                    {/* Badge ANTERIOR */}
+                    <div className="flex-shrink-0">
+                      <span className={STATUS_INFO[h.status_anterior]?.cls ?? 'badge-neutral'}>
                         {STATUS_INFO[h.status_anterior]?.label ?? h.status_anterior}
                       </span>
                     </div>
                     {/* Seta */}
-                    <div style={{ width: '28px', flexShrink: 0, display: 'flex', justifyContent: 'center' }}>
+                    <div className="flex-shrink-0 flex justify-center px-1">
                       <ArrowRight size={11} style={{ color: '#C8D5DC' }} />
                     </div>
-                    {/* Badge NOVO — largura fixa */}
-                    <div style={{ width: '110px', flexShrink: 0 }}>
-                      <span className={STATUS_INFO[h.status_novo]?.cls ?? 'badge-neutral'} style={{ width: '100%', justifyContent: 'center' }}>
+                    {/* Badge NOVO */}
+                    <div className="flex-shrink-0">
+                      <span className={STATUS_INFO[h.status_novo]?.cls ?? 'badge-neutral'}>
                         {STATUS_INFO[h.status_novo]?.label ?? h.status_novo}
                       </span>
                     </div>
                     {/* Data — resto do espaço, alinhada à direita */}
-                    <span className="flex-1 text-right text-[10px] font-mono" style={{ color: '#A8B8C2' }}>
+                    <span className="flex-1 text-right text-[10px] font-mono whitespace-nowrap pl-1" style={{ color: '#A8B8C2' }}>
                       {new Date(h.data_hora).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
                     </span>
                   </div>
@@ -2698,14 +2702,15 @@ export default function EscoltaDetalhePage() {
           ) : (
             <div className="card-light" style={{ overflow: 'hidden' }}>
               {/* Header */}
-              <div className="px-6 py-4 border-b flex items-center justify-between" style={{ borderColor: '#DDE3EC', backgroundColor: '#F4F6FA' }}>
+              <div className="px-4 md:px-6 py-4 border-b flex items-center justify-between" style={{ borderColor: '#DDE3EC', backgroundColor: '#F4F6FA' }}>
                 <div>
                   <span className="text-[11px] font-black uppercase tracking-widest" style={{ color: '#1A294A' }}>
                     Histórico da Operação
                   </span>
                   <p className="text-[10px] mt-0.5" style={{ color: '#7A8FA6' }}>{timeline.length} eventos · mais recente no topo</p>
                 </div>
-                <div className="flex items-center gap-4">
+                {/* Legenda: oculta no mobile, visível no desktop */}
+                <div className="hidden md:flex items-center gap-4">
                   {Object.entries(TIPO_ICON_MAP).map(([tipo, m]) => (
                     timeline.some(t => t.tipo === tipo) ? (
                       <div key={tipo} className="flex items-center gap-1.5">
@@ -2718,7 +2723,7 @@ export default function EscoltaDetalhePage() {
               </div>
 
               {/* Lista */}
-              <div className="px-6 py-5">
+              <div className="px-3 md:px-6 py-4 md:py-5">
                 <div className="relative">
                   {/* Linha vertical da timeline */}
                   <div className="absolute top-0 bottom-0" style={{ left: '19px', width: '2px', backgroundColor: '#D0D8E8', zIndex: 0 }} />
@@ -2910,14 +2915,14 @@ export default function EscoltaDetalhePage() {
               ) : (
                 <div className="space-y-2">
                   {v.efetivo.map((e) => (
-                    <div key={e.id} className="flex items-center justify-between py-2 border-b last:border-0" style={{ borderColor: '#F0F2F4' }}>
-                      <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded flex items-center justify-center" style={{ backgroundColor: '#F0F2F4' }}>
+                    <div key={e.id} className="flex items-center justify-between py-2 border-b last:border-0 gap-2" style={{ borderColor: '#F0F2F4' }}>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-8 h-8 rounded flex items-center justify-center flex-shrink-0" style={{ backgroundColor: '#F0F2F4' }}>
                           <Users size={13} style={{ color: '#6B7E8A' }} />
                         </div>
-                        <span className="text-sm font-medium" style={{ color: '#1E2D35' }}>{e.vigilante?.nome_completo ?? '—'}</span>
+                        <span className="text-sm font-medium truncate" style={{ color: '#1E2D35' }}>{e.vigilante?.nome_completo ?? '—'}</span>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-shrink-0">
                         <span className={e.papel_na_escolta === 'comandante' ? 'badge-info' : 'badge-neutral'}>
                           {e.papel_na_escolta === 'comandante' ? 'Comandante' : 'Operador'}
                         </span>
@@ -2998,12 +3003,12 @@ export default function EscoltaDetalhePage() {
             </div>
           ) : ocorrencias.map((o) => (
             <div key={o.id} className="card-light p-5">
-              <div className="flex items-start justify-between gap-3">
+              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-1 sm:gap-3">
                 <div className="flex items-center gap-2">
                   <AlertTriangle size={15} style={{ color: '#A07212' }} />
                   <span className="font-semibold text-sm" style={{ color: '#1E2D35' }}>{o.tipo?.nome ?? 'Ocorrência'}</span>
                 </div>
-                <span className="text-xs flex-shrink-0" style={{ color: '#6B7E8A' }}>{formatarDataHora(o.data_hora)}</span>
+                <span className="text-xs flex-shrink-0 pl-6 sm:pl-0" style={{ color: '#6B7E8A' }}>{formatarDataHora(o.data_hora)}</span>
               </div>
               <p className="text-sm mt-2" style={{ color: '#6B7E8A' }}>{o.descricao}</p>
               {o.autor?.nome_completo && (
@@ -3057,12 +3062,12 @@ export default function EscoltaDetalhePage() {
                     <p style={{ fontSize: '13px', fontWeight: 900, color: '#B83832' }}>{fmtBRL(custoVigilantes)}</p>
                   </div>
                   {viaturas.flatMap(v => v.efetivo).map(e => (
-                    <div key={e.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 12px', backgroundColor: '#F5F7FA', borderRadius: '2px', marginBottom: '4px' }}>
-                      <div>
-                        <p style={{ fontSize: '12px', fontWeight: 600, color: '#1E2D35' }}>{e.vigilante?.nome_completo ?? '—'}</p>
+                    <div key={e.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', padding: '6px 12px', backgroundColor: '#F5F7FA', borderRadius: '2px', marginBottom: '4px' }}>
+                      <div style={{ minWidth: 0 }}>
+                        <p style={{ fontSize: '12px', fontWeight: 600, color: '#1E2D35', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.vigilante?.nome_completo ?? '—'}</p>
                         <p style={{ fontSize: '10px', color: '#6B7E8A', textTransform: 'capitalize' }}>{e.papel_na_escolta}</p>
                       </div>
-                      <p style={{ fontSize: '12px', fontWeight: 700, color: e.valor_pago_vigilante != null ? '#1E2D35' : '#C8D5DC' }}>
+                      <p style={{ fontSize: '12px', fontWeight: 700, color: e.valor_pago_vigilante != null ? '#1E2D35' : '#C8D5DC', flexShrink: 0 }}>
                         {e.valor_pago_vigilante != null ? fmtBRL(e.valor_pago_vigilante) : 'Não definido'}
                       </p>
                     </div>
@@ -3133,10 +3138,10 @@ export default function EscoltaDetalhePage() {
         else if (item.tipo === 'checklist')   Icon = ClipboardList
         else if (item.tipo === 'ocorrencia')  Icon = AlertTriangle
         return (
-          <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4" style={{ backgroundColor: 'rgba(14,26,51,0.7)' }}
+          <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(14,26,51,0.7)', padding: '0' }}
             onClick={() => setSelectedTimelineItem(null)}>
-            <div className="w-full max-w-lg bg-white overflow-hidden animate-in slide-in-from-bottom-4 fade-in"
-              style={{ boxShadow: '0 32px 80px rgba(0,0,0,0.25)', animationDuration: '250ms' }}
+            <div className="w-full sm:max-w-lg sm:mx-4 mx-0 bg-white overflow-hidden animate-in slide-in-from-bottom-4 fade-in"
+              style={{ boxShadow: '0 32px 80px rgba(0,0,0,0.25)', animationDuration: '250ms', maxHeight: '90vh', overflowY: 'auto' }}
               onClick={e => e.stopPropagation()}>
 
               {/* Header colorido */}
@@ -3236,7 +3241,7 @@ export default function EscoltaDetalhePage() {
               </div>
 
               <div className="px-5 py-3 border-t flex justify-end" style={{ borderColor: '#EEF0F5', backgroundColor: '#F8F9FB' }}>
-                <button onClick={() => setSelectedTimelineItem(null)} className="btn-outline">Fechar</button>
+                <button onClick={() => setSelectedTimelineItem(null)} className="btn-outline w-full sm:w-auto">Fechar</button>
               </div>
             </div>
           </div>
@@ -3248,9 +3253,9 @@ export default function EscoltaDetalhePage() {
         const checklists = (checklistModal.extra?.checklists ?? []) as ChecklistDetalhe[]
         const todasFotos = checklists.flatMap(c => c.respostas.filter(r => r.foto_url).map(r => ({ url: r.foto_url!, titulo: r.descricao_item })))
         return (
-          <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4" style={{ backgroundColor: 'rgba(14,26,51,0.75)' }}
+          <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(14,26,51,0.75)', padding: '0' }}
             onClick={() => setChecklistModal(null)}>
-            <div className="w-full max-w-2xl bg-white overflow-hidden animate-in slide-in-from-bottom-4 fade-in"
+            <div className="w-full sm:max-w-2xl sm:mx-4 mx-0 bg-white overflow-hidden animate-in slide-in-from-bottom-4 fade-in"
               style={{ boxShadow: '0 32px 80px rgba(0,0,0,0.3)', animationDuration: '250ms', maxHeight: '90vh', display: 'flex', flexDirection: 'column' }}
               onClick={e => e.stopPropagation()}>
 
@@ -3374,7 +3379,7 @@ export default function EscoltaDetalhePage() {
 
               {/* Footer */}
               <div className="px-5 py-3 border-t flex justify-end" style={{ borderColor: '#EEF0F5', backgroundColor: '#F8F9FB', flexShrink: 0 }}>
-                <button onClick={() => setChecklistModal(null)} className="btn-outline">Fechar</button>
+                <button onClick={() => setChecklistModal(null)} className="btn-outline w-full sm:w-auto">Fechar</button>
               </div>
             </div>
           </div>
@@ -3383,8 +3388,8 @@ export default function EscoltaDetalhePage() {
 
       {/* ── Dialog: Avançar Status ── */}
       {dialogAvanco && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(28,43,53,0.55)' }}>
-          <div className="w-full max-w-md rounded bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)' }}>
+        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', borderRadius: '0' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
               <h2 className="font-bold text-base" style={{ color: '#1E2D35' }}>{proximo?.label}</h2>
             </div>
@@ -3408,9 +3413,9 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
-            <div className="px-6 py-4 border-t flex justify-end gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
-              <button onClick={() => setDialogAvanco(false)} className="btn-outline">Cancelar</button>
-              <button onClick={avancarStatus} disabled={avancando} className="btn-gradient">
+            <div className="px-6 py-4 border-t flex flex-col sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
+              <button onClick={() => setDialogAvanco(false)} className="btn-outline w-full sm:w-auto order-2 sm:order-1">Cancelar</button>
+              <button onClick={avancarStatus} disabled={avancando} className="btn-gradient w-full sm:w-auto order-1 sm:order-2">
                 {avancando ? 'Processando...' : 'Confirmar'}
               </button>
             </div>
@@ -3420,8 +3425,8 @@ export default function EscoltaDetalhePage() {
 
       {/* ── Dialog: Cancelar / Reagendar ── */}
       {dialogCancelar && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(28,43,53,0.55)' }}>
-          <div className="w-full max-w-md bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.2)' }}>
+        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.2)', maxHeight: '92vh', overflowY: 'auto' }}>
             {/* Header */}
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
               <h2 className="font-bold text-base" style={{ color: '#1E2D35' }}>O que deseja fazer com esta escolta?</h2>
@@ -3529,22 +3534,22 @@ export default function EscoltaDetalhePage() {
               )}
             </div>
 
-            <div className="px-6 py-4 border-t flex justify-between items-center" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
+            <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row sm:justify-between items-stretch sm:items-center gap-2" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button
                 onClick={() => { setDialogCancelar(false); setErro(null); setAbaDialogCancelar('cancelar') }}
-                className="btn-outline"
+                className="btn-outline w-full sm:w-auto"
               >
                 Fechar
               </button>
               {abaDialogCancelar === 'cancelar' ? (
-                <button onClick={cancelarEscolta} disabled={cancelando} className="btn-danger">
+                <button onClick={cancelarEscolta} disabled={cancelando} className="btn-danger w-full sm:w-auto">
                   {cancelando ? 'Cancelando...' : 'Confirmar Cancelamento'}
                 </button>
               ) : (
                 <button
                   onClick={reagendarEscolta}
                   disabled={cancelando}
-                  className="text-white font-black text-[10px] uppercase tracking-widest px-5 py-2 flex items-center gap-1.5 transition-all active:scale-95"
+                  className="text-white font-black text-[10px] uppercase tracking-widest px-5 py-3 sm:py-2 flex items-center justify-center gap-1.5 transition-all active:scale-95 w-full sm:w-auto"
                   style={{ backgroundColor: '#1A294A' }}
                   onMouseEnter={e => (e.currentTarget as HTMLElement).style.backgroundColor = '#253562'}
                   onMouseLeave={e => (e.currentTarget as HTMLElement).style.backgroundColor = '#1A294A'}
@@ -3559,8 +3564,8 @@ export default function EscoltaDetalhePage() {
 
       {/* ── Dialog: Start Base (Sair da Base) ── */}
       {dialogStartBase && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(28,43,53,0.55)' }}>
-          <div className="w-full max-w-md rounded bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)' }}>
+        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
               <h2 className="font-bold text-base text-[#0E1A33]">Iniciar Operação (Saída da Base)</h2>
             </div>
@@ -3607,12 +3612,12 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
-            <div className="px-6 py-4 border-t flex justify-end gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
-              <button onClick={() => setDialogStartBase(false)} className="btn-outline">Cancelar</button>
+            <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
+              <button onClick={() => setDialogStartBase(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleStartBase}
                 disabled={loading}
-                className="btn-gradient"
+                className="btn-gradient w-full sm:w-auto"
               >
                 {loading ? 'Confirmando...' : 'Confirmar Saída'}
               </button>
@@ -3623,8 +3628,8 @@ export default function EscoltaDetalhePage() {
 
       {/* ── Dialog: Check-in Periódico ── */}
       {dialogCheckin && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(28,43,53,0.55)' }}>
-          <div className="w-full max-w-md rounded bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)' }}>
+        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)' }}>
 
             {/* Header */}
             <div className="px-6 py-4 border-b flex items-center gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F0FAF5' }}>
@@ -3697,12 +3702,12 @@ export default function EscoltaDetalhePage() {
               </div>
             </div>
 
-            <div className="px-6 py-4 border-t flex justify-end gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
-              <button onClick={() => { setDialogCheckin(false); setErro(null) }} className="btn-outline">Cancelar</button>
+            <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
+              <button onClick={() => { setDialogCheckin(false); setErro(null) }} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleCheckin}
                 disabled={loading || gpsCheckinLoading || !gpsCheckin}
-                className="h-9 px-5 font-black text-[10px] uppercase tracking-widest text-white active:scale-95 transition-all disabled:opacity-50"
+                className="h-11 sm:h-9 px-5 font-black text-[10px] uppercase tracking-widest text-white active:scale-95 transition-all disabled:opacity-50 w-full sm:w-auto"
                 style={{ backgroundColor: '#1E7C52' }}
               >
                 {loading ? 'Registrando...' : 'Confirmar Check-in'}
@@ -3714,8 +3719,8 @@ export default function EscoltaDetalhePage() {
 
       {/* ── Dialog: Parada ── */}
       {dialogParada && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(28,43,53,0.55)' }}>
-          <div className="w-full max-w-md rounded bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)' }}>
+        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
               <h2 className="font-bold text-base text-[#0E1A33]">Registrar Parada na Rota</h2>
             </div>
@@ -3760,12 +3765,12 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
-            <div className="px-6 py-4 border-t flex justify-end gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
-              <button onClick={() => setDialogParada(false)} className="btn-outline">Cancelar</button>
+            <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
+              <button onClick={() => setDialogParada(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleParada}
                 disabled={loading}
-                className="btn-gradient"
+                className="btn-gradient w-full sm:w-auto"
               >
                 {loading ? 'Gravando...' : 'Registrar Parada'}
               </button>
@@ -3776,8 +3781,8 @@ export default function EscoltaDetalhePage() {
 
       {/* ── Dialog: Chegada na Origem ── */}
       {dialogChegadaOrigem && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(28,43,53,0.55)' }}>
-          <div className="w-full max-w-md rounded bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)' }}>
+        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
               <h2 className="font-bold text-base text-[#0E1A33]">Confirmar Chegada na Origem</h2>
             </div>
@@ -3836,12 +3841,12 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
-            <div className="px-6 py-4 border-t flex justify-end gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
-              <button onClick={() => setDialogChegadaOrigem(false)} className="btn-outline">Cancelar</button>
+            <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
+              <button onClick={() => setDialogChegadaOrigem(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleChegadaOrigem}
                 disabled={loading}
-                className="btn-gradient"
+                className="btn-gradient w-full sm:w-auto"
               >
                 {loading ? 'Confirmando...' : 'Confirmar Chegada'}
               </button>
@@ -3852,8 +3857,8 @@ export default function EscoltaDetalhePage() {
 
       {/* ── Dialog: Chegada no Destino ── */}
       {dialogChegadaDestino && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(28,43,53,0.55)' }}>
-          <div className="w-full max-w-md rounded bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)' }}>
+        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
               <h2 className="font-bold text-base text-[#0E1A33]">Confirmar Chegada no Destino</h2>
             </div>
@@ -3885,12 +3890,12 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
-            <div className="px-6 py-4 border-t flex justify-end gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
-              <button onClick={() => setDialogChegadaDestino(false)} className="btn-outline">Cancelar</button>
+            <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
+              <button onClick={() => setDialogChegadaDestino(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleChegadaDestino}
                 disabled={loading}
-                className="btn-gradient"
+                className="btn-gradient w-full sm:w-auto"
               >
                 {loading ? 'Confirmando...' : 'Confirmar Chegada'}
               </button>
@@ -3901,8 +3906,8 @@ export default function EscoltaDetalhePage() {
 
       {/* ── Dialog: Iniciar Retorno ── */}
       {dialogIniciarRetorno && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(28,43,53,0.55)' }}>
-          <div className="w-full max-w-md rounded bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)' }}>
+        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
               <h2 className="font-bold text-base text-[#0E1A33]">Iniciar Retorno da Escolta</h2>
             </div>
@@ -3931,12 +3936,12 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
-            <div className="px-6 py-4 border-t flex justify-end gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
-              <button onClick={() => setDialogIniciarRetorno(false)} className="btn-outline">Cancelar</button>
+            <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
+              <button onClick={() => setDialogIniciarRetorno(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleIniciarRetorno}
                 disabled={loading}
-                className="btn-gradient"
+                className="btn-gradient w-full sm:w-auto"
               >
                 {loading ? 'Iniciando...' : 'Confirmar Retorno'}
               </button>
@@ -3947,8 +3952,8 @@ export default function EscoltaDetalhePage() {
 
       {/* ── Dialog: Chegada na Base ── */}
       {dialogChegadaBase && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(28,43,53,0.55)' }}>
-          <div className="w-full max-w-md rounded bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)' }}>
+        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
               <h2 className="font-bold text-base text-[#0E1A33]">Confirmar Chegada na Base (Retorno)</h2>
             </div>
@@ -3985,12 +3990,12 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
-            <div className="px-6 py-4 border-t flex justify-end gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
-              <button onClick={() => setDialogChegadaBase(false)} className="btn-outline">Cancelar</button>
+            <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
+              <button onClick={() => setDialogChegadaBase(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleChegadaBase}
                 disabled={loading}
-                className="btn-gradient"
+                className="btn-gradient w-full sm:w-auto"
               >
                 {loading ? 'Confirmando...' : 'Confirmar Chegada'}
               </button>
@@ -4001,8 +4006,8 @@ export default function EscoltaDetalhePage() {
 
       {/* ── Dialog: Finalizacao ── */}
       {dialogFinalizacao && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center p-4" style={{ backgroundColor: 'rgba(28,43,53,0.55)' }}>
-          <div className="w-full max-w-lg rounded bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)' }}>
+        <div className="fixed inset-0 z-40 flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-lg sm:mx-4 mx-0 bg-white overflow-hidden" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
               <h2 className="font-bold text-base text-[#0E1A33]">Finalizar Escolta e Relatório Diário</h2>
             </div>
@@ -4111,12 +4116,12 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
-            <div className="px-6 py-4 border-t flex justify-end gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
-              <button onClick={() => setDialogFinalizacao(false)} className="btn-outline">Cancelar</button>
+            <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
+              <button onClick={() => setDialogFinalizacao(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleFinalizacao}
                 disabled={loading}
-                className="btn-gradient"
+                className="btn-gradient w-full sm:w-auto"
               >
                 {loading ? 'Finalizando...' : 'Finalizar Operação'}
               </button>

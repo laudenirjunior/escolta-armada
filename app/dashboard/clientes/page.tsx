@@ -1,4 +1,4 @@
-﻿'use client'
+'use client'
 
 import { useEffect, useState, useCallback } from 'react'
 import { Plus, Search, Edit2 } from 'lucide-react'
@@ -157,6 +157,7 @@ export default function ClientesPage() {
 
   return (
     <div className="space-y-5">
+      {/* ── Header ── */}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-white">Clientes</h2>
@@ -167,21 +168,24 @@ export default function ClientesPage() {
         {podeEditar && (
           <Button onClick={abrirNovo} className="gap-2">
             <Plus size={16} />
-            Novo Cliente
+            <span className="hidden sm:inline">Novo Cliente</span>
+            <span className="sm:hidden">Novo</span>
           </Button>
         )}
       </div>
 
-      <div className="relative max-w-sm">
+      {/* ── Busca ── */}
+      <div className="relative w-full md:max-w-sm">
         <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
         <Input
           placeholder="Buscar cliente..."
           value={busca}
           onChange={(e) => setBusca(e.target.value)}
-          className="pl-9"
+          className="pl-9 w-full"
         />
       </div>
 
+      {/* ── Lista ── */}
       {loading ? (
         <p className="text-sm text-text-secondary">Carregando...</p>
       ) : filtrados.length === 0 ? (
@@ -199,6 +203,7 @@ export default function ClientesPage() {
               style={{ borderLeftColor: c.cor_destaque, borderLeftWidth: 3 }}
             >
               <div className="flex-1 min-w-0">
+                {/* Linha 1: nome + badges */}
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-sm font-semibold text-white">{c.nome_cliente}</span>
                   <Badge variant={c.status === 'ativo' ? 'success' : 'default'} className="text-[10px] h-4">
@@ -208,11 +213,20 @@ export default function ClientesPage() {
                     <Badge variant="info" className="text-[10px] h-4">Telegram</Badge>
                   )}
                 </div>
-                <p className="text-xs text-text-secondary mt-0.5">
-                  {c.contato} · {c.telefone}
-                  {c.cnpj && ` · ${c.cnpj}`}
-                </p>
+                {/* Linha 2: contato + telefone + CNPJ — empilha no mobile */}
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
+                  <span className="text-xs text-text-secondary">{c.contato}</span>
+                  <span className="text-xs text-text-secondary hidden sm:inline">·</span>
+                  <span className="text-xs text-text-secondary">{c.telefone}</span>
+                  {c.cnpj && (
+                    <>
+                      <span className="text-xs text-text-secondary hidden sm:inline">·</span>
+                      <span className="text-xs text-text-secondary">{c.cnpj}</span>
+                    </>
+                  )}
+                </div>
               </div>
+              {/* Valor padrão */}
               {verFinanceiro && c.valor_padrao_escolta != null && (
                 <div style={{ textAlign: 'right', flexShrink: 0 }}>
                   <p style={{ fontSize: '11px', fontWeight: 900, color: '#4ade80', fontVariantNumeric: 'tabular-nums' }}>
@@ -221,8 +235,14 @@ export default function ClientesPage() {
                   <p style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Valor padrão</p>
                 </div>
               )}
+              {/* Botão editar touch-friendly */}
               {podeEditar && (
-                <Button variant="ghost" size="icon-sm" onClick={() => abrirEdicao(c)}>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => abrirEdicao(c)}
+                  className="min-h-[44px] min-w-[44px]"
+                >
                   <Edit2 size={14} />
                 </Button>
               )}
@@ -231,6 +251,7 @@ export default function ClientesPage() {
         </div>
       )}
 
+      {/* ── Dialog ── */}
       <Dialog
         isOpen={dialogAberto}
         onClose={() => setDialogAberto(false)}
@@ -258,7 +279,7 @@ export default function ClientesPage() {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label className="text-xs text-text-secondary mb-1 block">CNPJ</Label>
               <Input
@@ -281,7 +302,7 @@ export default function ClientesPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label className="text-xs text-text-secondary mb-1 block">Contato *</Label>
               <Input

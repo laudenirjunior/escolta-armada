@@ -194,32 +194,32 @@ export default function AuditoriaPage() {
 
         {/* Custom date range */}
         {range === 'custom' && (
-          <div className="flex gap-3 items-center">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
             <input type="date" value={customStart}
               onChange={(e) => setCustomStart(e.target.value)}
-              className="input-light text-xs" style={{ maxWidth: '160px' }} />
-            <span className="text-xs" style={{ color: '#6B7E8A' }}>até</span>
+              className="input-light text-xs w-full sm:w-auto" />
+            <span className="text-xs hidden sm:block" style={{ color: '#6B7E8A' }}>até</span>
             <input type="date" value={customEnd}
               onChange={(e) => setCustomEnd(e.target.value)}
-              className="input-light text-xs" style={{ maxWidth: '160px' }} />
+              className="input-light text-xs w-full sm:w-auto" />
           </div>
         )}
 
         {/* Second row filters */}
-        <div className="flex flex-wrap gap-3">
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
           {/* Search */}
-          <div className="relative flex-1 min-w-48">
+          <div className="relative w-full sm:flex-1 sm:min-w-48">
             <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: '#A8B8C2' }} />
             <input type="text" placeholder="Buscar por usuário, entidade..."
               value={busca} onChange={(e) => setBusca(e.target.value)}
-              className="input-light pl-9 text-xs" />
+              className="input-light pl-9 text-xs w-full" />
           </div>
 
           {/* Action filter */}
-          <div className="flex items-center gap-1.5">
-            <Filter size={13} style={{ color: '#6B7E8A' }} />
+          <div className="flex items-center gap-1.5 w-full sm:w-auto">
+            <Filter size={13} style={{ color: '#6B7E8A', flexShrink: 0 }} />
             <select value={filtroAcao} onChange={(e) => setFiltroAcao(e.target.value)}
-              className="select-light text-xs" style={{ minWidth: '130px' }}>
+              className="select-light text-xs w-full sm:w-auto" style={{ minWidth: '130px' }}>
               <option value="all">Todas as ações</option>
               <option value="CREATE">Criação</option>
               <option value="UPDATE">Atualização</option>
@@ -230,7 +230,7 @@ export default function AuditoriaPage() {
 
           {/* Entity filter */}
           <select value={filtroEntidade} onChange={(e) => setFiltroEntidade(e.target.value)}
-            className="select-light text-xs" style={{ minWidth: '140px' }}>
+            className="select-light text-xs w-full sm:w-auto" style={{ minWidth: '140px' }}>
             <option value="all">Todas as entidades</option>
             <option value="escoltas">Escoltas</option>
             <option value="vigilantes">Vigilantes</option>
@@ -261,114 +261,111 @@ export default function AuditoriaPage() {
           </div>
         ) : (
           <>
-            {/* Table header */}
-            <div className="grid grid-cols-12 gap-2 px-4 py-2.5 border-b"
-              style={{ borderColor: '#E2E8EC', backgroundColor: '#F4F4F9' }}>
-              <div className="col-span-3 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Data / Hora</div>
-              <div className="col-span-3 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Usuário</div>
-              <div className="col-span-2 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Ação</div>
-              <div className="col-span-3 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Entidade</div>
-              <div className="col-span-1 text-[11px] font-bold uppercase tracking-wider text-right" style={{ color: '#6B7E8A' }}>Det.</div>
-            </div>
+            {/* ── Desktop table ── */}
+            <div className="hidden md:block">
+              <div className="grid grid-cols-12 gap-2 px-4 py-2.5 border-b"
+                style={{ borderColor: '#E2E8EC', backgroundColor: '#F4F4F9' }}>
+                <div className="col-span-3 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Data / Hora</div>
+                <div className="col-span-3 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Usuário</div>
+                <div className="col-span-2 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Ação</div>
+                <div className="col-span-3 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Entidade</div>
+                <div className="col-span-1 text-[11px] font-bold uppercase tracking-wider text-right" style={{ color: '#6B7E8A' }}>Det.</div>
+              </div>
 
-            {filtradosBusca.map((log) => (
-              <div key={log.id}>
-                <button
-                  onClick={() => (log.dados_antes || log.dados_depois) ? toggleExpand(log.id) : undefined}
-                  className="w-full grid grid-cols-12 gap-2 px-4 py-3 border-b text-left transition-all"
-                  style={{
-                    borderColor: '#E2E8EC',
-                    cursor: (log.dados_antes || log.dados_depois) ? 'pointer' : 'default',
-                    backgroundColor: log.expanded ? '#F8FAFC' : '',
-                  }}
-                  onMouseEnter={(e) => {
-                    if (log.dados_antes || log.dados_depois)
-                      (e.currentTarget as HTMLElement).style.backgroundColor = '#F8FAFC'
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!log.expanded)
-                      (e.currentTarget as HTMLElement).style.backgroundColor = ''
-                  }}
-                >
-                  <div className="col-span-3">
-                    <p className="text-xs font-medium" style={{ color: '#1E2D35' }}>
-                      {new Date(log.data_hora).toLocaleDateString('pt-BR', {
-                        day: '2-digit', month: '2-digit', year: 'numeric',
-                      })}
-                    </p>
-                    <p className="text-[11px] font-mono" style={{ color: '#6B7E8A' }}>
-                      {new Date(log.data_hora).toLocaleTimeString('pt-BR', {
-                        hour: '2-digit', minute: '2-digit', second: '2-digit',
-                      })}
-                    </p>
-                  </div>
-                  <div className="col-span-3">
-                    <p className="text-xs font-medium truncate" style={{ color: '#1E2D35' }}>
-                      {log.usuario?.nome_completo ?? 'Sistema'}
-                    </p>
-                    {log.ip && (
-                      <p className="text-[10px] font-mono" style={{ color: '#A8B8C2' }}>{log.ip}</p>
-                    )}
-                  </div>
-                  <div className="col-span-2">
-                    <span className={badgeAcao(log.acao)}>{labelAcao(log.acao)}</span>
-                  </div>
-                  <div className="col-span-3">
-                    <p className="text-xs capitalize" style={{ color: '#1E2D35' }}>
-                      {log.entidade_afetada}
-                    </p>
-                    {log.registro_id && (
-                      <p className="text-[10px] font-mono truncate" style={{ color: '#A8B8C2' }}>
-                        #{log.registro_id.slice(0, 8)}
-                      </p>
-                    )}
-                  </div>
-                  <div className="col-span-1 flex items-start justify-end">
-                    {(log.dados_antes || log.dados_depois) && (
-                      log.expanded
-                        ? <ChevronDown size={14} style={{ color: '#4A90A4' }} />
-                        : <ChevronRight size={14} style={{ color: '#C8D5DC' }} />
-                    )}
-                  </div>
-                </button>
+              {filtradosBusca.map((log) => (
+                <div key={log.id}>
+                  <button
+                    onClick={() => (log.dados_antes || log.dados_depois) ? toggleExpand(log.id) : undefined}
+                    className="w-full grid grid-cols-12 gap-2 px-4 py-3 border-b text-left transition-all"
+                    style={{ borderColor: '#E2E8EC', cursor: (log.dados_antes || log.dados_depois) ? 'pointer' : 'default', backgroundColor: log.expanded ? '#F8FAFC' : '' }}
+                    onMouseEnter={(e) => { if (log.dados_antes || log.dados_depois) (e.currentTarget as HTMLElement).style.backgroundColor = '#F8FAFC' }}
+                    onMouseLeave={(e) => { if (!log.expanded) (e.currentTarget as HTMLElement).style.backgroundColor = '' }}
+                  >
+                    <div className="col-span-3">
+                      <p className="text-xs font-medium" style={{ color: '#1E2D35' }}>{new Date(log.data_hora).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })}</p>
+                      <p className="text-[11px] font-mono" style={{ color: '#6B7E8A' }}>{new Date(log.data_hora).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</p>
+                    </div>
+                    <div className="col-span-3">
+                      <p className="text-xs font-medium truncate" style={{ color: '#1E2D35' }}>{log.usuario?.nome_completo ?? 'Sistema'}</p>
+                      {log.ip && <p className="text-[10px] font-mono" style={{ color: '#A8B8C2' }}>{log.ip}</p>}
+                    </div>
+                    <div className="col-span-2"><span className={badgeAcao(log.acao)}>{labelAcao(log.acao)}</span></div>
+                    <div className="col-span-3">
+                      <p className="text-xs capitalize" style={{ color: '#1E2D35' }}>{log.entidade_afetada}</p>
+                      {log.registro_id && <p className="text-[10px] font-mono truncate" style={{ color: '#A8B8C2' }}>#{log.registro_id.slice(0, 8)}</p>}
+                    </div>
+                    <div className="col-span-1 flex items-start justify-end">
+                      {(log.dados_antes || log.dados_depois) && (log.expanded ? <ChevronDown size={14} style={{ color: '#4A90A4' }} /> : <ChevronRight size={14} style={{ color: '#C8D5DC' }} />)}
+                    </div>
+                  </button>
 
-                {/* Expanded diff */}
-                {log.expanded && (
-                  <div className="border-b px-4 py-4" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8FAFC' }}>
-                    <div className="grid grid-cols-2 gap-4">
-                      {/* Antes */}
-                      <div>
-                        <p className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: '#B83832' }}>
-                          Antes
-                        </p>
-                        {log.dados_antes ? (
-                          <pre className="text-[10px] p-2 rounded-lg overflow-auto max-h-48 font-mono"
-                            style={{ backgroundColor: '#FEF0EE', color: '#B83832', border: '1px solid #F5C2BE' }}>
-                            {JSON.stringify(log.dados_antes, null, 2)}
-                          </pre>
-                        ) : (
-                          <p className="text-[11px] italic" style={{ color: '#A8B8C2' }}>— sem dados anteriores</p>
-                        )}
-                      </div>
-                      {/* Depois */}
-                      <div>
-                        <p className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: '#1E7C52' }}>
-                          Depois
-                        </p>
-                        {log.dados_depois ? (
-                          <pre className="text-[10px] p-2 rounded-lg overflow-auto max-h-48 font-mono"
-                            style={{ backgroundColor: '#EBF7F1', color: '#1E7C52', border: '1px solid #B2E4CB' }}>
-                            {JSON.stringify(log.dados_depois, null, 2)}
-                          </pre>
-                        ) : (
-                          <p className="text-[11px] italic" style={{ color: '#A8B8C2' }}>— sem dados posteriores</p>
-                        )}
+                  {log.expanded && (
+                    <div className="border-b px-4 py-4" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8FAFC' }}>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: '#B83832' }}>Antes</p>
+                          {log.dados_antes ? (
+                            <pre className="text-[10px] p-2 rounded-lg overflow-auto max-h-48 font-mono" style={{ backgroundColor: '#FEF0EE', color: '#B83832', border: '1px solid #F5C2BE' }}>{JSON.stringify(log.dados_antes, null, 2)}</pre>
+                          ) : <p className="text-[11px] italic" style={{ color: '#A8B8C2' }}>— sem dados anteriores</p>}
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-wider mb-2" style={{ color: '#1E7C52' }}>Depois</p>
+                          {log.dados_depois ? (
+                            <pre className="text-[10px] p-2 rounded-lg overflow-auto max-h-48 font-mono" style={{ backgroundColor: '#EBF7F1', color: '#1E7C52', border: '1px solid #B2E4CB' }}>{JSON.stringify(log.dados_depois, null, 2)}</pre>
+                          ) : <p className="text-[11px] italic" style={{ color: '#A8B8C2' }}>— sem dados posteriores</p>}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )}
-              </div>
-            ))}
+                  )}
+                </div>
+              ))}
+            </div>
+
+            {/* ── Mobile cards ── */}
+            <div className="md:hidden space-y-2 p-3">
+              {filtradosBusca.map((log) => (
+                <div key={log.id} className="rounded-xl border overflow-hidden"
+                  style={{ borderColor: '#E2E8EC', backgroundColor: log.expanded ? '#F8FAFC' : '#fff' }}>
+                  <button
+                    onClick={() => (log.dados_antes || log.dados_depois) ? toggleExpand(log.id) : undefined}
+                    className="w-full p-3 text-left"
+                    style={{ cursor: (log.dados_antes || log.dados_depois) ? 'pointer' : 'default' }}
+                  >
+                    <div className="flex items-start justify-between gap-2 mb-1.5">
+                      <div>
+                        <p className="text-xs font-medium" style={{ color: '#1E2D35' }}>{log.usuario?.nome_completo ?? 'Sistema'}</p>
+                        <p className="text-[11px] font-mono" style={{ color: '#6B7E8A' }}>{new Date(log.data_hora).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}</p>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className={badgeAcao(log.acao)}>{labelAcao(log.acao)}</span>
+                        {(log.dados_antes || log.dados_depois) && (log.expanded ? <ChevronDown size={13} style={{ color: '#4A90A4' }} /> : <ChevronRight size={13} style={{ color: '#C8D5DC' }} />)}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-xs capitalize" style={{ color: '#1E2D35' }}>{log.entidade_afetada}</p>
+                      {log.registro_id && <p className="text-[10px] font-mono" style={{ color: '#A8B8C2' }}>#{log.registro_id.slice(0, 8)}</p>}
+                    </div>
+                  </button>
+
+                  {log.expanded && (
+                    <div className="border-t px-3 py-3 space-y-3" style={{ borderColor: '#E2E8EC' }}>
+                      {log.dados_antes && (
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-wider mb-1.5" style={{ color: '#B83832' }}>Antes</p>
+                          <pre className="text-[10px] p-2 rounded-lg overflow-auto max-h-36 font-mono" style={{ backgroundColor: '#FEF0EE', color: '#B83832', border: '1px solid #F5C2BE' }}>{JSON.stringify(log.dados_antes, null, 2)}</pre>
+                        </div>
+                      )}
+                      {log.dados_depois && (
+                        <div>
+                          <p className="text-[10px] font-bold uppercase tracking-wider mb-1.5" style={{ color: '#1E7C52' }}>Depois</p>
+                          <pre className="text-[10px] p-2 rounded-lg overflow-auto max-h-36 font-mono" style={{ backgroundColor: '#EBF7F1', color: '#1E7C52', border: '1px solid #B2E4CB' }}>{JSON.stringify(log.dados_depois, null, 2)}</pre>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
 
             {/* Pagination */}
             {totalPages > 1 && (

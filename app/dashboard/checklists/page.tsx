@@ -174,13 +174,13 @@ export default function ChecklistsPage() {
     <div className="space-y-5">
 
       {/* ── Header ── */}
-      <div className="flex items-start justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="page-title">Checklists</h1>
           <p className="page-subtitle">Gestão de checklists operacionais</p>
         </div>
         {tab === 'modelos' && (
-          <button onClick={() => setDialogModelo(true)} className="btn-gradient">
+          <button onClick={() => setDialogModelo(true)} className="btn-gradient w-full sm:w-auto">
             <Plus size={15} />
             Novo Modelo
           </button>
@@ -188,7 +188,7 @@ export default function ChecklistsPage() {
       </div>
 
       {/* ── Tabs ── */}
-      <div className="card-light p-1 flex gap-1 w-fit">
+      <div className="card-light p-1 flex gap-1 w-full sm:w-fit">
         {([
           { key: 'checklists', label: 'Checklists das Escoltas', icon: <ClipboardList size={14} /> },
           { key: 'modelos', label: 'Modelos de Checklist', icon: <Layers size={14} /> },
@@ -196,7 +196,7 @@ export default function ChecklistsPage() {
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-all"
+            className="flex items-center gap-2 px-3 py-2 sm:px-4 rounded-lg text-xs sm:text-sm font-semibold transition-all flex-1 sm:flex-none justify-center sm:justify-start"
             style={
               tab === t.key
                 ? { backgroundColor: '#3A5464', color: '#fff' }
@@ -233,106 +233,158 @@ export default function ChecklistsPage() {
             </div>
           ) : (
             <div>
-              {/* Table header */}
-              <div className="grid grid-cols-12 gap-2 px-4 py-2.5 border-b"
-                style={{ borderColor: '#E2E8EC', backgroundColor: '#F4F4F9' }}>
-                <div className="col-span-2 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Escolta</div>
-                <div className="col-span-3 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Modelo</div>
-                <div className="col-span-2 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Tipo</div>
-                <div className="col-span-2 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Status</div>
-                <div className="col-span-3 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Data Conclusão</div>
+              {/* ── Desktop table ── */}
+              <div className="hidden md:block">
+                <div className="grid grid-cols-12 gap-2 px-4 py-2.5 border-b"
+                  style={{ borderColor: '#E2E8EC', backgroundColor: '#F4F4F9' }}>
+                  <div className="col-span-2 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Escolta</div>
+                  <div className="col-span-3 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Modelo</div>
+                  <div className="col-span-2 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Tipo</div>
+                  <div className="col-span-2 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Status</div>
+                  <div className="col-span-3 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Data Conclusão</div>
+                </div>
+
+                {checklists.map((c) => {
+                  const isOpen = expandedChecklist === c.id
+                  const codigoEscolta = c.escolta_veiculo?.escolta?.codigo_escolta ?? '—'
+                  return (
+                    <div key={c.id}>
+                      <button
+                        onClick={() => toggleChecklistExpand(c.id)}
+                        className="w-full grid grid-cols-12 gap-2 px-4 py-3 border-b text-left transition-all"
+                        style={{ borderColor: '#E2E8EC', backgroundColor: isOpen ? '#F8FAFC' : '' }}
+                        onMouseEnter={(e) => { if (!isOpen) (e.currentTarget as HTMLElement).style.backgroundColor = '#F8FAFC' }}
+                        onMouseLeave={(e) => { if (!isOpen) (e.currentTarget as HTMLElement).style.backgroundColor = '' }}
+                      >
+                        <div className="col-span-2 flex items-center gap-1">
+                          {isOpen ? <ChevronDown size={12} style={{ color: '#4A90A4' }} /> : <ChevronRight size={12} style={{ color: '#C8D5DC' }} />}
+                          <span className="text-xs font-mono font-bold" style={{ color: '#1E2D35' }}>{codigoEscolta}</span>
+                        </div>
+                        <div className="col-span-3">
+                          <span className="text-xs" style={{ color: '#1E2D35' }}>{c.modelo?.nome ?? '—'}</span>
+                        </div>
+                        <div className="col-span-2">
+                          <span className={c.modelo?.tipo === 'viatura' ? 'badge-info' : 'badge-neutral'}>
+                            {c.modelo?.tipo === 'viatura' ? 'Viatura' : 'Material'}
+                          </span>
+                        </div>
+                        <div className="col-span-2">
+                          {c.concluido
+                            ? <span className="badge-success flex items-center gap-1 w-fit"><Check size={10} /> Concluído</span>
+                            : <span className="badge-warning flex items-center gap-1 w-fit"><Clock size={10} /> Pendente</span>
+                          }
+                        </div>
+                        <div className="col-span-3">
+                          <span className="text-xs" style={{ color: '#6B7E8A' }}>
+                            {c.data_conclusao
+                              ? new Date(c.data_conclusao).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+                              : '—'
+                            }
+                          </span>
+                        </div>
+                      </button>
+
+                      {isOpen && (
+                        <div className="border-b" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8FAFC' }}>
+                          {!c.respostas ? (
+                            <div className="py-4 flex items-center justify-center gap-2">
+                              <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin"
+                                style={{ borderColor: '#4A90A4', borderTopColor: 'transparent' }} />
+                              <span className="text-xs" style={{ color: '#6B7E8A' }}>Carregando respostas...</span>
+                            </div>
+                          ) : c.respostas.length === 0 ? (
+                            <p className="text-xs text-center py-4" style={{ color: '#A8B8C2' }}>Nenhuma resposta registrada</p>
+                          ) : (
+                            <div className="px-8 py-3 space-y-2">
+                              {c.respostas.map((r) => (
+                                <div key={r.id} className="flex items-start gap-3">
+                                  <div className="mt-0.5 w-5 h-5 rounded-full flex items-center justify-center shrink-0"
+                                    style={{ backgroundColor: r.conforme ? '#EBF7F1' : '#FEF0EE' }}>
+                                    {r.conforme ? <Check size={11} style={{ color: '#1E7C52' }} /> : <X size={11} style={{ color: '#B83832' }} />}
+                                  </div>
+                                  <div>
+                                    <p className="text-xs font-medium" style={{ color: '#1E2D35' }}>{r.descricao_item}</p>
+                                    {r.observacao && <p className="text-[11px] mt-0.5" style={{ color: '#6B7E8A' }}>Obs: {r.observacao}</p>}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
 
-              {checklists.map((c) => {
-                const isOpen = expandedChecklist === c.id
-                const codigoEscolta = c.escolta_veiculo?.escolta?.codigo_escolta ?? '—'
-                return (
-                  <div key={c.id}>
-                    <button
-                      onClick={() => toggleChecklistExpand(c.id)}
-                      className="w-full grid grid-cols-12 gap-2 px-4 py-3 border-b text-left transition-all"
-                      style={{
-                        borderColor: '#E2E8EC',
-                        backgroundColor: isOpen ? '#F8FAFC' : '',
-                      }}
-                      onMouseEnter={(e) => {
-                        if (!isOpen) (e.currentTarget as HTMLElement).style.backgroundColor = '#F8FAFC'
-                      }}
-                      onMouseLeave={(e) => {
-                        if (!isOpen) (e.currentTarget as HTMLElement).style.backgroundColor = ''
-                      }}
-                    >
-                      <div className="col-span-2 flex items-center gap-1">
-                        {isOpen ? <ChevronDown size={12} style={{ color: '#4A90A4' }} /> : <ChevronRight size={12} style={{ color: '#C8D5DC' }} />}
-                        <span className="text-xs font-mono font-bold" style={{ color: '#1E2D35' }}>{codigoEscolta}</span>
-                      </div>
-                      <div className="col-span-3">
-                        <span className="text-xs" style={{ color: '#1E2D35' }}>{c.modelo?.nome ?? '—'}</span>
-                      </div>
-                      <div className="col-span-2">
-                        <span className={c.modelo?.tipo === 'viatura' ? 'badge-info' : 'badge-neutral'}>
-                          {c.modelo?.tipo === 'viatura' ? 'Viatura' : 'Material'}
-                        </span>
-                      </div>
-                      <div className="col-span-2">
-                        {c.concluido
-                          ? <span className="badge-success flex items-center gap-1 w-fit"><Check size={10} /> Concluído</span>
-                          : <span className="badge-warning flex items-center gap-1 w-fit"><Clock size={10} /> Pendente</span>
-                        }
-                      </div>
-                      <div className="col-span-3">
-                        <span className="text-xs" style={{ color: '#6B7E8A' }}>
-                          {c.data_conclusao
-                            ? new Date(c.data_conclusao).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
-                            : '—'
+              {/* ── Mobile cards ── */}
+              <div className="md:hidden space-y-3 p-3">
+                {checklists.map((c) => {
+                  const isOpen = expandedChecklist === c.id
+                  const codigoEscolta = c.escolta_veiculo?.escolta?.codigo_escolta ?? '—'
+                  return (
+                    <div key={c.id} className="rounded-xl border overflow-hidden"
+                      style={{ borderColor: '#E2E8EC', backgroundColor: isOpen ? '#F8FAFC' : '#fff' }}>
+                      <button
+                        onClick={() => toggleChecklistExpand(c.id)}
+                        className="w-full p-3 text-left"
+                      >
+                        <div className="flex items-start justify-between gap-2 mb-2">
+                          <div className="flex items-center gap-1.5">
+                            {isOpen ? <ChevronDown size={13} style={{ color: '#4A90A4' }} /> : <ChevronRight size={13} style={{ color: '#C8D5DC' }} />}
+                            <span className="text-sm font-mono font-bold" style={{ color: '#1E2D35' }}>{codigoEscolta}</span>
+                          </div>
+                          {c.concluido
+                            ? <span className="badge-success flex items-center gap-1"><Check size={10} /> Concluído</span>
+                            : <span className="badge-warning flex items-center gap-1"><Clock size={10} /> Pendente</span>
                           }
-                        </span>
-                      </div>
-                    </button>
+                        </div>
+                        <p className="text-xs ml-5" style={{ color: '#1E2D35' }}>{c.modelo?.nome ?? '—'}</p>
+                        <div className="flex items-center justify-between mt-1.5 ml-5">
+                          <span className={c.modelo?.tipo === 'viatura' ? 'badge-info' : 'badge-neutral'}>
+                            {c.modelo?.tipo === 'viatura' ? 'Viatura' : 'Material'}
+                          </span>
+                          <span className="text-[11px]" style={{ color: '#6B7E8A' }}>
+                            {c.data_conclusao
+                              ? new Date(c.data_conclusao).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
+                              : '—'
+                            }
+                          </span>
+                        </div>
+                      </button>
 
-                    {/* Expanded respostas */}
-                    {isOpen && (
-                      <div className="border-b" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8FAFC' }}>
-                        {!c.respostas ? (
-                          <div className="py-4 flex items-center justify-center gap-2">
-                            <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin"
-                              style={{ borderColor: '#4A90A4', borderTopColor: 'transparent' }} />
-                            <span className="text-xs" style={{ color: '#6B7E8A' }}>Carregando respostas...</span>
-                          </div>
-                        ) : c.respostas.length === 0 ? (
-                          <p className="text-xs text-center py-4" style={{ color: '#A8B8C2' }}>
-                            Nenhuma resposta registrada
-                          </p>
-                        ) : (
-                          <div className="px-8 py-3 space-y-2">
-                            {c.respostas.map((r) => (
-                              <div key={r.id} className="flex items-start gap-3">
-                                <div className="mt-0.5 w-5 h-5 rounded-full flex items-center justify-center shrink-0"
-                                  style={{ backgroundColor: r.conforme ? '#EBF7F1' : '#FEF0EE' }}>
-                                  {r.conforme
-                                    ? <Check size={11} style={{ color: '#1E7C52' }} />
-                                    : <X size={11} style={{ color: '#B83832' }} />
-                                  }
+                      {isOpen && (
+                        <div className="border-t px-3 py-3" style={{ borderColor: '#E2E8EC' }}>
+                          {!c.respostas ? (
+                            <div className="py-2 flex items-center justify-center gap-2">
+                              <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin"
+                                style={{ borderColor: '#4A90A4', borderTopColor: 'transparent' }} />
+                              <span className="text-xs" style={{ color: '#6B7E8A' }}>Carregando...</span>
+                            </div>
+                          ) : c.respostas.length === 0 ? (
+                            <p className="text-xs text-center py-2" style={{ color: '#A8B8C2' }}>Nenhuma resposta</p>
+                          ) : (
+                            <div className="space-y-2">
+                              {c.respostas.map((r) => (
+                                <div key={r.id} className="flex items-start gap-2">
+                                  <div className="mt-0.5 w-5 h-5 rounded-full flex items-center justify-center shrink-0"
+                                    style={{ backgroundColor: r.conforme ? '#EBF7F1' : '#FEF0EE' }}>
+                                    {r.conforme ? <Check size={11} style={{ color: '#1E7C52' }} /> : <X size={11} style={{ color: '#B83832' }} />}
+                                  </div>
+                                  <div>
+                                    <p className="text-xs font-medium" style={{ color: '#1E2D35' }}>{r.descricao_item}</p>
+                                    {r.observacao && <p className="text-[11px] mt-0.5" style={{ color: '#6B7E8A' }}>Obs: {r.observacao}</p>}
+                                  </div>
                                 </div>
-                                <div>
-                                  <p className="text-xs font-medium" style={{ color: '#1E2D35' }}>
-                                    {r.descricao_item}
-                                  </p>
-                                  {r.observacao && (
-                                    <p className="text-[11px] mt-0.5" style={{ color: '#6B7E8A' }}>
-                                      Obs: {r.observacao}
-                                    </p>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           )}
         </div>
@@ -358,92 +410,131 @@ export default function ChecklistsPage() {
             </div>
           ) : (
             <div>
-              {/* Table header */}
-              <div className="grid grid-cols-12 gap-2 px-4 py-2.5 border-b"
-                style={{ borderColor: '#E2E8EC', backgroundColor: '#F4F4F9' }}>
-                <div className="col-span-4 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Nome</div>
-                <div className="col-span-2 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Tipo</div>
-                <div className="col-span-2 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Versão</div>
-                <div className="col-span-2 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Itens</div>
-                <div className="col-span-2 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Status</div>
+              {/* ── Desktop table ── */}
+              <div className="hidden md:block">
+                <div className="grid grid-cols-12 gap-2 px-4 py-2.5 border-b"
+                  style={{ borderColor: '#E2E8EC', backgroundColor: '#F4F4F9' }}>
+                  <div className="col-span-4 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Nome</div>
+                  <div className="col-span-2 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Tipo</div>
+                  <div className="col-span-2 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Versão</div>
+                  <div className="col-span-2 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Itens</div>
+                  <div className="col-span-2 text-[11px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Status</div>
+                </div>
+
+                {modelos.map((m) => {
+                  const isOpen = expandedModelo === m.id
+                  return (
+                    <div key={m.id}>
+                      <button
+                        onClick={() => toggleModeloExpand(m.id)}
+                        className="w-full grid grid-cols-12 gap-2 px-4 py-3 border-b text-left transition-all"
+                        style={{ borderColor: '#E2E8EC', backgroundColor: isOpen ? '#F8FAFC' : '' }}
+                        onMouseEnter={(e) => { if (!isOpen) (e.currentTarget as HTMLElement).style.backgroundColor = '#F8FAFC' }}
+                        onMouseLeave={(e) => { if (!isOpen) (e.currentTarget as HTMLElement).style.backgroundColor = '' }}
+                      >
+                        <div className="col-span-4 flex items-center gap-1.5">
+                          {isOpen ? <ChevronDown size={12} style={{ color: '#4A90A4' }} /> : <ChevronRight size={12} style={{ color: '#C8D5DC' }} />}
+                          <span className="text-sm font-semibold" style={{ color: '#1E2D35' }}>{m.nome}</span>
+                        </div>
+                        <div className="col-span-2">
+                          <span className={m.tipo === 'viatura' ? 'badge-info' : 'badge-neutral'}>
+                            {m.tipo === 'viatura' ? 'Viatura' : 'Material'}
+                          </span>
+                        </div>
+                        <div className="col-span-2">
+                          <span className="text-xs" style={{ color: '#6B7E8A' }}>v{m.versao}</span>
+                        </div>
+                        <div className="col-span-2">
+                          <span className="text-xs font-semibold" style={{ color: '#1E2D35' }}>
+                            {m._count ?? '—'} item{(m._count ?? 0) !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+                        <div className="col-span-2">
+                          <span className={m.ativo ? 'badge-success' : 'badge-neutral'}>
+                            {m.ativo ? 'Ativo' : 'Inativo'}
+                          </span>
+                        </div>
+                      </button>
+
+                      {isOpen && (
+                        <div className="border-b" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8FAFC' }}>
+                          {!m.itens ? (
+                            <div className="py-4 flex items-center justify-center gap-2">
+                              <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin"
+                                style={{ borderColor: '#4A90A4', borderTopColor: 'transparent' }} />
+                            </div>
+                          ) : m.itens.length === 0 ? (
+                            <p className="text-xs text-center py-4" style={{ color: '#A8B8C2' }}>Nenhum item neste modelo</p>
+                          ) : (
+                            <div className="px-8 py-3 space-y-1.5">
+                              {m.itens.map((item, idx) => (
+                                <div key={item.id} className="flex items-center gap-3">
+                                  <span className="text-[10px] font-mono w-5 text-right shrink-0" style={{ color: '#A8B8C2' }}>{idx + 1}.</span>
+                                  <span className="text-xs" style={{ color: '#1E2D35' }}>{item.descricao_item}</span>
+                                  {item.exige_foto && <span className="badge-info text-[9px]">Foto obrigatória</span>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
 
-              {modelos.map((m) => {
-                const isOpen = expandedModelo === m.id
-                return (
-                  <div key={m.id}>
-                    <button
-                      onClick={() => toggleModeloExpand(m.id)}
-                      className="w-full grid grid-cols-12 gap-2 px-4 py-3 border-b text-left transition-all"
-                      style={{
-                        borderColor: '#E2E8EC',
-                        backgroundColor: isOpen ? '#F8FAFC' : '',
-                      }}
-                      onMouseEnter={(e) => {
-                        if (!isOpen) (e.currentTarget as HTMLElement).style.backgroundColor = '#F8FAFC'
-                      }}
-                      onMouseLeave={(e) => {
-                        if (!isOpen) (e.currentTarget as HTMLElement).style.backgroundColor = ''
-                      }}
-                    >
-                      <div className="col-span-4 flex items-center gap-1.5">
-                        {isOpen ? <ChevronDown size={12} style={{ color: '#4A90A4' }} /> : <ChevronRight size={12} style={{ color: '#C8D5DC' }} />}
-                        <span className="text-sm font-semibold" style={{ color: '#1E2D35' }}>{m.nome}</span>
-                      </div>
-                      <div className="col-span-2">
-                        <span className={m.tipo === 'viatura' ? 'badge-info' : 'badge-neutral'}>
-                          {m.tipo === 'viatura' ? 'Viatura' : 'Material'}
-                        </span>
-                      </div>
-                      <div className="col-span-2">
-                        <span className="text-xs" style={{ color: '#6B7E8A' }}>v{m.versao}</span>
-                      </div>
-                      <div className="col-span-2">
-                        <span className="text-xs font-semibold" style={{ color: '#1E2D35' }}>
-                          {m._count ?? '—'} item{(m._count ?? 0) !== 1 ? 's' : ''}
-                        </span>
-                      </div>
-                      <div className="col-span-2">
-                        <span className={m.ativo ? 'badge-success' : 'badge-neutral'}>
-                          {m.ativo ? 'Ativo' : 'Inativo'}
-                        </span>
-                      </div>
-                    </button>
+              {/* ── Mobile cards ── */}
+              <div className="md:hidden space-y-3 p-3">
+                {modelos.map((m) => {
+                  const isOpen = expandedModelo === m.id
+                  return (
+                    <div key={m.id} className="rounded-xl border overflow-hidden"
+                      style={{ borderColor: '#E2E8EC', backgroundColor: isOpen ? '#F8FAFC' : '#fff' }}>
+                      <button onClick={() => toggleModeloExpand(m.id)} className="w-full p-3 text-left">
+                        <div className="flex items-start justify-between gap-2 mb-1.5">
+                          <div className="flex items-center gap-1.5">
+                            {isOpen ? <ChevronDown size={13} style={{ color: '#4A90A4' }} /> : <ChevronRight size={13} style={{ color: '#C8D5DC' }} />}
+                            <span className="text-sm font-semibold" style={{ color: '#1E2D35' }}>{m.nome}</span>
+                          </div>
+                          <span className={m.ativo ? 'badge-success' : 'badge-neutral'}>{m.ativo ? 'Ativo' : 'Inativo'}</span>
+                        </div>
+                        <div className="flex items-center gap-2 ml-5">
+                          <span className={m.tipo === 'viatura' ? 'badge-info' : 'badge-neutral'}>
+                            {m.tipo === 'viatura' ? 'Viatura' : 'Material'}
+                          </span>
+                          <span className="text-xs" style={{ color: '#6B7E8A' }}>v{m.versao}</span>
+                          <span className="text-xs font-semibold" style={{ color: '#1E2D35' }}>
+                            {m._count ?? '—'} item{(m._count ?? 0) !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+                      </button>
 
-                    {/* Expanded items */}
-                    {isOpen && (
-                      <div className="border-b" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8FAFC' }}>
-                        {!m.itens ? (
-                          <div className="py-4 flex items-center justify-center gap-2">
-                            <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin"
-                              style={{ borderColor: '#4A90A4', borderTopColor: 'transparent' }} />
-                          </div>
-                        ) : m.itens.length === 0 ? (
-                          <p className="text-xs text-center py-4" style={{ color: '#A8B8C2' }}>
-                            Nenhum item neste modelo
-                          </p>
-                        ) : (
-                          <div className="px-8 py-3 space-y-1.5">
-                            {m.itens.map((item, idx) => (
-                              <div key={item.id} className="flex items-center gap-3">
-                                <span className="text-[10px] font-mono w-5 text-right shrink-0" style={{ color: '#A8B8C2' }}>
-                                  {idx + 1}.
-                                </span>
-                                <span className="text-xs" style={{ color: '#1E2D35' }}>
-                                  {item.descricao_item}
-                                </span>
-                                {item.exige_foto && (
-                                  <span className="badge-info text-[9px]">Foto obrigatória</span>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
+                      {isOpen && (
+                        <div className="border-t px-3 py-3" style={{ borderColor: '#E2E8EC' }}>
+                          {!m.itens ? (
+                            <div className="py-2 flex items-center justify-center gap-2">
+                              <div className="w-3 h-3 rounded-full border-2 border-t-transparent animate-spin"
+                                style={{ borderColor: '#4A90A4', borderTopColor: 'transparent' }} />
+                            </div>
+                          ) : m.itens.length === 0 ? (
+                            <p className="text-xs text-center py-2" style={{ color: '#A8B8C2' }}>Nenhum item</p>
+                          ) : (
+                            <div className="space-y-1.5">
+                              {m.itens.map((item, idx) => (
+                                <div key={item.id} className="flex items-center gap-2">
+                                  <span className="text-[10px] font-mono w-4 text-right shrink-0" style={{ color: '#A8B8C2' }}>{idx + 1}.</span>
+                                  <span className="text-xs" style={{ color: '#1E2D35' }}>{item.descricao_item}</span>
+                                  {item.exige_foto && <span className="badge-info text-[9px]">Foto</span>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
             </div>
           )}
         </div>
@@ -451,9 +542,9 @@ export default function ChecklistsPage() {
 
       {/* ── Dialog Novo Modelo ── */}
       {dialogModelo && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4"
           style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm"
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-sm"
             style={{ border: '1px solid #E2E8EC' }}>
             <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
               <h2 className="text-base font-bold" style={{ color: '#1E2D35' }}>Novo Modelo de Checklist</h2>

@@ -236,8 +236,8 @@ export default function UsuariosPage() {
     <div className="space-y-0">
 
       {/* ── Header ───────────────────────────────────────────────────────────── */}
-      <div className="px-6 pt-6 pb-4">
-        <div className="flex items-start justify-between">
+      <div className="px-4 md:px-6 pt-6 pb-4">
+        <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
           <div>
             <h1 className="text-2xl font-black tracking-tight uppercase" style={{ color: '#0E1A33', letterSpacing: '0.04em' }}>
               Governança de Acessos
@@ -255,17 +255,17 @@ export default function UsuariosPage() {
       </div>
 
       {/* ── Toolbar ──────────────────────────────────────────────────────────── */}
-      <div className="px-6 pb-4 flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2">
+      <div className="px-4 md:px-6 pb-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
           {/* Busca */}
-          <div className="relative">
+          <div className="relative flex-1 min-w-0 md:flex-none">
             <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: '#A8B8C2' }} />
             <input
               type="text"
               placeholder="Buscar operador..."
               value={busca}
               onChange={e => setBusca(e.target.value)}
-              className="input-light pl-8 pr-3 py-2 text-xs w-52"
+              className="input-light pl-8 pr-3 py-2 text-xs w-full md:w-52"
             />
           </div>
 
@@ -284,9 +284,9 @@ export default function UsuariosPage() {
             <ChevronDown size={11} className={`transition-transform ${mostrarFiltros ? 'rotate-180' : ''}`} />
           </button>
 
-          {/* Export / Print */}
+          {/* Export / Print — ocultos no mobile para economizar espaço */}
           <button
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all"
+            className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all"
             style={{ backgroundColor: '#F0F2F4', color: '#4A5568', border: '1px solid #DDE3E8' }}
             title="Exportar"
           >
@@ -294,7 +294,7 @@ export default function UsuariosPage() {
             Exportar
           </button>
           <button
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all"
+            className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all"
             style={{ backgroundColor: '#F0F2F4', color: '#4A5568', border: '1px solid #DDE3E8' }}
             title="Imprimir"
           >
@@ -307,7 +307,7 @@ export default function UsuariosPage() {
         {podeGerenciar && (
           <button
             onClick={abrirNovo}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold text-white transition-all"
+            className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-xs font-bold text-white transition-all w-full md:w-auto min-h-[44px] md:min-h-0"
             style={{ background: 'linear-gradient(135deg, #1A2F4A 0%, #2C4A6B 100%)' }}
           >
             <Plus size={13} />
@@ -318,11 +318,11 @@ export default function UsuariosPage() {
 
       {/* ── Filtros expandidos ────────────────────────────────────────────────── */}
       {mostrarFiltros && (
-        <div className="mx-6 mb-4 p-4 rounded-xl flex items-center gap-4"
+        <div className="mx-4 md:mx-6 mb-4 p-4 rounded-xl flex flex-col md:flex-row md:items-center gap-4"
           style={{ backgroundColor: '#F7F9FB', border: '1px solid #E2E8EC' }}>
-          <div>
+          <div className="flex-1 md:flex-none">
             <label className="block text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: '#7A8FA0' }}>Status</label>
-            <select value={filtroStatus} onChange={e => setFiltroStatus(e.target.value)} className="select-light text-xs py-1.5">
+            <select value={filtroStatus} onChange={e => setFiltroStatus(e.target.value)} className="select-light text-xs py-1.5 w-full md:w-auto min-h-[44px] md:min-h-0">
               <option value="todos">Todos</option>
               <option value="ativo">Ativo</option>
               <option value="inativo">Inativo</option>
@@ -330,22 +330,22 @@ export default function UsuariosPage() {
               <option value="pendente">Pendente</option>
             </select>
           </div>
-          <div>
+          <div className="flex-1 md:flex-none">
             <label className="block text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: '#7A8FA0' }}>Perfil</label>
-            <select value={filtroPerfil} onChange={e => setFiltroPerfil(e.target.value)} className="select-light text-xs py-1.5">
+            <select value={filtroPerfil} onChange={e => setFiltroPerfil(e.target.value)} className="select-light text-xs py-1.5 w-full md:w-auto min-h-[44px] md:min-h-0">
               <option value="todos">Todos</option>
               {perfis.map(p => <option key={p.id} value={p.codigo}>{p.nome_exibicao}</option>)}
             </select>
           </div>
           <button onClick={() => { setFiltroStatus('todos'); setFiltroPerfil('todos'); setBusca('') }}
-            className="text-xs mt-4 font-semibold" style={{ color: '#B83832' }}>
+            className="text-xs font-semibold md:mt-4" style={{ color: '#B83832' }}>
             Limpar filtros
           </button>
         </div>
       )}
 
-      {/* ── Tabela ───────────────────────────────────────────────────────────── */}
-      <div className="mx-6 rounded-xl overflow-hidden" style={{ border: '1px solid #E2E8EC' }}>
+      {/* ── Tabela Desktop ───────────────────────────────────────────────────── */}
+      <div className="hidden md:block mx-6 rounded-xl overflow-hidden" style={{ border: '1px solid #E2E8EC' }}>
         {/* Header da tabela */}
         <div className="grid text-[10px] font-black uppercase tracking-widest px-4 py-3"
           style={{
@@ -518,11 +518,138 @@ export default function UsuariosPage() {
         )}
       </div>
 
+      {/* ── Cards Mobile ─────────────────────────────────────────────────────── */}
+      <div className="md:hidden px-4 pb-4">
+        {loading ? (
+          <div className="py-16 flex items-center justify-center gap-3">
+            <div className="w-5 h-5 rounded-full border-2 border-t-transparent animate-spin"
+              style={{ borderColor: '#4A90A4', borderTopColor: 'transparent' }} />
+            <span className="text-sm" style={{ color: '#6B7E8A' }}>Carregando operadores...</span>
+          </div>
+        ) : filtrados.length === 0 ? (
+          <div className="py-16 text-center">
+            <Users size={32} className="mx-auto mb-3" style={{ color: '#C8D5DC' }} />
+            <p className="text-sm font-semibold" style={{ color: '#6B7E8A' }}>Nenhum operador encontrado</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {filtrados.map((u) => {
+              const isMe = u.id === user?.id
+              const pCfg = perfilCfg(u.perfil?.codigo)
+              const sCfg = statusCfg(u.status)
+              const primeiroAcesso = u.troca_senha_obrigatoria
+
+              return (
+                <div
+                  key={u.id}
+                  className="bg-white rounded-xl p-4 shadow-sm border border-gray-100"
+                  style={{ backgroundColor: isMe ? '#F0F7FF' : 'white' }}
+                >
+                  {/* Topo: avatar + nome + badges */}
+                  <div className="flex items-start gap-3 mb-3">
+                    <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 font-black text-xs text-white"
+                      style={{ background: `linear-gradient(135deg, ${pCfg.color}CC, ${pCfg.color}88)` }}>
+                      {getInitials(u.nome_completo)}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-bold truncate" style={{ color: '#0E1A33' }}>{u.nome_completo}</span>
+                        {isMe && (
+                          <span className="text-[9px] font-black px-1.5 py-0.5 rounded-full shrink-0"
+                            style={{ backgroundColor: '#EBF3FC', color: '#2166A8' }}>VOCÊ</span>
+                        )}
+                      </div>
+                      <code className="text-xs font-mono block truncate mt-0.5" style={{ color: '#53648A' }}>{u.email}</code>
+                      {primeiroAcesso ? (
+                        <span className="text-[9px] font-black tracking-wider" style={{ color: '#D97706' }}>AGUARD. 1º ACESSO</span>
+                      ) : u.ultimo_acesso ? (
+                        <span className="text-[10px]" style={{ color: '#A8B8C2' }}>
+                          Último acesso {new Date(u.ultimo_acesso).toLocaleDateString('pt-BR')}
+                        </span>
+                      ) : (
+                        <span className="text-[10px]" style={{ color: '#A8B8C2' }}>Nunca acessou</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Badges: perfil + status + auth */}
+                  <div className="flex items-center gap-2 flex-wrap mb-3">
+                    <span className="text-[10px] font-black px-2 py-1 rounded-md tracking-wider"
+                      style={{ backgroundColor: pCfg.bg, color: pCfg.color }}>
+                      {pCfg.label}
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: sCfg.dot }} />
+                      <span className="text-[10px] font-black tracking-wider" style={{ color: sCfg.color }}>
+                        {sCfg.label}
+                      </span>
+                    </div>
+                    {u.auth_user_id ? (
+                      <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded"
+                        style={{ backgroundColor: '#EBF5F1', color: '#1E7C52' }}>AUTH ATIVO</span>
+                    ) : (
+                      <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded"
+                        style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>SEM AUTH</span>
+                    )}
+                  </div>
+
+                  {/* Ações */}
+                  {podeGerenciar && (
+                    <div className="flex gap-2 pt-3 border-t border-gray-100">
+                      <button
+                        onClick={() => { setResetando(u); setNovaSenhaReset(gerarSenhaTemporaria()) }}
+                        className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs font-semibold"
+                        style={{ backgroundColor: '#F4EDFC', color: '#7B3FA0' }}
+                        title="Redefinir senha"
+                      >
+                        <Key size={13} />
+                        Senha
+                      </button>
+                      <button
+                        onClick={() => toggleStatus(u)}
+                        className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs font-semibold"
+                        style={{
+                          backgroundColor: u.status === 'ativo' ? '#FEF0EE' : '#EBF5F1',
+                          color: u.status === 'ativo' ? '#B83832' : '#1E7C52'
+                        }}
+                        title={u.status === 'ativo' ? 'Bloquear' : 'Ativar'}
+                      >
+                        {u.status === 'ativo' ? <UserX size={13} /> : <UserCheck size={13} />}
+                        {u.status === 'ativo' ? 'Bloquear' : 'Ativar'}
+                      </button>
+                      <button
+                        onClick={() => abrirEditar(u)}
+                        className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs font-semibold"
+                        style={{ backgroundColor: '#EBF3FC', color: '#2166A8' }}
+                        title="Editar"
+                      >
+                        <Pencil size={13} />
+                        Editar
+                      </button>
+                      {!isMe && (
+                        <button
+                          onClick={() => setExcluindo(u)}
+                          className="flex items-center justify-center p-2.5 rounded-lg"
+                          style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}
+                          title="Excluir"
+                        >
+                          <X size={14} />
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
       {/* ── Modal: Credenciais criadas ─────────────────────────────────────── */}
       {usuarioCriado && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+        <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center md:p-4"
           style={{ backgroundColor: 'rgba(0,0,0,0.55)' }}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md" style={{ border: '1px solid #E2E8EC' }}>
+          <div className="bg-white rounded-t-2xl md:rounded-2xl shadow-2xl w-full mx-4 md:mx-auto md:max-w-md" style={{ border: '1px solid #E2E8EC' }}>
             <div className="px-6 pt-6 pb-4 text-center">
               <div className="w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3"
                 style={{ backgroundColor: '#E8F5EE' }}>
@@ -545,13 +672,13 @@ export default function UsuariosPage() {
             </div>
             <div className="flex gap-3 px-6 pb-6">
               <button onClick={copiarCredenciais}
-                className="flex-1 flex items-center justify-center gap-2 font-bold text-sm py-2.5 rounded-lg transition-all"
+                className="flex-1 flex items-center justify-center gap-2 font-bold text-sm py-3 rounded-lg transition-all"
                 style={{ backgroundColor: '#F0F4FA', color: '#1A2F4A', border: '1px solid #D0DAEB' }}>
                 {copiado ? <CheckCircle2 size={14} style={{ color: '#1E7C52' }} /> : <Copy size={14} />}
                 {copiado ? 'Copiado!' : 'Copiar credenciais'}
               </button>
               <button onClick={() => setUsuarioCriado(null)}
-                className="flex-1 font-bold text-sm py-2.5 rounded-lg text-white"
+                className="flex-1 font-bold text-sm py-3 rounded-lg text-white"
                 style={{ backgroundColor: '#1A2F4A' }}>
                 Fechar
               </button>
@@ -562,9 +689,9 @@ export default function UsuariosPage() {
 
       {/* ── Modal: Redefinir senha ─────────────────────────────────────────── */}
       {resetando && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+        <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center md:p-4"
           style={{ backgroundColor: 'rgba(0,0,0,0.55)' }}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm" style={{ border: '1px solid #E2E8EC' }}>
+          <div className="bg-white rounded-t-2xl md:rounded-2xl shadow-2xl w-full mx-4 md:mx-auto md:max-w-sm" style={{ border: '1px solid #E2E8EC' }}>
             <div className="px-5 py-4 border-b flex items-center justify-between" style={{ borderColor: '#E2E8EC' }}>
               <div className="flex items-center gap-2">
                 <Key size={15} style={{ color: '#7B3FA0' }} />
@@ -583,7 +710,7 @@ export default function UsuariosPage() {
                   type="text"
                   value={novaSenhaReset}
                   onChange={e => setNovaSenhaReset(e.target.value)}
-                  className="input-light flex-1 font-mono text-sm"
+                  className="input-light flex-1 font-mono text-sm min-h-[48px] md:min-h-0"
                   placeholder="Nova senha"
                 />
                 <button onClick={() => setNovaSenhaReset(gerarSenhaTemporaria())}
@@ -597,9 +724,9 @@ export default function UsuariosPage() {
               </p>
             </div>
             <div className="flex gap-3 px-5 pb-5">
-              <button onClick={() => setResetando(null)} className="btn-outline flex-1 text-xs">Cancelar</button>
+              <button onClick={() => setResetando(null)} className="btn-outline flex-1 text-xs min-h-[44px]">Cancelar</button>
               <button onClick={confirmarReset} disabled={savingReset || !novaSenhaReset}
-                className="btn-primary flex-1 text-xs">
+                className="btn-primary flex-1 text-xs min-h-[44px]">
                 {savingReset ? 'Salvando...' : 'Redefinir Senha'}
               </button>
             </div>
@@ -609,9 +736,9 @@ export default function UsuariosPage() {
 
       {/* ── Modal: Confirmar exclusão ──────────────────────────────────────── */}
       {excluindo && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+        <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center md:p-4"
           style={{ backgroundColor: 'rgba(0,0,0,0.55)' }}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm" style={{ border: '1px solid #E2E8EC' }}>
+          <div className="bg-white rounded-t-2xl md:rounded-2xl shadow-2xl w-full mx-4 md:mx-auto md:max-w-sm" style={{ border: '1px solid #E2E8EC' }}>
             <div className="px-5 py-5 text-center">
               <div className="w-11 h-11 rounded-full flex items-center justify-center mx-auto mb-3"
                 style={{ backgroundColor: '#FEF0EE' }}>
@@ -623,9 +750,9 @@ export default function UsuariosPage() {
               </p>
             </div>
             <div className="flex gap-3 px-5 pb-5">
-              <button onClick={() => setExcluindo(null)} className="btn-outline flex-1 text-xs">Cancelar</button>
+              <button onClick={() => setExcluindo(null)} className="btn-outline flex-1 text-xs min-h-[44px]">Cancelar</button>
               <button onClick={confirmarExcluir} disabled={savingExcluir}
-                className="flex-1 text-xs font-bold py-2 rounded-lg text-white transition-all"
+                className="flex-1 text-xs font-bold py-2 rounded-lg text-white transition-all min-h-[44px]"
                 style={{ backgroundColor: '#B83832' }}>
                 {savingExcluir ? 'Excluindo...' : 'Sim, excluir'}
               </button>
@@ -636,9 +763,9 @@ export default function UsuariosPage() {
 
       {/* ── Dialog: Criar / Editar ─────────────────────────────────────────── */}
       {dialogOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+        <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center md:p-4"
           style={{ backgroundColor: 'rgba(0,0,0,0.55)' }}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg" style={{ border: '1px solid #E2E8EC' }}>
+          <div className="bg-white rounded-t-2xl md:rounded-2xl shadow-2xl w-full mx-4 md:mx-auto md:max-w-lg" style={{ border: '1px solid #E2E8EC' }}>
             <div className="flex items-center justify-between px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
               <h2 className="text-sm font-black uppercase tracking-wide" style={{ color: '#0E1A33' }}>
                 {editando ? 'Editar Operador' : 'Provisionar Acesso'}
@@ -651,7 +778,7 @@ export default function UsuariosPage() {
               </button>
             </div>
 
-            <div className="px-6 py-5 space-y-4">
+            <div className="px-6 py-5 space-y-4 max-h-[65vh] overflow-y-auto">
               {/* Senha temp */}
               {!editando && (
                 <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #C8DCF0' }}>
@@ -682,7 +809,7 @@ export default function UsuariosPage() {
                 <input type="text" placeholder="Nome completo do operador"
                   value={form.nome_completo}
                   onChange={e => setForm({ ...form, nome_completo: e.target.value })}
-                  className="input-light" />
+                  className="input-light min-h-[48px] md:min-h-0" />
               </div>
 
               {/* Email */}
@@ -693,35 +820,35 @@ export default function UsuariosPage() {
                 <input type="email" placeholder="email@empresa.com"
                   value={form.email}
                   onChange={e => setForm({ ...form, email: e.target.value })}
-                  className="input-light"
+                  className="input-light min-h-[48px] md:min-h-0"
                   readOnly={!!editando}
                   style={editando ? { backgroundColor: '#F4F4F9', cursor: 'not-allowed' } : {}} />
               </div>
 
               {/* CPF + Telefone */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[10px] font-black uppercase tracking-widest mb-1.5" style={{ color: '#7A8FA0' }}>CPF</label>
                   <input type="text" placeholder="000.000.000-00"
                     value={form.cpf}
                     onChange={e => setForm({ ...form, cpf: e.target.value })}
-                    className="input-light" />
+                    className="input-light min-h-[48px] md:min-h-0" />
                 </div>
                 <div>
                   <label className="block text-[10px] font-black uppercase tracking-widest mb-1.5" style={{ color: '#7A8FA0' }}>Telefone</label>
                   <input type="text" placeholder="(00) 00000-0000"
                     value={form.telefone}
                     onChange={e => setForm({ ...form, telefone: e.target.value })}
-                    className="input-light" />
+                    className="input-light min-h-[48px] md:min-h-0" />
                 </div>
               </div>
 
               {/* Perfil + Status */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[10px] font-black uppercase tracking-widest mb-1.5" style={{ color: '#7A8FA0' }}>Perfil *</label>
                   <select value={form.perfil_id} onChange={e => setForm({ ...form, perfil_id: e.target.value })}
-                    className="select-light w-full">
+                    className="select-light w-full min-h-[48px] md:min-h-0">
                     <option value="">Selecione...</option>
                     {perfis.map(p => <option key={p.id} value={p.id}>{p.nome_exibicao}</option>)}
                   </select>
@@ -729,7 +856,7 @@ export default function UsuariosPage() {
                 <div>
                   <label className="block text-[10px] font-black uppercase tracking-widest mb-1.5" style={{ color: '#7A8FA0' }}>Status</label>
                   <select value={form.status} onChange={e => setForm({ ...form, status: e.target.value })}
-                    className="select-light w-full">
+                    className="select-light w-full min-h-[48px] md:min-h-0">
                     <option value="ativo">Ativo</option>
                     <option value="inativo">Inativo</option>
                     <option value="pendente">Pendente</option>
@@ -744,10 +871,10 @@ export default function UsuariosPage() {
               )}
             </div>
 
-            <div className="flex gap-3 px-6 py-4 border-t" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8FAFC' }}>
-              <button onClick={fechar} className="btn-outline flex-1 text-xs">Cancelar</button>
+            <div className="flex flex-col-reverse md:flex-row gap-3 px-6 py-4 border-t" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8FAFC' }}>
+              <button onClick={fechar} className="btn-outline w-full md:flex-1 text-xs min-h-[44px]">Cancelar</button>
               <button onClick={salvar} disabled={saving}
-                className="flex-1 text-xs font-black py-2.5 rounded-lg text-white uppercase tracking-wider transition-all"
+                className="w-full md:flex-1 text-xs font-black py-2.5 rounded-lg text-white uppercase tracking-wider transition-all min-h-[44px]"
                 style={{ background: 'linear-gradient(135deg, #1A2F4A, #2C4A6B)' }}>
                 {saving ? 'Salvando...' : editando ? 'Salvar Alterações' : 'Provisionar'}
               </button>

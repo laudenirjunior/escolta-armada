@@ -378,10 +378,10 @@ export default function NotificacoesPage() {
 
   return (
     <>
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+    <div className="flex flex-col gap-4 md:gap-5">
 
       {/* ── Header ── */}
-      <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
         <div>
           <div className="eyebrow-tag mb-2">
             <Radio size={10} />Central de Comunicações · Tempo Real
@@ -391,7 +391,7 @@ export default function NotificacoesPage() {
         </div>
 
         {/* Tabs */}
-        <div style={{ display: 'flex', gap: '2px', backgroundColor: '#E2E6F0', padding: '3px', borderRadius: '3px' }}>
+        <div className="flex gap-0.5 self-start sm:self-auto shrink-0" style={{ backgroundColor: '#E2E6F0', padding: '3px', borderRadius: '3px' }}>
           {([
             { key: 'notificacoes', label: 'Notificações', icon: <Bell size={12} /> },
             { key: 'chat', label: 'Chat Interno', icon: <MessageSquare size={12} /> },
@@ -401,15 +401,15 @@ export default function NotificacoesPage() {
               onClick={() => setTab(t.key)}
               style={{
                 display: 'flex', alignItems: 'center', gap: '6px',
-                padding: '7px 14px', borderRadius: '2px', fontSize: '11px', fontWeight: 900,
+                padding: '8px 12px', borderRadius: '2px', fontSize: '11px', fontWeight: 900,
                 textTransform: 'uppercase', letterSpacing: '0.11em', border: 'none', cursor: 'pointer',
-                transition: 'all 180ms',
+                transition: 'all 180ms', minHeight: '40px',
                 backgroundColor: tab === t.key ? P.navy : 'transparent',
                 color: tab === t.key ? '#fff' : P.sub,
                 boxShadow: tab === t.key ? '0 1px 4px rgba(26,41,74,0.3)' : 'none',
               }}
             >
-              {t.icon}{t.label}
+              {t.icon}<span className="hidden xs:inline sm:hidden md:inline">{t.label}</span>
               {t.key === 'notificacoes' && counts.total > 0 && (
                 <span style={{ backgroundColor: tab === 'notificacoes' ? 'rgba(255,255,255,0.2)' : '#B83832', color: '#fff', borderRadius: '10px', fontSize: '9px', fontWeight: 900, padding: '1px 6px', minWidth: '18px', textAlign: 'center' }}>
                   {counts.total}
@@ -422,33 +422,33 @@ export default function NotificacoesPage() {
 
       {/* ══════════ NOTIFICAÇÕES ══════════ */}
       {tab === 'notificacoes' && (
-        <div style={{ display: 'grid', gridTemplateColumns: selecionada ? '1fr 340px' : '1fr 200px', gap: '14px', alignItems: 'start' }}>
+        <div className={`grid gap-3 md:gap-4 items-start ${selecionada ? 'grid-cols-1 lg:grid-cols-[1fr_340px]' : 'grid-cols-1 lg:grid-cols-[1fr_200px]'}`}>
 
           {/* ── Feed principal ── */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div className="flex flex-col gap-3">
 
             {/* Barra de busca */}
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <div className="flex gap-2 items-center">
               <div style={{ position: 'relative', flex: 1 }}>
                 <Search size={13} style={{ position: 'absolute', left: '11px', top: '50%', transform: 'translateY(-50%)', color: P.light, pointerEvents: 'none' }} />
                 <input
                   value={buscaNot}
                   onChange={e => setBuscaNot(e.target.value)}
-                  placeholder="Buscar por escolta, cliente, efetivo ou descrição..."
-                  style={{ width: '100%', paddingLeft: '34px', paddingRight: '12px', height: '38px', backgroundColor: P.surface, border: `1px solid ${P.border}`, borderRadius: '2px', fontSize: '12px', color: P.text, outline: 'none', boxSizing: 'border-box' }}
+                  placeholder="Buscar por escolta, cliente, efetivo..."
+                  style={{ width: '100%', paddingLeft: '34px', paddingRight: '12px', height: '44px', backgroundColor: P.surface, border: `1px solid ${P.border}`, borderRadius: '2px', fontSize: '13px', color: P.text, outline: 'none', boxSizing: 'border-box' }}
                 />
               </div>
               <button
                 onClick={carregarNotificacoes}
-                style={{ width: '38px', height: '38px', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: P.surface, border: `1px solid ${P.border}`, borderRadius: '2px', cursor: 'pointer', color: P.steel, flexShrink: 0 }}
+                style={{ width: '44px', height: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: P.surface, border: `1px solid ${P.border}`, borderRadius: '2px', cursor: 'pointer', color: P.steel, flexShrink: 0 }}
                 title="Atualizar"
               >
                 <RefreshCw size={14} />
               </button>
             </div>
 
-            {/* Filtros de tipo */}
-            <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+            {/* Filtros de tipo — scroll horizontal no mobile */}
+            <div className="flex gap-1.5 overflow-x-auto pb-1" style={{ scrollbarWidth: 'none' }}>
               {[
                 { key: 'todos',          label: 'Todos',       count: counts.total },
                 { key: 'ponto_controle', label: 'Check-ins',   count: counts.ponto_controle },
@@ -460,8 +460,8 @@ export default function NotificacoesPage() {
                   key={f.key}
                   onClick={() => setFiltroTipo(f.key)}
                   style={{
-                    display: 'flex', alignItems: 'center', gap: '5px',
-                    padding: '0 12px', height: '32px', borderRadius: '2px',
+                    display: 'flex', alignItems: 'center', gap: '5px', flexShrink: 0,
+                    padding: '0 12px', height: '36px', borderRadius: '2px',
                     fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.1em',
                     border: 'none', cursor: 'pointer', transition: 'all 150ms',
                     backgroundColor: filtroTipo === f.key ? P.navy : P.surface,
@@ -519,12 +519,13 @@ export default function NotificacoesPage() {
                         border: `1px solid ${isSelected ? '#C0CAE8' : P.border}`,
                         borderLeft: `4px solid ${c.color}`,
                         borderRadius: '2px',
-                        padding: '14px 16px',
+                        padding: '14px 14px',
                         cursor: 'pointer',
                         transition: 'all 150ms',
                         display: 'flex',
                         alignItems: 'stretch',
-                        gap: '14px',
+                        gap: '12px',
+                        minHeight: '72px',
                         boxShadow: isSelected ? '0 2px 10px rgba(83,100,138,0.14)' : 'none',
                       }}
                       onMouseEnter={e => {
@@ -687,8 +688,8 @@ export default function NotificacoesPage() {
             )}
           </div>
 
-          {/* ── Painel lateral ── */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', position: 'sticky', top: '16px' }}>
+          {/* ── Painel lateral (hidden on mobile unless selected) ── */}
+          <div className={`flex-col gap-2.5 lg:flex ${selecionada ? 'flex' : 'hidden lg:flex'}`} style={{ position: 'sticky', top: '16px' }}>
 
             {selecionada ? (
               /* Detalhe do evento selecionado */
@@ -754,7 +755,8 @@ export default function NotificacoesPage() {
                     <button
                       onClick={() => router.push(`/dashboard/escoltas/${selecionada.escolta_id}`)}
                       style={{
-                        width: '100%', marginTop: '14px', padding: '10px 14px',
+                        width: '100%', marginTop: '14px', padding: '12px 14px',
+                        minHeight: '48px',
                         backgroundColor: P.navy, color: '#fff', border: 'none', borderRadius: '2px',
                         fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.12em',
                         cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
@@ -807,9 +809,13 @@ export default function NotificacoesPage() {
 
       {/* ══════════ CHAT ══════════ */}
       {tab === 'chat' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: '12px', height: 'calc(100vh - 260px)', minHeight: '400px' }}>
+        <div className="grid grid-cols-1 md:grid-cols-[240px_1fr] gap-3" style={{ height: 'calc(100vh - 260px)', minHeight: '480px' }}>
 
-          <div style={{ backgroundColor: P.surface, border: `1px solid ${P.border}`, borderRadius: '2px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          {/* Lista de usuários — visível quando nenhum chat selecionado no mobile */}
+          <div
+            className={`flex flex-col overflow-hidden ${chatSelecionado ? 'hidden md:flex' : 'flex'}`}
+            style={{ backgroundColor: P.surface, border: `1px solid ${P.border}`, borderRadius: '2px' }}
+          >
             <div className="cc-panel-header">
               <Users size={11} />Conversas
             </div>
@@ -820,7 +826,7 @@ export default function NotificacoesPage() {
                   value={buscaUser}
                   onChange={e => setBuscaUser(e.target.value)}
                   placeholder="Buscar..."
-                  style={{ width: '100%', paddingLeft: '28px', height: '30px', backgroundColor: P.bg, border: `1px solid ${P.border}`, borderRadius: '2px', fontSize: '11px', color: P.text, outline: 'none', boxSizing: 'border-box' }}
+                  style={{ width: '100%', paddingLeft: '28px', height: '36px', backgroundColor: P.bg, border: `1px solid ${P.border}`, borderRadius: '2px', fontSize: '12px', color: P.text, outline: 'none', boxSizing: 'border-box' }}
                 />
               </div>
             </div>
@@ -832,7 +838,8 @@ export default function NotificacoesPage() {
                   key={u.id}
                   onClick={() => setChatSelecionado(u)}
                   style={{
-                    width: '100%', textAlign: 'left', padding: '9px 12px',
+                    width: '100%', textAlign: 'left', padding: '11px 12px',
+                    minHeight: '56px',
                     display: 'flex', alignItems: 'center', gap: '9px',
                     backgroundColor: chatSelecionado?.id === u.id ? '#EBF0F8' : 'transparent',
                     borderLeft: `3px solid ${chatSelecionado?.id === u.id ? P.steel : 'transparent'}`,
@@ -840,11 +847,11 @@ export default function NotificacoesPage() {
                     transition: 'all 150ms',
                   }}
                 >
-                  <div style={{ width: '30px', height: '30px', borderRadius: '2px', flexShrink: 0, background: `linear-gradient(135deg, ${P.steel}, ${P.navy})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '10px', fontWeight: 900 }}>
+                  <div style={{ width: '34px', height: '34px', borderRadius: '2px', flexShrink: 0, background: `linear-gradient(135deg, ${P.steel}, ${P.navy})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '11px', fontWeight: 900 }}>
                     {u.nome_completo.split(' ').slice(0, 2).map(n => n[0]).join('')}
                   </div>
                   <div style={{ minWidth: 0 }}>
-                    <p style={{ fontSize: '12px', fontWeight: 700, color: P.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.nome_completo.split(' ').slice(0, 2).join(' ')}</p>
+                    <p style={{ fontSize: '13px', fontWeight: 700, color: P.text, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.nome_completo.split(' ').slice(0, 2).join(' ')}</p>
                     <p style={{ fontSize: '9px', color: P.muted, textTransform: 'uppercase', letterSpacing: '0.1em' }}>{u.perfil?.nome_exibicao ?? 'Usuário'}</p>
                   </div>
                 </button>
@@ -852,7 +859,11 @@ export default function NotificacoesPage() {
             </div>
           </div>
 
-          <div style={{ backgroundColor: P.surface, border: `1px solid ${P.border}`, borderRadius: '2px', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+          {/* Área de conversa — visível quando chat selecionado no mobile, sempre no md+ */}
+          <div
+            className={`flex flex-col overflow-hidden ${chatSelecionado ? 'flex' : 'hidden md:flex'}`}
+            style={{ backgroundColor: P.surface, border: `1px solid ${P.border}`, borderRadius: '2px' }}
+          >
             {!chatSelecionado ? (
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '10px' }}>
                 <MessageSquare size={36} style={{ color: P.light }} />
@@ -863,6 +874,14 @@ export default function NotificacoesPage() {
               <>
                 <div style={{ padding: '11px 16px', borderBottom: `1px solid ${P.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#F8F9FC' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    {/* Botão voltar — apenas mobile */}
+                    <button
+                      className="md:hidden flex items-center justify-center"
+                      onClick={() => setChatSelecionado(null)}
+                      style={{ width: '32px', height: '32px', background: 'none', border: 'none', cursor: 'pointer', color: P.muted, marginRight: '2px' }}
+                    >
+                      <X size={16} />
+                    </button>
                     <div style={{ width: '32px', height: '32px', borderRadius: '2px', background: `linear-gradient(135deg, ${P.steel}, ${P.navy})`, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: '11px', fontWeight: 900 }}>
                       {chatSelecionado.nome_completo.split(' ').slice(0, 2).map(n => n[0]).join('')}
                     </div>
@@ -871,7 +890,7 @@ export default function NotificacoesPage() {
                       <p style={{ fontSize: '9px', color: P.muted, textTransform: 'uppercase', letterSpacing: '0.12em' }}>{chatSelecionado.perfil?.nome_exibicao ?? chatSelecionado.email}</p>
                     </div>
                   </div>
-                  <button onClick={() => setChatSelecionado(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: P.muted }}>
+                  <button onClick={() => setChatSelecionado(null)} className="hidden md:block" style={{ background: 'none', border: 'none', cursor: 'pointer', color: P.muted }}>
                     <X size={14} />
                   </button>
                 </div>
@@ -885,13 +904,13 @@ export default function NotificacoesPage() {
                     const minha = m.de_usuario_id === user?.id
                     return (
                       <div key={m.id} style={{ display: 'flex', justifyContent: minha ? 'flex-end' : 'flex-start' }}>
-                        <div style={{ maxWidth: '72%', backgroundColor: minha ? P.navy : '#F0F3F9', borderRadius: '2px', padding: '8px 12px', border: minha ? 'none' : `1px solid ${P.border}` }}>
+                        <div style={{ maxWidth: '80%', backgroundColor: minha ? P.navy : '#F0F3F9', borderRadius: '2px', padding: '8px 12px', border: minha ? 'none' : `1px solid ${P.border}` }}>
                           {!minha && (
                             <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.12em', color: P.steel, marginBottom: '3px' }}>
                               {m.de_usuario?.nome_completo?.split(' ')[0]}
                             </p>
                           )}
-                          <p style={{ fontSize: '13px', color: minha ? '#fff' : P.text, lineHeight: 1.45, wordBreak: 'break-word' }}>{m.mensagem}</p>
+                          <p style={{ fontSize: '14px', color: minha ? '#fff' : P.text, lineHeight: 1.45, wordBreak: 'break-word' }}>{m.mensagem}</p>
                           <p style={{ fontSize: '9px', color: minha ? 'rgba(255,255,255,0.4)' : P.muted, marginTop: '4px', textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                             {new Date(m.criado_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                             {minha && ` · ${m.lida ? 'Lida' : 'Enviada'}`}
@@ -909,14 +928,14 @@ export default function NotificacoesPage() {
                     onChange={e => setNovaMensagem(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviarMensagem() } }}
                     placeholder={`Mensagem para ${chatSelecionado.nome_completo.split(' ')[0]}...`}
-                    style={{ flex: 1, height: '38px', padding: '0 12px', backgroundColor: P.surface, border: `1px solid ${P.border}`, borderRadius: '2px', fontSize: '13px', color: P.text, outline: 'none' }}
+                    style={{ flex: 1, height: '44px', padding: '0 12px', backgroundColor: P.surface, border: `1px solid ${P.border}`, borderRadius: '2px', fontSize: '14px', color: P.text, outline: 'none' }}
                   />
                   <button
                     onClick={enviarMensagem}
                     disabled={!novaMensagem.trim() || enviando}
-                    style={{ width: '38px', height: '38px', borderRadius: '2px', border: 'none', cursor: !novaMensagem.trim() ? 'not-allowed' : 'pointer', backgroundColor: novaMensagem.trim() ? P.navy : P.light, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 150ms', flexShrink: 0 }}
+                    style={{ width: '44px', height: '44px', borderRadius: '2px', border: 'none', cursor: !novaMensagem.trim() ? 'not-allowed' : 'pointer', backgroundColor: novaMensagem.trim() ? P.navy : P.light, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 150ms', flexShrink: 0 }}
                   >
-                    <Send size={14} />
+                    <Send size={16} />
                   </button>
                 </div>
               </>

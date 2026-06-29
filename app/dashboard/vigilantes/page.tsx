@@ -1,4 +1,4 @@
-﻿'use client'
+'use client'
 
 import { useEffect, useState, useCallback } from 'react'
 import { Plus, Search, Edit2 } from 'lucide-react'
@@ -154,6 +154,7 @@ export default function VigilantesPage() {
 
   return (
     <div className="space-y-5">
+      {/* ── Header ── */}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-white">Vigilantes</h2>
@@ -164,19 +165,21 @@ export default function VigilantesPage() {
         {podeEditar && (
           <Button onClick={abrirNovo} className="gap-2">
             <Plus size={16} />
-            Novo Vigilante
+            <span className="hidden sm:inline">Novo Vigilante</span>
+            <span className="sm:hidden">Novo</span>
           </Button>
         )}
       </div>
 
-      <div className="flex gap-3 flex-wrap">
-        <div className="relative flex-1 min-w-48">
+      {/* ── Filtros ── */}
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="relative flex-1">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
           <Input
             placeholder="Buscar por nome ou CPF..."
             value={busca}
             onChange={(e) => setBusca(e.target.value)}
-            className="pl-9"
+            className="pl-9 w-full"
           />
         </div>
         <div className="flex gap-1">
@@ -184,7 +187,7 @@ export default function VigilantesPage() {
             <button
               key={s}
               onClick={() => setFiltroStatus(s)}
-              className={`px-3 py-1.5 rounded-sm text-xs font-medium transition-colors ${
+              className={`flex-1 sm:flex-none px-3 py-1.5 rounded-sm text-xs font-medium transition-colors ${
                 filtroStatus === s
                   ? 'bg-sky-500 text-white'
                   : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/70'
@@ -196,6 +199,7 @@ export default function VigilantesPage() {
         </div>
       </div>
 
+      {/* ── Lista ── */}
       {loading ? (
         <p className="text-sm text-text-secondary">Carregando...</p>
       ) : filtrados.length === 0 ? (
@@ -212,6 +216,7 @@ export default function VigilantesPage() {
               className="flex items-center gap-4 p-4 bg-white/2 border border-white/5 hover:border-white/10 rounded-sm transition-colors"
             >
               <div className="flex-1 min-w-0">
+                {/* Linha 1: nome + badge + função */}
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-sm font-semibold text-white">{v.nome_completo}</span>
                   <Badge variant={v.status === 'ativo' ? 'success' : 'default'} className="text-[10px] h-4">
@@ -219,7 +224,8 @@ export default function VigilantesPage() {
                   </Badge>
                   <span className="text-xs text-text-secondary">{v.funcao?.nome}</span>
                 </div>
-                <div className="flex items-center gap-3 mt-0.5">
+                {/* Linha 2: CPF + CNV + extensão — empilha no mobile */}
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5">
                   <span className="text-xs text-white/40 font-mono">{formatarCPF(v.cpf)}</span>
                   {v.cnv && <span className="text-xs text-text-secondary">CNV: {v.cnv}</span>}
                   {v.extensao_escolta_armada && (
@@ -227,6 +233,7 @@ export default function VigilantesPage() {
                   )}
                 </div>
               </div>
+              {/* Valor diária */}
               {verFinanceiro && v.valor_padrao_pago != null && (
                 <div style={{ textAlign: 'right', flexShrink: 0, marginRight: '8px' }}>
                   <p style={{ fontSize: '11px', fontWeight: 900, color: '#4ade80', fontVariantNumeric: 'tabular-nums' }}>
@@ -235,8 +242,14 @@ export default function VigilantesPage() {
                   <p style={{ fontSize: '9px', color: 'rgba(255,255,255,0.3)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Diária</p>
                 </div>
               )}
+              {/* Botão editar touch-friendly */}
               {podeEditar && (
-                <Button variant="ghost" size="icon-sm" onClick={() => abrirEdicao(v)}>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => abrirEdicao(v)}
+                  className="min-h-[44px] min-w-[44px]"
+                >
                   <Edit2 size={14} />
                 </Button>
               )}
@@ -245,6 +258,7 @@ export default function VigilantesPage() {
         </div>
       )}
 
+      {/* ── Dialog ── */}
       <Dialog
         isOpen={dialogAberto}
         onClose={() => setDialogAberto(false)}
@@ -272,7 +286,7 @@ export default function VigilantesPage() {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label className="text-xs text-text-secondary mb-1 block">CPF *</Label>
               <Input
@@ -296,7 +310,7 @@ export default function VigilantesPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label className="text-xs text-text-secondary mb-1 block">CNV</Label>
               <Input
@@ -315,7 +329,7 @@ export default function VigilantesPage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label className="text-xs text-text-secondary mb-1 block">Valor padrão pago (R$)</Label>
               <Input

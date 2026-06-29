@@ -290,14 +290,14 @@ export default function IndicadoresPage() {
     <div className="space-y-6">
 
       {/* ── Header ── */}
-      <div className="flex items-start justify-between flex-wrap gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:flex-wrap">
         <div>
           <div className="eyebrow-tag mb-2">
             <BarChart2 size={10} />
             Centro de Análise Operacional
           </div>
           <h1 className="page-title">Indicadores</h1>
-          <p className="page-subtitle flex items-center gap-1.5">
+          <p className="page-subtitle flex items-center gap-1.5 flex-wrap">
             <Calendar size={13} />
             {mesLabel.charAt(0).toUpperCase() + mesLabel.slice(1)}
             {nomeCliente && <span> · <strong style={{ color: P.navy }}>{nomeCliente}</strong></span>}
@@ -309,7 +309,7 @@ export default function IndicadoresPage() {
         <button
           onClick={() => exportarCSV(escoltas, labelPeriodo)}
           disabled={escoltas.length === 0}
-          className="flex items-center gap-2 px-4 py-2 transition-all text-xs font-bold uppercase tracking-wider disabled:opacity-40"
+          className="flex items-center justify-center gap-2 px-4 py-2 transition-all text-xs font-bold uppercase tracking-wider disabled:opacity-40 w-full sm:w-auto"
           style={{ border: `1.5px solid ${P.border}`, borderRadius: '2px', color: P.steel, backgroundColor: '#fff' }}
           onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = P.navy; (e.currentTarget as HTMLElement).style.color = P.navy }}
           onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = P.border; (e.currentTarget as HTMLElement).style.color = P.steel }}
@@ -346,30 +346,30 @@ export default function IndicadoresPage() {
 
         {/* Datas personalizadas */}
         {tipoPeriodo === 'personalizado' && (
-          <div className="flex items-center gap-3 flex-wrap pt-1">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3 pt-1">
             <div className="flex items-center gap-2">
-              <label className="text-[10px] font-black uppercase tracking-widest" style={{ color: P.textSub }}>De</label>
+              <label className="text-[10px] font-black uppercase tracking-widest shrink-0" style={{ color: P.textSub }}>De</label>
               <input type="date" value={dataInicio} onChange={e => setDataInicio(e.target.value)}
-                className="px-2 py-1.5 text-xs"
+                className="px-2 py-1.5 text-xs w-full sm:w-auto"
                 style={{ border: `1.5px solid ${P.border}`, borderRadius: '2px', color: P.text, outline: 'none' }} />
             </div>
             <div className="flex items-center gap-2">
-              <label className="text-[10px] font-black uppercase tracking-widest" style={{ color: P.textSub }}>Até</label>
+              <label className="text-[10px] font-black uppercase tracking-widest shrink-0" style={{ color: P.textSub }}>Até</label>
               <input type="date" value={dataFim} onChange={e => setDataFim(e.target.value)}
-                className="px-2 py-1.5 text-xs"
+                className="px-2 py-1.5 text-xs w-full sm:w-auto"
                 style={{ border: `1.5px solid ${P.border}`, borderRadius: '2px', color: P.text, outline: 'none' }} />
             </div>
           </div>
         )}
 
         {/* Filtro por cliente */}
-        <div className="flex items-center gap-3 flex-wrap pt-1 border-t" style={{ borderColor: P.steelBg }}>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3 pt-1 border-t" style={{ borderColor: P.steelBg }}>
           <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: P.textSub }}>Cliente</span>
-          <div className="relative">
+          <div className="relative w-full sm:w-auto">
             <select
               value={clienteFiltroId}
               onChange={e => setClienteFiltroId(e.target.value)}
-              className="appearance-none pr-8 pl-3 py-1.5 text-xs font-semibold"
+              className="appearance-none pr-8 pl-3 py-1.5 text-xs font-semibold w-full sm:w-auto"
               style={{ border: `1.5px solid ${clienteFiltroId ? P.navy : P.border}`, borderRadius: '2px', color: clienteFiltroId ? P.navy : P.textSub, backgroundColor: clienteFiltroId ? P.navyBg : '#fff', outline: 'none', minWidth: '220px' }}
             >
               <option value="">Todos os clientes</option>
@@ -400,8 +400,8 @@ export default function IndicadoresPage() {
             </p>
           </div>
           {alertasVisiveis.map(alerta => (
-            <div key={alerta.id} className="flex items-center gap-4 glow-amber"
-              style={{ backgroundColor: P.alertBg, border: `1.5px solid ${P.alertBorder}`, borderRadius: '2px', padding: '14px 18px' }}>
+            <div key={alerta.id} className="flex items-start gap-3 glow-amber"
+              style={{ backgroundColor: P.alertBg, border: `1.5px solid ${P.alertBorder}`, borderRadius: '2px', padding: '12px 14px' }}>
               <div style={{ backgroundColor: P.alertIcon, borderRadius: '2px', padding: '8px', flexShrink: 0 }}>
                 <Clock size={16} className="animate-pulse" style={{ color: '#fff' }} />
               </div>
@@ -409,15 +409,20 @@ export default function IndicadoresPage() {
               <button className="flex-1 min-w-0 text-left transition-all active:scale-[0.99]"
                 onClick={() => router.push(`/dashboard/escoltas/${alerta.id}`)}>
                 <p className="text-xs font-black uppercase tracking-widest" style={{ color: P.alertText }}>
-                  Alerta de SLA — {alerta.codigo} está em campo há {formatDuracao(alerta.minutosEmCampo)}
+                  Alerta SLA — {alerta.codigo} há {formatDuracao(alerta.minutosEmCampo)}
                 </p>
                 <p className="text-[11px] mt-0.5" style={{ color: P.alertSub }}>
-                  Prazo excedido em <strong>{formatDuracao(alerta.minutosExcedidos)}</strong> · Parâmetro: {SLA_HORAS_LIMITE}h · Cliente: {alerta.cliente}
+                  Excedido em <strong>{formatDuracao(alerta.minutosExcedidos)}</strong> · {alerta.cliente}
                 </p>
+                <button onClick={() => router.push(`/dashboard/escoltas/${alerta.id}`)}
+                  className="mt-2 flex items-center gap-1 sm:hidden"
+                  style={{ backgroundColor: P.alertIcon, color: '#fff', borderRadius: '2px', padding: '5px 10px', fontSize: '10px', fontWeight: 900 }}>
+                  Ver Escolta <ChevronRight size={11} />
+                </button>
               </button>
-              {/* Ver escolta */}
+              {/* Ver escolta (desktop) */}
               <button onClick={() => router.push(`/dashboard/escoltas/${alerta.id}`)}
-                className="flex items-center gap-2 shrink-0 transition-opacity hover:opacity-80"
+                className="hidden sm:flex items-center gap-2 shrink-0 transition-opacity hover:opacity-80"
                 style={{ backgroundColor: P.alertIcon, color: '#fff', borderRadius: '2px', padding: '6px 12px' }}>
                 <span style={{ fontSize: '10px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em' }}>Ver Escolta</span>
                 <ChevronRight size={13} />
@@ -427,7 +432,7 @@ export default function IndicadoresPage() {
                 onClick={() => setAlertasFechados(prev => new Set([...prev, alerta.id]))}
                 title="Fechar alerta"
                 className="flex items-center justify-center shrink-0 transition-all hover:opacity-70"
-                style={{ width: '44px', height: '44px', borderRadius: '2px', border: `1.5px solid ${P.alertBorder}`, color: P.alertText, backgroundColor: 'transparent' }}>
+                style={{ width: '36px', height: '36px', borderRadius: '2px', border: `1.5px solid ${P.alertBorder}`, color: P.alertText, backgroundColor: 'transparent' }}>
                 <X size={13} />
               </button>
             </div>
@@ -646,54 +651,88 @@ export default function IndicadoresPage() {
             <p className="text-sm" style={{ color: P.light }}>Nenhuma operação no período selecionado</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="table-content">
-              <thead>
-                <tr>
-                  <th>Código</th><th>Cliente</th><th>Origem</th><th>Previsto</th><th>Status</th>
-                  <th style={{ width: '40px' }} />
-                </tr>
-              </thead>
-              <tbody>
-                {escoltas.slice(0, 20).map(e => {
-                  const isSla = alertasSLA.some(a => a.id === e.id)
-                  return (
-                    <tr key={e.id}
-                      onClick={() => router.push(`/dashboard/escoltas/${e.id}`)}
-                      style={{ cursor: 'pointer', backgroundColor: isSla ? P.alertBg : '' }}
-                      onMouseEnter={ev => (ev.currentTarget as HTMLElement).style.backgroundColor = isSla ? '#FDE68A' : P.bg}
-                      onMouseLeave={ev => (ev.currentTarget as HTMLElement).style.backgroundColor = isSla ? P.alertBg : ''}>
-                      <td>
-                        <div className="flex items-center gap-1.5">
-                          {isSla && <span style={{ fontSize: '9px', color: P.alertIcon }}>⚠</span>}
-                          <span className="font-mono text-xs font-bold" style={{ color: P.text }}>{e.codigo_escolta}</span>
-                        </div>
-                      </td>
-                      <td>
-                        <div className="flex items-center gap-2">
-                          {e.cliente?.cor_destaque && <div style={{ width: '6px', height: '6px', backgroundColor: e.cliente.cor_destaque, borderRadius: '2px', flexShrink: 0 }} />}
-                          <span className="text-xs truncate" style={{ color: P.text, maxWidth: '140px' }}>{e.cliente?.nome_cliente ?? '—'}</span>
-                        </div>
-                      </td>
-                      <td>
-                        <span className="text-xs truncate block" style={{ color: P.textSub, maxWidth: '160px' }}>
-                          {e.origem_endereco ? e.origem_endereco.split(',').slice(0, 2).join(',') : '—'}
-                        </span>
-                      </td>
-                      <td>
-                        <span className="text-xs" style={{ color: P.textSub }}>
-                          {new Date(e.data_hora_prevista).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}{' '}
-                          {new Date(e.data_hora_prevista).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </td>
-                      <td><span className={STATUS_BADGE[e.status] ?? 'badge-neutral'}>{STATUS_LABEL[e.status] ?? e.status}</span></td>
-                      <td><ChevronRight size={13} style={{ color: P.border }} /></td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+          <>
+            {/* Desktop table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="table-content">
+                <thead>
+                  <tr>
+                    <th>Código</th><th>Cliente</th><th>Origem</th><th>Previsto</th><th>Status</th>
+                    <th style={{ width: '40px' }} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {escoltas.slice(0, 20).map(e => {
+                    const isSla = alertasSLA.some(a => a.id === e.id)
+                    return (
+                      <tr key={e.id}
+                        onClick={() => router.push(`/dashboard/escoltas/${e.id}`)}
+                        style={{ cursor: 'pointer', backgroundColor: isSla ? P.alertBg : '' }}
+                        onMouseEnter={ev => (ev.currentTarget as HTMLElement).style.backgroundColor = isSla ? '#FDE68A' : P.bg}
+                        onMouseLeave={ev => (ev.currentTarget as HTMLElement).style.backgroundColor = isSla ? P.alertBg : ''}>
+                        <td>
+                          <div className="flex items-center gap-1.5">
+                            {isSla && <span style={{ fontSize: '9px', color: P.alertIcon }}>⚠</span>}
+                            <span className="font-mono text-xs font-bold" style={{ color: P.text }}>{e.codigo_escolta}</span>
+                          </div>
+                        </td>
+                        <td>
+                          <div className="flex items-center gap-2">
+                            {e.cliente?.cor_destaque && <div style={{ width: '6px', height: '6px', backgroundColor: e.cliente.cor_destaque, borderRadius: '2px', flexShrink: 0 }} />}
+                            <span className="text-xs truncate" style={{ color: P.text, maxWidth: '140px' }}>{e.cliente?.nome_cliente ?? '—'}</span>
+                          </div>
+                        </td>
+                        <td>
+                          <span className="text-xs truncate block" style={{ color: P.textSub, maxWidth: '160px' }}>
+                            {e.origem_endereco ? e.origem_endereco.split(',').slice(0, 2).join(',') : '—'}
+                          </span>
+                        </td>
+                        <td>
+                          <span className="text-xs" style={{ color: P.textSub }}>
+                            {new Date(e.data_hora_prevista).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}{' '}
+                            {new Date(e.data_hora_prevista).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </td>
+                        <td><span className={STATUS_BADGE[e.status] ?? 'badge-neutral'}>{STATUS_LABEL[e.status] ?? e.status}</span></td>
+                        <td><ChevronRight size={13} style={{ color: P.border }} /></td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile cards */}
+            <div className="md:hidden space-y-2 p-3">
+              {escoltas.slice(0, 20).map(e => {
+                const isSla = alertasSLA.some(a => a.id === e.id)
+                return (
+                  <button key={e.id}
+                    onClick={() => router.push(`/dashboard/escoltas/${e.id}`)}
+                    className="w-full text-left rounded-lg p-3 border transition-all active:scale-[0.99]"
+                    style={{ borderColor: isSla ? P.alertBorder : P.border, backgroundColor: isSla ? P.alertBg : '#fff' }}>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <div className="flex items-center gap-1.5">
+                        {isSla && <span style={{ fontSize: '9px', color: P.alertIcon }}>⚠</span>}
+                        <span className="font-mono text-sm font-bold" style={{ color: P.text }}>{e.codigo_escolta}</span>
+                      </div>
+                      <span className={STATUS_BADGE[e.status] ?? 'badge-neutral'}>{STATUS_LABEL[e.status] ?? e.status}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 mb-1">
+                      {e.cliente?.cor_destaque && <div style={{ width: '6px', height: '6px', backgroundColor: e.cliente.cor_destaque, borderRadius: '2px', flexShrink: 0 }} />}
+                      <span className="text-xs font-medium" style={{ color: P.text }}>{e.cliente?.nome_cliente ?? '—'}</span>
+                    </div>
+                    <p className="text-[11px] truncate" style={{ color: P.textSub }}>
+                      {e.origem_endereco ? e.origem_endereco.split(',').slice(0, 2).join(',') : '—'}
+                    </p>
+                    <p className="text-[11px] mt-0.5" style={{ color: P.light }}>
+                      {new Date(e.data_hora_prevista).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </button>
+                )
+              })}
+            </div>
+          </>
         )}
       </div>
 

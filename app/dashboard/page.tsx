@@ -135,26 +135,27 @@ export default function DashboardPage() {
     : 0
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 md:space-y-6">
 
       {/* ── Page header ── */}
-      <div className="flex items-start justify-between">
-        <div>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
           <h1 className="page-title">{saudacao}, {primeiro}.</h1>
-          <p className="page-subtitle">
+          <p className="page-subtitle text-xs md:text-sm">
             {user?.perfil?.nome_exibicao} · {new Date().toLocaleDateString('pt-BR', {
               weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
             })}
           </p>
         </div>
-        <a href="/dashboard/escoltas/nova" className="btn-gradient">
-          <Shield size={15} />
-          Nova Escolta
+        <a href="/dashboard/escoltas/nova" className="btn-gradient shrink-0 text-xs md:text-sm px-3 md:px-4 py-2 md:py-2.5">
+          <Shield size={14} />
+          <span className="hidden sm:inline">Nova Escolta</span>
+          <span className="sm:hidden">Nova</span>
         </a>
       </div>
 
       {/* ── KPI cards ── */}
-      <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-3 md:gap-4">
 
         {/* Em operação */}
         <div className="card-kpi">
@@ -241,7 +242,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Stats row ── */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
 
         {/* Vigilantes */}
         <div className="card-light p-4 flex items-center gap-3">
@@ -317,8 +318,8 @@ export default function DashboardPage() {
       </div>
 
       {/* ── Operações em andamento ── */}
-      <div className="card-light">
-        <div className="flex items-center justify-between px-5 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
+      <div className="card-light overflow-x-auto">
+        <div className="flex items-center justify-between px-4 md:px-5 py-3 md:py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
           <div className="flex items-center gap-2.5">
             <div className="w-1 h-5 rounded-full" style={{ background: 'linear-gradient(180deg, #53648A, #9F906D)' }} />
             <div>
@@ -327,7 +328,7 @@ export default function DashboardPage() {
             </div>
           </div>
           <a href="/dashboard/escoltas"
-            className="flex items-center gap-1 text-xs font-medium transition-colors"
+            className="flex items-center gap-1 text-xs font-medium transition-colors shrink-0"
             style={{ color: '#53648A' }}
             onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.color = '#3A5464'}
             onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.color = '#53648A'}
@@ -347,63 +348,98 @@ export default function DashboardPage() {
             <p className="text-sm" style={{ color: '#5A6A80' }}>Nenhuma operação ativa no momento</p>
           </div>
         ) : (
-          <div style={{ borderTop: 'none' }}>
-            {recentes.map((e) => {
-              const s = STATUS_MAP[e.status] ?? { label: e.status, cls: 'badge-neutral' }
-              const cor = e.cliente?.cor_destaque ?? '#53648A'
-              return (
-                <a
-                  key={e.id}
-                  href={`/dashboard/escoltas/${e.id}`}
-                  className="flex items-center gap-4 px-5 py-3.5 transition-colors group"
-                  style={{ borderBottom: '1px solid #E2E8EC', textDecoration: 'none' }}
-                  onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.backgroundColor = '#F8FAFC'}
-                  onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.backgroundColor = ''}
-                >
-                  {/* Color bar */}
-                  <div className="w-1 h-10 rounded-full shrink-0" style={{ backgroundColor: cor }} />
-
-                  {/* Code + Status */}
-                  <div className="w-32 shrink-0">
-                    <p className="text-[11px] font-black uppercase tracking-wider" style={{ color: '#5A6A80' }}>
-                      {e.codigo_escolta ?? 'Pendente'}
-                    </p>
-                    <span className={`${s.cls} mt-1`}>{s.label}</span>
-                  </div>
-
-                  {/* Client */}
-                  {e.cliente && (
-                    <div className="w-44 shrink-0 hidden lg:block">
-                      <p className="text-xs font-semibold truncate" style={{ color: '#0E1A33' }}>
-                        {e.cliente.nome_cliente}
+          <>
+            {/* Tabela — visível apenas md+ */}
+            <div className="hidden md:block" style={{ borderTop: 'none' }}>
+              {recentes.map((e) => {
+                const s = STATUS_MAP[e.status] ?? { label: e.status, cls: 'badge-neutral' }
+                const cor = e.cliente?.cor_destaque ?? '#53648A'
+                return (
+                  <a
+                    key={e.id}
+                    href={`/dashboard/escoltas/${e.id}`}
+                    className="flex items-center gap-4 px-5 py-3.5 transition-colors group"
+                    style={{ borderBottom: '1px solid #E2E8EC', textDecoration: 'none' }}
+                    onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.backgroundColor = '#F8FAFC'}
+                    onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.backgroundColor = ''}
+                  >
+                    <div className="w-1 h-10 rounded-full shrink-0" style={{ backgroundColor: cor }} />
+                    <div className="w-32 shrink-0">
+                      <p className="text-[11px] font-black uppercase tracking-wider" style={{ color: '#5A6A80' }}>
+                        {e.codigo_escolta ?? 'Pendente'}
+                      </p>
+                      <span className={`${s.cls} mt-1`}>{s.label}</span>
+                    </div>
+                    {e.cliente && (
+                      <div className="w-44 shrink-0 hidden lg:block">
+                        <p className="text-xs font-semibold truncate" style={{ color: '#0E1A33' }}>
+                          {e.cliente.nome_cliente}
+                        </p>
+                      </div>
+                    )}
+                    <div className="flex-1 flex items-center gap-2 min-w-0">
+                      <MapPin size={12} className="shrink-0" style={{ color: '#C8D5DC' }} />
+                      <p className="text-xs truncate" style={{ color: '#5A6A80' }}>{e.origem_endereco}</p>
+                      <ArrowRight size={12} className="shrink-0" style={{ color: '#C8D5DC' }} />
+                      <p className="text-xs truncate" style={{ color: '#5A6A80' }}>{e.destino_endereco}</p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="text-xs font-medium" style={{ color: '#5A6A80' }}>
+                        {new Date(e.data_hora_prevista).toLocaleDateString('pt-BR')}
+                      </p>
+                      <p className="text-[11px]" style={{ color: '#A8B8C2' }}>
+                        {new Date(e.data_hora_prevista).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                       </p>
                     </div>
-                  )}
+                    <ArrowRight size={14} className="shrink-0 transition-colors" style={{ color: '#E2E8EC' }} />
+                  </a>
+                )
+              })}
+            </div>
 
-                  {/* Route */}
-                  <div className="flex-1 flex items-center gap-2 min-w-0">
-                    <MapPin size={12} className="shrink-0" style={{ color: '#C8D5DC' }} />
-                    <p className="text-xs truncate" style={{ color: '#5A6A80' }}>{e.origem_endereco}</p>
-                    <ArrowRight size={12} className="shrink-0" style={{ color: '#C8D5DC' }} />
-                    <p className="text-xs truncate" style={{ color: '#5A6A80' }}>{e.destino_endereco}</p>
-                  </div>
-
-                  {/* Date */}
-                  <div className="text-right shrink-0 hidden md:block">
-                    <p className="text-xs font-medium" style={{ color: '#5A6A80' }}>
-                      {new Date(e.data_hora_prevista).toLocaleDateString('pt-BR')}
-                    </p>
-                    <p className="text-[11px]" style={{ color: '#A8B8C2' }}>
-                      {new Date(e.data_hora_prevista).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                    </p>
-                  </div>
-
-                  <ArrowRight size={14} className="shrink-0 transition-colors"
-                    style={{ color: '#E2E8EC' }} />
-                </a>
-              )
-            })}
-          </div>
+            {/* Cards mobile — visível apenas abaixo de md */}
+            <div className="md:hidden divide-y" style={{ borderColor: '#E2E8EC' }}>
+              {recentes.map((e) => {
+                const s = STATUS_MAP[e.status] ?? { label: e.status, cls: 'badge-neutral' }
+                const cor = e.cliente?.cor_destaque ?? '#53648A'
+                return (
+                  <a
+                    key={e.id}
+                    href={`/dashboard/escoltas/${e.id}`}
+                    className="flex items-start gap-3 px-4 py-4 transition-colors active:bg-[#F8FAFC]"
+                    style={{ textDecoration: 'none', borderBottom: '1px solid #E2E8EC' }}
+                  >
+                    <div className="w-1 rounded-full shrink-0 self-stretch min-h-[44px]" style={{ backgroundColor: cor }} />
+                    <div className="flex-1 min-w-0 space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[11px] font-black uppercase tracking-wider" style={{ color: '#5A6A80' }}>
+                          {e.codigo_escolta ?? 'Pendente'}
+                        </p>
+                        <span className={s.cls}>{s.label}</span>
+                      </div>
+                      {e.cliente && (
+                        <p className="text-sm font-semibold truncate" style={{ color: '#0E1A33' }}>
+                          {e.cliente.nome_cliente}
+                        </p>
+                      )}
+                      <div className="flex items-start gap-1 text-xs" style={{ color: '#5A6A80' }}>
+                        <MapPin size={11} className="shrink-0 mt-0.5" style={{ color: '#C8D5DC' }} />
+                        <span className="truncate">{e.origem_endereco}</span>
+                      </div>
+                      <div className="flex items-start gap-1 text-xs" style={{ color: '#5A6A80' }}>
+                        <ArrowRight size={11} className="shrink-0 mt-0.5" style={{ color: '#C8D5DC' }} />
+                        <span className="truncate">{e.destino_endereco}</span>
+                      </div>
+                      <p className="text-[11px]" style={{ color: '#A8B8C2' }}>
+                        {new Date(e.data_hora_prevista).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                      </p>
+                    </div>
+                    <ArrowRight size={14} className="shrink-0 mt-1" style={{ color: '#E2E8EC' }} />
+                  </a>
+                )
+              })}
+            </div>
+          </>
         )}
       </div>
     </div>

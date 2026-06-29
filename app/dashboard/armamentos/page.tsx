@@ -156,7 +156,7 @@ export default function ArmamentosPage() {
     <div className="space-y-5">
 
       {/* ── Header ── */}
-      <div className="flex items-start justify-between">
+      <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
         <div>
           <h1 className="page-title">Armamentos</h1>
           <p className="page-subtitle">
@@ -164,7 +164,7 @@ export default function ArmamentosPage() {
           </p>
         </div>
         {podeEditar && (
-          <button onClick={abrirNovo} className="btn-gradient">
+          <button onClick={abrirNovo} className="btn-gradient w-full md:w-auto">
             <Plus size={15} />
             Novo Armamento
           </button>
@@ -173,7 +173,7 @@ export default function ArmamentosPage() {
 
       {/* ── Filtro ── */}
       <div className="card-light p-4">
-        <div className="relative max-w-md">
+        <div className="relative w-full md:max-w-md">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: '#A8B8C2' }} />
           <input
             type="text"
@@ -185,118 +185,182 @@ export default function ArmamentosPage() {
         </div>
       </div>
 
-      {/* ── Table ── */}
-      <div className="card-light overflow-x-auto">
-        {loading ? (
-          <div className="py-16 flex items-center justify-center gap-3">
-            <div className="w-5 h-5 rounded-full border-2 border-t-transparent animate-spin"
-              style={{ borderColor: '#4A90A4', borderTopColor: 'transparent' }} />
-            <span className="text-sm" style={{ color: '#6B7E8A' }}>Carregando...</span>
+      {/* ── Conteúdo ── */}
+      {loading ? (
+        <div className="card-light py-16 flex items-center justify-center gap-3">
+          <div className="w-5 h-5 rounded-full border-2 border-t-transparent animate-spin"
+            style={{ borderColor: '#4A90A4', borderTopColor: 'transparent' }} />
+          <span className="text-sm" style={{ color: '#6B7E8A' }}>Carregando...</span>
+        </div>
+      ) : filtrados.length === 0 ? (
+        <div className="card-light py-16 text-center">
+          <div className="w-12 h-12 rounded-xl mx-auto mb-3 flex items-center justify-center"
+            style={{ backgroundColor: '#F0F2F4' }}>
+            <Crosshair size={20} style={{ color: '#C8D5DC' }} />
           </div>
-        ) : filtrados.length === 0 ? (
-          <div className="py-16 text-center">
-            <div className="w-12 h-12 rounded-xl mx-auto mb-3 flex items-center justify-center"
-              style={{ backgroundColor: '#F0F2F4' }}>
-              <Crosshair size={20} style={{ color: '#C8D5DC' }} />
-            </div>
-            <p className="text-sm font-semibold" style={{ color: '#6B7E8A' }}>Nenhum armamento encontrado</p>
-            {podeEditar && (
-              <button onClick={abrirNovo} className="btn-primary mt-4 mx-auto">
-                <Plus size={14} />
-                Cadastrar Armamento
-              </button>
-            )}
+          <p className="text-sm font-semibold" style={{ color: '#6B7E8A' }}>Nenhum armamento encontrado</p>
+          {podeEditar && (
+            <button onClick={abrirNovo} className="btn-primary mt-4 mx-auto">
+              <Plus size={14} />
+              Cadastrar Armamento
+            </button>
+          )}
+        </div>
+      ) : (
+        <>
+          {/* ── Tabela Desktop ── */}
+          <div className="hidden md:block card-light overflow-x-auto">
+            <table className="table-content">
+              <thead>
+                <tr>
+                  <th>Numeração</th>
+                  <th>Tipo</th>
+                  <th>Calibre</th>
+                  <th>Documentação (GU)</th>
+                  <th>Status</th>
+                  {podeEditar && <th className="text-right">Ações</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {filtrados.map((a) => (
+                  <tr key={a.id}>
+                    <td>
+                      <span className="font-mono text-xs font-bold" style={{ color: '#1E2D35' }}>
+                        {a.numeracao ?? '—'}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="text-sm" style={{ color: '#1E2D35' }}>
+                        {a.tipo?.nome ?? '—'}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="text-sm" style={{ color: '#1E2D35' }}>
+                        {a.calibre?.nome ?? '—'}
+                      </span>
+                    </td>
+                    <td>
+                      <span className="text-sm font-mono" style={{ color: '#6B7E8A' }}>
+                        {a.documentacao ?? '—'}
+                      </span>
+                    </td>
+                    <td>
+                      <span className={a.status === 'ativo' ? 'badge-success' : 'badge-neutral'}>
+                        {a.status === 'ativo' ? 'Ativo' : 'Inativo'}
+                      </span>
+                    </td>
+                    {podeEditar && (
+                      <td>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => abrirEditar(a)}
+                            className="w-7 h-7 rounded-lg flex items-center justify-center transition-all"
+                            style={{ color: '#6B7E8A' }}
+                            onMouseEnter={(e) => {
+                              (e.currentTarget as HTMLElement).style.backgroundColor = '#EBF7F1'
+                              ;(e.currentTarget as HTMLElement).style.color = '#1E7C52'
+                            }}
+                            onMouseLeave={(e) => {
+                              (e.currentTarget as HTMLElement).style.backgroundColor = ''
+                              ;(e.currentTarget as HTMLElement).style.color = '#6B7E8A'
+                            }}
+                            title="Editar"
+                          >
+                            <Pencil size={13} />
+                          </button>
+                          <button
+                            onClick={() => setConfirmDelete(a.id)}
+                            className="w-7 h-7 rounded-lg flex items-center justify-center transition-all"
+                            style={{ color: '#6B7E8A' }}
+                            onMouseEnter={(e) => {
+                              (e.currentTarget as HTMLElement).style.backgroundColor = '#FEF0EE'
+                              ;(e.currentTarget as HTMLElement).style.color = '#B83832'
+                            }}
+                            onMouseLeave={(e) => {
+                              (e.currentTarget as HTMLElement).style.backgroundColor = ''
+                              ;(e.currentTarget as HTMLElement).style.color = '#6B7E8A'
+                            }}
+                            title="Excluir"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        ) : (
-          <table className="table-content">
-            <thead>
-              <tr>
-                <th>Numeração</th>
-                <th>Tipo</th>
-                <th>Calibre</th>
-                <th className="hidden md:table-cell">Documentação (GU)</th>
-                <th>Status</th>
-                {podeEditar && <th className="text-right">Ações</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {filtrados.map((a) => (
-                <tr key={a.id}>
-                  <td>
-                    <span className="font-mono text-xs font-bold" style={{ color: '#1E2D35' }}>
+
+          {/* ── Cards Mobile ── */}
+          <div className="md:hidden space-y-3">
+            {filtrados.map((a) => (
+              <div
+                key={a.id}
+                className="bg-white rounded-xl p-4 shadow-sm border border-gray-100"
+              >
+                {/* Topo do card: numeração + status */}
+                <div className="flex items-start justify-between gap-2 mb-3">
+                  <div>
+                    <span className="font-mono text-base font-black" style={{ color: '#1E2D35' }}>
                       {a.numeracao ?? '—'}
                     </span>
-                  </td>
-                  <td>
-                    <span className="text-sm" style={{ color: '#1E2D35' }}>
-                      {a.tipo?.nome ?? '—'}
-                    </span>
-                  </td>
-                  <td>
-                    <span className="text-sm" style={{ color: '#1E2D35' }}>
-                      {a.calibre?.nome ?? '—'}
-                    </span>
-                  </td>
-                  <td className="hidden md:table-cell">
-                    <span className="text-sm font-mono" style={{ color: '#6B7E8A' }}>
-                      {a.documentacao ?? '—'}
-                    </span>
-                  </td>
-                  <td>
-                    <span className={a.status === 'ativo' ? 'badge-success' : 'badge-neutral'}>
-                      {a.status === 'ativo' ? 'Ativo' : 'Inativo'}
-                    </span>
-                  </td>
-                  {podeEditar && (
-                    <td>
-                      <div className="flex items-center justify-end gap-1">
-                        <button
-                          onClick={() => abrirEditar(a)}
-                          className="w-7 h-7 rounded-lg flex items-center justify-center transition-all"
-                          style={{ color: '#6B7E8A' }}
-                          onMouseEnter={(e) => {
-                            (e.currentTarget as HTMLElement).style.backgroundColor = '#EBF7F1'
-                            ;(e.currentTarget as HTMLElement).style.color = '#1E7C52'
-                          }}
-                          onMouseLeave={(e) => {
-                            (e.currentTarget as HTMLElement).style.backgroundColor = ''
-                            ;(e.currentTarget as HTMLElement).style.color = '#6B7E8A'
-                          }}
-                          title="Editar"
-                        >
-                          <Pencil size={13} />
-                        </button>
-                        <button
-                          onClick={() => setConfirmDelete(a.id)}
-                          className="w-7 h-7 rounded-lg flex items-center justify-center transition-all"
-                          style={{ color: '#6B7E8A' }}
-                          onMouseEnter={(e) => {
-                            (e.currentTarget as HTMLElement).style.backgroundColor = '#FEF0EE'
-                            ;(e.currentTarget as HTMLElement).style.color = '#B83832'
-                          }}
-                          onMouseLeave={(e) => {
-                            (e.currentTarget as HTMLElement).style.backgroundColor = ''
-                            ;(e.currentTarget as HTMLElement).style.color = '#6B7E8A'
-                          }}
-                          title="Excluir"
-                        >
-                          <Trash2 size={13} />
-                        </button>
-                      </div>
-                    </td>
-                  )}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+                    {a.documentacao && (
+                      <p className="text-xs font-mono mt-0.5" style={{ color: '#6B7E8A' }}>
+                        GU: {a.documentacao}
+                      </p>
+                    )}
+                  </div>
+                  <span className={a.status === 'ativo' ? 'badge-success' : 'badge-neutral'}>
+                    {a.status === 'ativo' ? 'Ativo' : 'Inativo'}
+                  </span>
+                </div>
+
+                {/* Dados */}
+                <div className="space-y-1.5 mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-bold uppercase tracking-wider w-14 shrink-0" style={{ color: '#A8B8C2' }}>Tipo</span>
+                    <span className="text-sm font-semibold" style={{ color: '#1E2D35' }}>{a.tipo?.nome ?? '—'}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-bold uppercase tracking-wider w-14 shrink-0" style={{ color: '#A8B8C2' }}>Calibre</span>
+                    <span className="text-sm" style={{ color: '#1E2D35' }}>{a.calibre?.nome ?? '—'}</span>
+                  </div>
+                </div>
+
+                {/* Ações */}
+                {podeEditar && (
+                  <div className="flex gap-2 pt-3 border-t border-gray-100">
+                    <button
+                      onClick={() => abrirEditar(a)}
+                      className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all"
+                      style={{ backgroundColor: '#EBF7F1', color: '#1E7C52' }}
+                    >
+                      <Pencil size={14} />
+                      Editar
+                    </button>
+                    <button
+                      onClick={() => setConfirmDelete(a.id)}
+                      className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition-all"
+                      style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}
+                    >
+                      <Trash2 size={14} />
+                      Excluir
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
       {/* ── Dialog Add/Edit ── */}
       {dialogOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+        <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center md:p-4"
           style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md"
+          <div className="bg-white rounded-t-2xl md:rounded-2xl shadow-2xl w-full mx-4 md:mx-auto md:max-w-md"
             style={{ border: '1px solid #E2E8EC' }}>
 
             {/* Dialog header */}
@@ -319,7 +383,7 @@ export default function ArmamentosPage() {
             </div>
 
             {/* Dialog body */}
-            <div className="px-6 py-5 space-y-4">
+            <div className="px-6 py-5 space-y-4 max-h-[70vh] overflow-y-auto">
 
               {/* Tipo */}
               <div>
@@ -330,7 +394,7 @@ export default function ArmamentosPage() {
                 <select
                   value={form.tipo_id}
                   onChange={(e) => setForm({ ...form, tipo_id: e.target.value })}
-                  className="select-light w-full"
+                  className="select-light w-full min-h-[48px] md:min-h-0"
                 >
                   <option value="">Selecione...</option>
                   {tipos.map((t) => (
@@ -348,7 +412,7 @@ export default function ArmamentosPage() {
                 <select
                   value={form.calibre_id}
                   onChange={(e) => setForm({ ...form, calibre_id: e.target.value })}
-                  className="select-light w-full"
+                  className="select-light w-full min-h-[48px] md:min-h-0"
                 >
                   <option value="">Selecione...</option>
                   {calibres.map((c) => (
@@ -368,7 +432,7 @@ export default function ArmamentosPage() {
                   placeholder="Ex: AB1234567"
                   value={form.numeracao}
                   onChange={(e) => setForm({ ...form, numeracao: e.target.value })}
-                  className="input-light"
+                  className="input-light min-h-[48px] md:min-h-0"
                 />
               </div>
 
@@ -383,7 +447,7 @@ export default function ArmamentosPage() {
                   placeholder="Número do GU"
                   value={form.documentacao}
                   onChange={(e) => setForm({ ...form, documentacao: e.target.value })}
-                  className="input-light"
+                  className="input-light min-h-[48px] md:min-h-0"
                 />
               </div>
 
@@ -396,7 +460,7 @@ export default function ArmamentosPage() {
                 <select
                   value={form.status}
                   onChange={(e) => setForm({ ...form, status: e.target.value as 'ativo' | 'inativo' })}
-                  className="select-light w-full"
+                  className="select-light w-full min-h-[48px] md:min-h-0"
                 >
                   <option value="ativo">Ativo</option>
                   <option value="inativo">Inativo</option>
@@ -413,12 +477,12 @@ export default function ArmamentosPage() {
             </div>
 
             {/* Dialog footer */}
-            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t"
+            <div className="flex flex-col-reverse md:flex-row md:items-center md:justify-end gap-3 px-6 py-4 border-t"
               style={{ borderColor: '#E2E8EC', backgroundColor: '#F8FAFC' }}>
-              <button onClick={fecharDialog} className="btn-outline">
+              <button onClick={fecharDialog} className="btn-outline w-full md:w-auto">
                 Cancelar
               </button>
-              <button onClick={salvar} disabled={saving} className="btn-primary">
+              <button onClick={salvar} disabled={saving} className="btn-primary w-full md:w-auto min-h-[44px] md:min-h-0">
                 {saving ? 'Salvando...' : editando ? 'Salvar Alterações' : 'Cadastrar'}
               </button>
             </div>
@@ -428,9 +492,9 @@ export default function ArmamentosPage() {
 
       {/* ── Confirm Delete ── */}
       {confirmDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+        <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center md:p-4"
           style={{ backgroundColor: 'rgba(0,0,0,0.45)' }}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6"
+          <div className="bg-white rounded-t-2xl md:rounded-2xl shadow-2xl w-full mx-4 md:mx-auto md:max-w-sm p-6"
             style={{ border: '1px solid #E2E8EC' }}>
             <div className="flex flex-col items-center text-center gap-3">
               <div className="w-12 h-12 rounded-full flex items-center justify-center"
@@ -445,10 +509,10 @@ export default function ArmamentosPage() {
               </p>
             </div>
             <div className="flex gap-3 mt-5">
-              <button onClick={() => setConfirmDelete(null)} className="btn-outline flex-1">
+              <button onClick={() => setConfirmDelete(null)} className="btn-outline flex-1 min-h-[44px]">
                 Cancelar
               </button>
-              <button onClick={() => excluir(confirmDelete)} className="btn-danger flex-1">
+              <button onClick={() => excluir(confirmDelete)} className="btn-danger flex-1 min-h-[44px]">
                 Excluir
               </button>
             </div>

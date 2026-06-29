@@ -731,7 +731,7 @@ export default function CampoPage() {
   const checklistRespondidos = checklistItems.filter(i => i.resposta !== null).length
 
   return (
-    <div className="max-w-xl mx-auto space-y-4 pb-12">
+    <div className="max-w-xl mx-auto space-y-4 pb-12 px-4 md:px-0">
       <Toast msg={toast} />
 
       {/* ── Header ── */}
@@ -784,29 +784,29 @@ export default function CampoPage() {
           <div className="card-light overflow-hidden">
             <div className="h-1.5 w-full" style={{ backgroundColor: escoltaAtiva.cliente?.cor_destaque ?? '#4A90A4' }} />
             <div className="p-4 space-y-3">
-              <div className="flex items-start justify-between">
-                <div>
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
                   <p className="text-[11px] font-mono" style={{ color: '#A8B8C2' }}>{escoltaAtiva.codigo_escolta ?? 'Sem código'}</p>
                   <p className="text-base font-black leading-tight" style={{ color: '#1E2D35' }}>{escoltaAtiva.cliente?.nome_cliente ?? '—'}</p>
                 </div>
-                <span className="badge-info">{STATUS_LABELS[status] ?? status}</span>
+                <span className="badge-info shrink-0">{STATUS_LABELS[status] ?? status}</span>
               </div>
-              <div className="space-y-1.5 text-xs" style={{ color: '#6B7E8A' }}>
+              <div className="space-y-2 text-xs" style={{ color: '#6B7E8A' }}>
                 <div className="flex items-start gap-1.5">
-                  <MapPin size={11} className="mt-0.5 shrink-0" style={{ color: '#4A90A4' }} />
-                  <span><strong style={{ color: '#1E2D35' }}>Origem:</strong> {escoltaAtiva.origem_endereco}</span>
+                  <MapPin size={12} className="mt-0.5 shrink-0" style={{ color: '#4A90A4' }} />
+                  <span className="leading-relaxed"><strong style={{ color: '#1E2D35' }}>Origem:</strong> {escoltaAtiva.origem_endereco}</span>
                 </div>
                 <div className="flex items-start gap-1.5">
-                  <Flag size={11} className="mt-0.5 shrink-0" style={{ color: '#7C3AED' }} />
-                  <span><strong style={{ color: '#1E2D35' }}>Destino:</strong> {escoltaAtiva.destino_endereco}</span>
+                  <Flag size={12} className="mt-0.5 shrink-0" style={{ color: '#7C3AED' }} />
+                  <span className="leading-relaxed"><strong style={{ color: '#1E2D35' }}>Destino:</strong> {escoltaAtiva.destino_endereco}</span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <Clock size={11} style={{ color: '#A8B8C2' }} />
+                  <Clock size={12} style={{ color: '#A8B8C2' }} />
                   <span>Previsto: {new Date(escoltaAtiva.data_hora_prevista).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                 </div>
                 {escoltaAtiva.veiculo_placa && (
                   <div className="flex items-center gap-1.5">
-                    <Shield size={11} style={{ color: '#A8B8C2' }} />
+                    <Shield size={12} style={{ color: '#A8B8C2' }} />
                     <span>{escoltaAtiva.veiculo_placa}{escoltaAtiva.veiculo_modelo ? ` — ${escoltaAtiva.veiculo_modelo}` : ''}</span>
                   </div>
                 )}
@@ -815,12 +815,12 @@ export default function CampoPage() {
           </div>
 
           {/* ── Timeline da jornada ── */}
-          <div className="card-light p-4">
-            <p className="text-[10px] font-black uppercase tracking-widest mb-4" style={{ color: '#6B7E8A' }}>Progresso da Operação</p>
+          <div className="card-light p-3 md:p-4">
+            <p className="text-[10px] font-black uppercase tracking-widest mb-3 md:mb-4" style={{ color: '#6B7E8A' }}>Progresso da Operação</p>
             <div className="relative">
-              <div className="absolute top-5 left-5 right-5 h-0.5" style={{ backgroundColor: '#E2E8EC' }} />
+              <div className="absolute top-4 md:top-5 left-3 right-3 h-0.5" style={{ backgroundColor: '#E2E8EC' }} />
               <div
-                className="absolute top-5 left-5 h-0.5 transition-all duration-700"
+                className="absolute top-4 md:top-5 left-3 h-0.5 transition-all duration-700"
                 style={{
                   backgroundColor: '#4A90A4',
                   width: idxAtual >= 0 ? `${(idxAtual / (JORNADA.length - 1)) * 100}%` : '0%'
@@ -831,21 +831,22 @@ export default function CampoPage() {
                   const concluido = idx < idxAtual
                   const atual = idx === idxAtual
                   return (
-                    <div key={step.status} className="flex flex-col items-center gap-1.5" style={{ width: `${100 / JORNADA.length}%` }}>
+                    <div key={step.status} className="flex flex-col items-center gap-1" style={{ width: `${100 / JORNADA.length}%` }}>
                       <div
-                        className="w-10 h-10 rounded border-2 flex items-center justify-center z-10 transition-all"
+                        className="rounded border-2 flex items-center justify-center z-10 transition-all"
                         style={{
+                          width: '32px', height: '32px',
                           backgroundColor: concluido ? '#4A90A4' : atual ? '#1C2B35' : '#fff',
                           borderColor: concluido || atual ? '#4A90A4' : '#E2E8EC',
                           color: concluido || atual ? '#fff' : '#C4CDD4',
-                          boxShadow: atual ? '0 0 0 4px rgba(74,144,164,0.15)' : 'none',
+                          boxShadow: atual ? '0 0 0 3px rgba(74,144,164,0.15)' : 'none',
                         }}
                       >
-                        {concluido ? <Check size={14}/> : step.icon}
+                        {concluido ? <Check size={12}/> : step.icon}
                       </div>
                       <p
-                        className="text-center text-[9px] font-bold uppercase tracking-wide leading-tight whitespace-pre-line"
-                        style={{ color: atual ? '#1C2B35' : concluido ? '#4A90A4' : '#C4CDD4' }}
+                        className="text-center font-bold uppercase tracking-wide leading-tight whitespace-pre-line"
+                        style={{ fontSize: '8px', color: atual ? '#1C2B35' : concluido ? '#4A90A4' : '#C4CDD4' }}
                       >
                         {step.label}
                       </p>
@@ -914,14 +915,15 @@ export default function CampoPage() {
                         value={obsAvanco}
                         onChange={e => setObsAvanco(e.target.value)}
                         className="input-light text-sm"
+                        style={{ minHeight: '48px' }}
                       />
                     </div>
 
                     <button
                       onClick={avancarStatus}
                       disabled={executando}
-                      className="w-full py-3.5 rounded text-white font-black text-sm uppercase tracking-wider flex items-center justify-center gap-2 transition-all active:scale-[0.98] disabled:opacity-50"
-                      style={{ backgroundColor: botaoAvanco.cor }}
+                      className="w-full rounded text-white font-black text-sm uppercase tracking-wider flex items-center justify-center gap-2 transition-all active:scale-[0.98] disabled:opacity-50"
+                      style={{ backgroundColor: botaoAvanco.cor, minHeight: '56px', padding: '0 16px' }}
                     >
                       {executando ? (
                         <>
@@ -995,27 +997,31 @@ export default function CampoPage() {
                                   <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: '#FFF8E8', color: '#A07212' }}>Foto obrigatória</span>
                                 )}
                               </p>
-                              {/* Botões ✓ / ✗ */}
-                              <div className="flex gap-1.5 shrink-0">
+                              {/* Botões ✓ / ✗ — touch-friendly (min 44px) */}
+                              <div className="flex gap-2 shrink-0">
                                 <button
                                   onClick={() => setChecklistItems(its => its.map((i, ii) => ii === idx ? { ...i, resposta: true } : i))}
-                                  className="w-9 h-9 rounded flex items-center justify-center transition-all border"
-                                  style={item.resposta === true
-                                    ? { backgroundColor: '#1E7C52', borderColor: '#1E7C52', color: '#fff' }
-                                    : { backgroundColor: '#fff', borderColor: '#E2E8EC', color: '#C4CDD4' }
-                                  }
+                                  className="rounded flex items-center justify-center transition-all border"
+                                  style={{
+                                    width: '44px', height: '44px',
+                                    ...(item.resposta === true
+                                      ? { backgroundColor: '#1E7C52', borderColor: '#1E7C52', color: '#fff' }
+                                      : { backgroundColor: '#fff', borderColor: '#E2E8EC', color: '#C4CDD4' })
+                                  }}
                                 >
-                                  <Check size={15}/>
+                                  <Check size={16}/>
                                 </button>
                                 <button
                                   onClick={() => setChecklistItems(its => its.map((i, ii) => ii === idx ? { ...i, resposta: false } : i))}
-                                  className="w-9 h-9 rounded flex items-center justify-center transition-all border"
-                                  style={item.resposta === false
-                                    ? { backgroundColor: '#B83832', borderColor: '#B83832', color: '#fff' }
-                                    : { backgroundColor: '#fff', borderColor: '#E2E8EC', color: '#C4CDD4' }
-                                  }
+                                  className="rounded flex items-center justify-center transition-all border"
+                                  style={{
+                                    width: '44px', height: '44px',
+                                    ...(item.resposta === false
+                                      ? { backgroundColor: '#B83832', borderColor: '#B83832', color: '#fff' }
+                                      : { backgroundColor: '#fff', borderColor: '#E2E8EC', color: '#C4CDD4' })
+                                  }}
                                 >
-                                  <X size={15}/>
+                                  <X size={16}/>
                                 </button>
                               </div>
                             </div>
@@ -1028,7 +1034,8 @@ export default function CampoPage() {
                                   placeholder="Descreva a não conformidade *"
                                   value={item.observacao}
                                   onChange={e => setChecklistItems(its => its.map((i, ii) => ii === idx ? { ...i, observacao: e.target.value } : i))}
-                                  className="input-light text-xs h-8 px-2"
+                                  className="input-light text-xs px-2"
+                                  style={{ minHeight: '44px' }}
                                 />
 
                                 {/* Foto do item não conforme */}
@@ -1053,10 +1060,10 @@ export default function CampoPage() {
                                       setChecklistFotoIdx(idx)
                                       setTimeout(() => fotoChecklistRef.current?.click(), 50)
                                     }}
-                                    className="flex items-center gap-2 text-xs px-3 py-1.5 rounded border transition-colors"
-                                    style={{ borderColor: '#E2E8EC', color: '#6B7E8A', backgroundColor: '#F8FAFC' }}
+                                    className="flex items-center gap-2 text-xs px-3 rounded border transition-colors w-full justify-center"
+                                    style={{ borderColor: '#E2E8EC', color: '#6B7E8A', backgroundColor: '#F8FAFC', minHeight: '44px' }}
                                   >
-                                    <Camera size={13} />
+                                    <Camera size={14} />
                                     {item.exige_foto ? 'Tirar foto (obrigatório)' : 'Tirar foto do problema'}
                                   </button>
                                 )}
@@ -1105,7 +1112,7 @@ export default function CampoPage() {
                   <div className="px-4 pb-4 pt-3 border-t space-y-3" style={{ borderColor: '#E2E8EC' }}>
                     <div>
                       <label className="block text-[11px] font-black uppercase tracking-widest mb-1" style={{ color: '#6B7E8A' }}>Tipo *</label>
-                      <select value={tipoOcId} onChange={e => setTipoOcId(e.target.value)} className="select-light">
+                      <select value={tipoOcId} onChange={e => setTipoOcId(e.target.value)} className="select-light" style={{ minHeight: '48px' }}>
                         <option value="">Selecione o tipo...</option>
                         {tiposOcorrencia.map(t => <option key={t.id} value={t.id}>{t.nome}</option>)}
                       </select>
@@ -1120,11 +1127,12 @@ export default function CampoPage() {
                         </div>
                       </div>
                       <textarea
-                        rows={3}
+                        rows={4}
                         value={descOcorrencia}
                         onChange={e => setDescOcorrencia(e.target.value)}
                         placeholder="Descreva o que aconteceu com o máximo de detalhes..."
                         className="input-light resize-none"
+                        style={{ minHeight: '96px' }}
                       />
                     </div>
 
@@ -1164,14 +1172,14 @@ export default function CampoPage() {
               {!emergConfirm ? (
                 <button
                   onClick={() => setEmergConfirm(true)}
-                  className="w-full py-4 rounded flex items-center justify-center gap-3 transition-all active:scale-[0.98]"
-                  style={{ backgroundColor: '#FEF0EE', border: '2px solid #F5C4BF' }}
+                  className="w-full rounded flex items-center justify-center gap-3 transition-all active:scale-[0.98]"
+                  style={{ backgroundColor: '#FEF0EE', border: '2px solid #F5C4BF', minHeight: '64px' }}
                 >
-                  <Zap size={20} style={{ color: '#B83832' }}/>
+                  <Zap size={22} style={{ color: '#B83832' }}/>
                   <span className="text-base font-black uppercase tracking-widest" style={{ color: '#B83832' }}>
                     Acionar Emergência
                   </span>
-                  <Zap size={20} style={{ color: '#B83832' }}/>
+                  <Zap size={22} style={{ color: '#B83832' }}/>
                 </button>
               ) : (
                 <div className="rounded p-5 space-y-4" style={{ border: '2px solid #F5C4BF', backgroundColor: '#FEF0EE' }}>
@@ -1182,16 +1190,16 @@ export default function CampoPage() {
                   <div className="flex gap-3">
                     <button
                       onClick={() => setEmergConfirm(false)}
-                      className="flex-1 py-2.5 rounded text-sm font-semibold border bg-white transition-colors"
-                      style={{ borderColor: '#E2E8EC', color: '#5C6B73' }}
+                      className="flex-1 rounded text-sm font-semibold border bg-white transition-colors"
+                      style={{ borderColor: '#E2E8EC', color: '#5C6B73', minHeight: '52px' }}
                     >
                       Cancelar
                     </button>
                     <button
                       onClick={acionarEmergencia}
                       disabled={executando}
-                      className="flex-1 py-2.5 rounded text-white font-black text-sm uppercase tracking-wider transition-colors disabled:opacity-50"
-                      style={{ backgroundColor: '#B83832' }}
+                      className="flex-1 rounded text-white font-black text-sm uppercase tracking-wider transition-colors disabled:opacity-50"
+                      style={{ backgroundColor: '#B83832', minHeight: '52px' }}
                     >
                       {executando ? 'Acionando...' : 'CONFIRMAR'}
                     </button>

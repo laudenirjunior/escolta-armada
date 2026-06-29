@@ -527,7 +527,7 @@ export default function RelatoriosPage() {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
 
       {/* ── Header ── */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:flex-wrap">
         <div>
           <div className="eyebrow-tag" style={{ marginBottom: '8px' }}>
             <FileText size={10} />
@@ -538,6 +538,7 @@ export default function RelatoriosPage() {
         </div>
         <button
           style={exportBtnStyle}
+          className="w-full sm:w-auto justify-center"
           onClick={() => exportarCSVCompleto(escoltas, clientesMetrica, ocorrencias, periodo)}
           disabled={loading || escoltas.length === 0}
           onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = P.navy; (e.currentTarget as HTMLElement).style.color = P.navy }}
@@ -562,28 +563,32 @@ export default function RelatoriosPage() {
 
         {/* Datas personalizadas */}
         {tipoPeriodo === 'personalizado' && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:flex-wrap" style={{ gap: '8px' }}>
             <label style={{ fontSize: '10px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: P.textSub }}>De</label>
             <input type="date" value={dataInicio} onChange={e => setDataInicio(e.target.value)}
+              className="w-full sm:w-auto"
               style={{ padding: '7px 10px', fontSize: '12px', border: `1.5px solid ${P.border}`, borderRadius: '2px', color: P.text, outline: 'none' }} />
             <label style={{ fontSize: '10px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: P.textSub }}>Até</label>
             <input type="date" value={dataFim} onChange={e => setDataFim(e.target.value)}
+              className="w-full sm:w-auto"
               style={{ padding: '7px 10px', fontSize: '12px', border: `1.5px solid ${P.border}`, borderRadius: '2px', color: P.text, outline: 'none' }} />
           </div>
         )}
 
         {/* Cliente + Status + Gerar */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap', borderTop: `1px solid ${P.steelBg}`, paddingTop: '12px' }}>
-          <div style={{ position: 'relative' }}>
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center" style={{ borderTop: `1px solid ${P.steelBg}`, paddingTop: '12px', gap: '10px' }}>
+          <div style={{ position: 'relative' }} className="w-full sm:w-auto">
             <select value={clienteFiltroId} onChange={e => setClienteFiltroId(e.target.value)}
+              className="w-full sm:w-auto"
               style={{ padding: '8px 32px 8px 10px', fontSize: '12px', fontWeight: 600, border: `1.5px solid ${clienteFiltroId ? P.navy : P.border}`, borderRadius: '2px', color: clienteFiltroId ? P.navy : P.textSub, backgroundColor: clienteFiltroId ? P.navyBg : '#fff', outline: 'none', appearance: 'none', minWidth: '200px', cursor: 'pointer' }}>
               <option value="">Todos os clientes</option>
               {clientes.map(c => <option key={c.id} value={c.id}>{c.nome_cliente}</option>)}
             </select>
             <ChevronDown size={11} style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', color: P.textSub, pointerEvents: 'none' }} />
           </div>
-          <div style={{ position: 'relative' }}>
+          <div style={{ position: 'relative' }} className="w-full sm:w-auto">
             <select value={statusFiltro} onChange={e => setStatusFiltro(e.target.value)}
+              className="w-full sm:w-auto"
               style={{ padding: '8px 32px 8px 10px', fontSize: '12px', fontWeight: 600, border: `1.5px solid ${statusFiltro ? P.navy : P.border}`, borderRadius: '2px', color: statusFiltro ? P.navy : P.textSub, backgroundColor: statusFiltro ? P.navyBg : '#fff', outline: 'none', appearance: 'none', minWidth: '170px', cursor: 'pointer' }}>
               <option value="">Todos os status</option>
               {Object.entries(STATUS_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
@@ -591,7 +596,7 @@ export default function RelatoriosPage() {
             <ChevronDown size={11} style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', color: P.textSub, pointerEvents: 'none' }} />
           </div>
           <button
-            className="btn-primary"
+            className="btn-primary w-full sm:w-auto"
             style={{ minHeight: '44px', gap: '6px' }}
             onClick={() => { carregarEscoltas(); if (tab === 'ocorrencias') carregarOcorrencias() }}
           >
@@ -601,12 +606,14 @@ export default function RelatoriosPage() {
       </div>
 
       {/* ── Tab Navigation ── */}
-      <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
-        {TABS.map(t => (
-          <button key={t.id} style={btnTabStyle(tab === t.id)} onClick={() => setTab(t.id)}>
-            <t.icon size={13} /> {t.label}
-          </button>
-        ))}
+      <div className="overflow-x-auto -mx-1 px-1" style={{ scrollbarWidth: 'none' }}>
+        <div style={{ display: 'flex', gap: '4px', whiteSpace: 'nowrap' }}>
+          {TABS.map(t => (
+            <button key={t.id} style={btnTabStyle(tab === t.id)} onClick={() => setTab(t.id)}>
+              <t.icon size={13} /> {t.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* ══════════════════════════════════════════════════════
@@ -616,7 +623,7 @@ export default function RelatoriosPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
 
           {/* KPI Cards */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '10px' }}>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
             {[
               {
                 label: 'Total Escoltas',
@@ -704,7 +711,7 @@ export default function RelatoriosPage() {
           </div>
 
           {/* Metrics Grid */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
 
             {/* Distribuição por Status */}
             <div style={cardStyle}>
@@ -809,12 +816,12 @@ export default function RelatoriosPage() {
       {tab === 'escoltas' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
           {/* Sub-header */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:flex-wrap">
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
               <span className="badge-neutral">{escFiltradas.length.toLocaleString('pt-BR')} registros</span>
               {searchEsc && <span style={{ fontSize: '10px', color: P.textSub }}>filtrado por &quot;{searchEsc}&quot;</span>}
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
               {/* Search */}
               <div style={{ position: 'relative' }}>
                 <Search size={12} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: P.light, pointerEvents: 'none' }} />
@@ -823,11 +830,13 @@ export default function RelatoriosPage() {
                   placeholder="Buscar código, cliente, endereço..."
                   value={searchEsc}
                   onChange={e => setSearchEsc(e.target.value)}
-                  style={{ padding: '8px 10px 8px 30px', fontSize: '12px', border: `1.5px solid ${P.border}`, borderRadius: '2px', color: P.text, outline: 'none', width: '260px' }}
+                  className="w-full sm:w-auto"
+                  style={{ padding: '8px 10px 8px 30px', fontSize: '12px', border: `1.5px solid ${P.border}`, borderRadius: '2px', color: P.text, outline: 'none', minWidth: '200px' }}
                 />
               </div>
               <button style={exportBtnStyle} onClick={() => exportarCSVEscoltas(escFiltradas, periodo)}
                 disabled={escFiltradas.length === 0}
+                className="w-full sm:w-auto justify-center"
                 onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = P.navy; (e.currentTarget as HTMLElement).style.color = P.navy }}
                 onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = P.border; (e.currentTarget as HTMLElement).style.color = P.steel }}>
                 <Download size={12} /> Exportar CSV
@@ -840,90 +849,94 @@ export default function RelatoriosPage() {
             {loading ? <SkeletonRows n={8} cols={6} /> : escFiltradas.length === 0 ? (
               <EmptyState icon={FileText} msg="Nenhuma escolta encontrada" />
             ) : (
-              <div style={{ overflowX: 'auto' }}>
-                <table className="table-content">
-                  <thead>
-                    <tr>
-                      {[
-                        { col: 'codigo_escolta',    label: 'Código'   },
-                        { col: 'cliente',            label: 'Cliente'  },
-                        { col: 'status',             label: 'Status'   },
-                        { col: 'origem',             label: 'Origem'   },
-                        { col: 'destino',            label: 'Destino'  },
-                        { col: 'data_hora_prevista', label: 'Previsto' },
-                        { col: 'data_finalizacao',   label: 'Finaliz.' },
-                        { col: 'duracao',            label: 'Duração'  },
-                        { col: 'km',                 label: 'KM'       },
-                      ].map(h => (
-                        <th key={h.col} style={thStyle(h.col)} onClick={() => toggleSort(h.col)}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                            {h.label} <SortIcon col={h.col} sortCol={sortCol} sortDir={sortDir} />
-                          </div>
-                        </th>
-                      ))}
-                      <th style={{ width: '36px' }} />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {escPagina.map(e => {
-                      const km  = calcKmEscolta(e.veiculos)
-                      const dur = calcDuracaoMin(e)
-                      return (
-                        <tr key={e.id}
-                          style={{ cursor: 'pointer' }}
-                          onClick={() => window.open(`/dashboard/escoltas/${e.id}`, '_blank')}
-                        >
-                          <td>
-                            <span style={{ fontFamily: 'monospace', fontSize: '12px', fontWeight: 700, color: P.text }}>
-                              {e.codigo_escolta ?? '—'}
-                            </span>
-                          </td>
-                          <td>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              {e.cliente?.cor_destaque && <div style={{ width: '6px', height: '6px', borderRadius: '2px', backgroundColor: e.cliente.cor_destaque, flexShrink: 0 }} />}
-                              <span style={{ fontSize: '12px', color: P.text, maxWidth: '130px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                {e.cliente?.nome_cliente ?? '—'}
-                              </span>
+              <>
+                {/* Desktop table */}
+                <div className="hidden md:block" style={{ overflowX: 'auto' }}>
+                  <table className="table-content">
+                    <thead>
+                      <tr>
+                        {[
+                          { col: 'codigo_escolta',    label: 'Código'   },
+                          { col: 'cliente',            label: 'Cliente'  },
+                          { col: 'status',             label: 'Status'   },
+                          { col: 'origem',             label: 'Origem'   },
+                          { col: 'destino',            label: 'Destino'  },
+                          { col: 'data_hora_prevista', label: 'Previsto' },
+                          { col: 'data_finalizacao',   label: 'Finaliz.' },
+                          { col: 'duracao',            label: 'Duração'  },
+                          { col: 'km',                 label: 'KM'       },
+                        ].map(h => (
+                          <th key={h.col} style={thStyle(h.col)} onClick={() => toggleSort(h.col)}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                              {h.label} <SortIcon col={h.col} sortCol={sortCol} sortDir={sortDir} />
                             </div>
-                          </td>
-                          <td><span className={STATUS_BADGE[e.status] ?? 'badge-neutral'}>{STATUS_LABEL[e.status] ?? e.status}</span></td>
-                          <td>
-                            <span style={{ fontSize: '11px', color: P.textSub, maxWidth: '140px', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {e.origem_endereco ? e.origem_endereco.split(',').slice(0,2).join(',') : '—'}
-                            </span>
-                          </td>
-                          <td>
-                            <span style={{ fontSize: '11px', color: P.textSub, maxWidth: '140px', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {e.destino_endereco ? e.destino_endereco.split(',').slice(0,2).join(',') : '—'}
-                            </span>
-                          </td>
-                          <td>
-                            <span style={{ fontSize: '11px', color: P.textSub, whiteSpace: 'nowrap' }}>
-                              {new Date(e.data_hora_prevista).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' })}
-                            </span>
-                          </td>
-                          <td>
-                            <span style={{ fontSize: '11px', color: P.textSub, whiteSpace: 'nowrap' }}>
-                              {e.data_finalizacao ? new Date(e.data_finalizacao).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—'}
-                            </span>
-                          </td>
-                          <td>
-                            <span style={{ fontSize: '11px', color: P.text, fontWeight: 600 }}>
-                              {STATUSES_CONCLUIDOS.includes(e.status) ? formatDuracao(dur) : '—'}
-                            </span>
-                          </td>
-                          <td>
-                            <span style={{ fontSize: '11px', color: km > 0 ? P.text : P.light, fontWeight: km > 0 ? 700 : 400 }}>
-                              {km > 0 ? `${km.toLocaleString('pt-BR')} km` : '—'}
-                            </span>
-                          </td>
-                          <td><ChevronRight size={13} style={{ color: P.border }} /></td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                          </th>
+                        ))}
+                        <th style={{ width: '36px' }} />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {escPagina.map(e => {
+                        const km  = calcKmEscolta(e.veiculos)
+                        const dur = calcDuracaoMin(e)
+                        return (
+                          <tr key={e.id}
+                            style={{ cursor: 'pointer' }}
+                            onClick={() => window.open(`/dashboard/escoltas/${e.id}`, '_blank')}
+                          >
+                            <td><span style={{ fontFamily: 'monospace', fontSize: '12px', fontWeight: 700, color: P.text }}>{e.codigo_escolta ?? '—'}</span></td>
+                            <td>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                {e.cliente?.cor_destaque && <div style={{ width: '6px', height: '6px', borderRadius: '2px', backgroundColor: e.cliente.cor_destaque, flexShrink: 0 }} />}
+                                <span style={{ fontSize: '12px', color: P.text, maxWidth: '130px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.cliente?.nome_cliente ?? '—'}</span>
+                              </div>
+                            </td>
+                            <td><span className={STATUS_BADGE[e.status] ?? 'badge-neutral'}>{STATUS_LABEL[e.status] ?? e.status}</span></td>
+                            <td><span style={{ fontSize: '11px', color: P.textSub, maxWidth: '140px', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.origem_endereco ? e.origem_endereco.split(',').slice(0,2).join(',') : '—'}</span></td>
+                            <td><span style={{ fontSize: '11px', color: P.textSub, maxWidth: '140px', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.destino_endereco ? e.destino_endereco.split(',').slice(0,2).join(',') : '—'}</span></td>
+                            <td><span style={{ fontSize: '11px', color: P.textSub, whiteSpace: 'nowrap' }}>{new Date(e.data_hora_prevista).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' })}</span></td>
+                            <td><span style={{ fontSize: '11px', color: P.textSub, whiteSpace: 'nowrap' }}>{e.data_finalizacao ? new Date(e.data_finalizacao).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' }) : '—'}</span></td>
+                            <td><span style={{ fontSize: '11px', color: P.text, fontWeight: 600 }}>{STATUSES_CONCLUIDOS.includes(e.status) ? formatDuracao(dur) : '—'}</span></td>
+                            <td><span style={{ fontSize: '11px', color: km > 0 ? P.text : P.light, fontWeight: km > 0 ? 700 : 400 }}>{km > 0 ? `${km.toLocaleString('pt-BR')} km` : '—'}</span></td>
+                            <td><ChevronRight size={13} style={{ color: P.border }} /></td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Mobile cards */}
+                <div className="md:hidden space-y-2 p-3">
+                  {escPagina.map(e => {
+                    const km  = calcKmEscolta(e.veiculos)
+                    const dur = calcDuracaoMin(e)
+                    return (
+                      <button key={e.id}
+                        onClick={() => window.open(`/dashboard/escoltas/${e.id}`, '_blank')}
+                        className="w-full text-left rounded-lg p-3 border transition-all active:scale-[0.99]"
+                        style={{ borderColor: P.border, backgroundColor: '#fff' }}>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: 700, color: P.text }}>{e.codigo_escolta ?? '—'}</span>
+                          <span className={STATUS_BADGE[e.status] ?? 'badge-neutral'}>{STATUS_LABEL[e.status] ?? e.status}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 mb-1">
+                          {e.cliente?.cor_destaque && <div style={{ width: '6px', height: '6px', borderRadius: '2px', backgroundColor: e.cliente.cor_destaque, flexShrink: 0 }} />}
+                          <span style={{ fontSize: '12px', fontWeight: 600, color: P.text }}>{e.cliente?.nome_cliente ?? '—'}</span>
+                        </div>
+                        <p style={{ fontSize: '11px', color: P.textSub }} className="truncate">{e.origem_endereco ? e.origem_endereco.split(',').slice(0,2).join(',') : '—'}</p>
+                        <div className="flex items-center justify-between mt-1.5">
+                          <span style={{ fontSize: '11px', color: P.light }}>{new Date(e.data_hora_prevista).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' })}</span>
+                          <div className="flex items-center gap-2">
+                            {km > 0 && <span style={{ fontSize: '11px', color: P.text, fontWeight: 700 }}>{km.toLocaleString('pt-BR')} km</span>}
+                            {STATUSES_CONCLUIDOS.includes(e.status) && <span style={{ fontSize: '11px', color: P.textSub }}>{formatDuracao(dur)}</span>}
+                          </div>
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+              </>
             )}
 
             {/* Footer totais */}
@@ -984,55 +997,96 @@ export default function RelatoriosPage() {
             {loading ? <SkeletonRows n={5} cols={6} /> : clientesMetrica.length === 0 ? (
               <EmptyState icon={Users} msg="Nenhum dado de clientes no período" />
             ) : (
-              <div style={{ overflowX: 'auto' }}>
-                <table className="table-content">
-                  <thead>
-                    <tr>
-                      <th>Cliente</th>
-                      <th>Total</th>
-                      <th>Concluídas</th>
-                      <th>Canceladas</th>
-                      <th>Taxa Conclusão</th>
-                      <th>KM Total</th>
-                      <th>Duração Média</th>
-                      <th>Participação</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {clientesMetrica.map(c => {
-                      const tx = (c.concluidas + c.canceladas) > 0
-                        ? Math.round((c.concluidas / (c.concluidas + c.canceladas)) * 100) : 0
-                      const participacao = total > 0 ? (c.total / total) * 100 : 0
-                      return (
-                        <tr key={c.id}>
-                          <td>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <div style={{ width: '8px', height: '8px', borderRadius: '2px', backgroundColor: c.cor, flexShrink: 0 }} />
-                              <span style={{ fontSize: '12px', fontWeight: 700, color: P.text }}>{c.nome}</span>
-                            </div>
-                          </td>
-                          <td><span style={{ fontSize: '14px', fontWeight: 900, color: P.text }}>{c.total}</span></td>
-                          <td><span style={{ fontSize: '12px', fontWeight: 600, color: P.successText }}>{c.concluidas}</span></td>
-                          <td><span style={{ fontSize: '12px', fontWeight: 600, color: c.canceladas > 0 ? P.errorText : P.light }}>{c.canceladas}</span></td>
-                          <td>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                              <span style={{ fontSize: '12px', fontWeight: 700, color: tx >= 80 ? P.navy : P.errorText, minWidth: '36px' }}>{tx}%</span>
-                            </div>
-                          </td>
-                          <td><span style={{ fontSize: '12px', color: P.text }}>{c.kmTotal.toLocaleString('pt-BR')} km</span></td>
-                          <td><span style={{ fontSize: '12px', color: P.textSub }}>{c.duracaoMediaMin > 0 ? formatDuracao(Math.round(c.duracaoMediaMin)) : '—'}</span></td>
-                          <td>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '100px' }}>
-                              <MiniBar pct={participacao} color={c.cor || P.navy} />
-                              <span style={{ fontSize: '10px', color: P.textSub, flexShrink: 0 }}>{participacao.toFixed(0)}%</span>
-                            </div>
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <>
+                {/* Desktop table */}
+                <div className="hidden md:block" style={{ overflowX: 'auto' }}>
+                  <table className="table-content">
+                    <thead>
+                      <tr>
+                        <th>Cliente</th>
+                        <th>Total</th>
+                        <th>Concluídas</th>
+                        <th>Canceladas</th>
+                        <th>Taxa Conclusão</th>
+                        <th>KM Total</th>
+                        <th>Duração Média</th>
+                        <th>Participação</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {clientesMetrica.map(c => {
+                        const tx = (c.concluidas + c.canceladas) > 0
+                          ? Math.round((c.concluidas / (c.concluidas + c.canceladas)) * 100) : 0
+                        const participacao = total > 0 ? (c.total / total) * 100 : 0
+                        return (
+                          <tr key={c.id}>
+                            <td>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <div style={{ width: '8px', height: '8px', borderRadius: '2px', backgroundColor: c.cor, flexShrink: 0 }} />
+                                <span style={{ fontSize: '12px', fontWeight: 700, color: P.text }}>{c.nome}</span>
+                              </div>
+                            </td>
+                            <td><span style={{ fontSize: '14px', fontWeight: 900, color: P.text }}>{c.total}</span></td>
+                            <td><span style={{ fontSize: '12px', fontWeight: 600, color: P.successText }}>{c.concluidas}</span></td>
+                            <td><span style={{ fontSize: '12px', fontWeight: 600, color: c.canceladas > 0 ? P.errorText : P.light }}>{c.canceladas}</span></td>
+                            <td><span style={{ fontSize: '12px', fontWeight: 700, color: tx >= 80 ? P.navy : P.errorText }}>{tx}%</span></td>
+                            <td><span style={{ fontSize: '12px', color: P.text }}>{c.kmTotal.toLocaleString('pt-BR')} km</span></td>
+                            <td><span style={{ fontSize: '12px', color: P.textSub }}>{c.duracaoMediaMin > 0 ? formatDuracao(Math.round(c.duracaoMediaMin)) : '—'}</span></td>
+                            <td>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', minWidth: '100px' }}>
+                                <MiniBar pct={participacao} color={c.cor || P.navy} />
+                                <span style={{ fontSize: '10px', color: P.textSub, flexShrink: 0 }}>{participacao.toFixed(0)}%</span>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Mobile cards */}
+                <div className="md:hidden space-y-2 p-3">
+                  {clientesMetrica.map(c => {
+                    const tx = (c.concluidas + c.canceladas) > 0
+                      ? Math.round((c.concluidas / (c.concluidas + c.canceladas)) * 100) : 0
+                    const participacao = total > 0 ? (c.total / total) * 100 : 0
+                    return (
+                      <div key={c.id} className="rounded-lg p-3 border" style={{ borderColor: P.border, backgroundColor: '#fff' }}>
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <div style={{ width: '8px', height: '8px', borderRadius: '2px', backgroundColor: c.cor, flexShrink: 0 }} />
+                            <span style={{ fontSize: '13px', fontWeight: 700, color: P.text }}>{c.nome}</span>
+                          </div>
+                          <span style={{ fontSize: '16px', fontWeight: 900, color: P.text }}>{c.total}</span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 mb-2">
+                          <div className="text-center p-1.5 rounded" style={{ backgroundColor: P.successBg }}>
+                            <p style={{ fontSize: '13px', fontWeight: 700, color: P.successText }}>{c.concluidas}</p>
+                            <p style={{ fontSize: '9px', color: P.successText }}>Concluídas</p>
+                          </div>
+                          <div className="text-center p-1.5 rounded" style={{ backgroundColor: c.canceladas > 0 ? P.errorBg : P.steelBg }}>
+                            <p style={{ fontSize: '13px', fontWeight: 700, color: c.canceladas > 0 ? P.errorText : P.light }}>{c.canceladas}</p>
+                            <p style={{ fontSize: '9px', color: c.canceladas > 0 ? P.errorText : P.light }}>Canceladas</p>
+                          </div>
+                          <div className="text-center p-1.5 rounded" style={{ backgroundColor: tx >= 80 ? P.navyBg : P.errorBg }}>
+                            <p style={{ fontSize: '13px', fontWeight: 700, color: tx >= 80 ? P.navy : P.errorText }}>{tx}%</p>
+                            <p style={{ fontSize: '9px', color: tx >= 80 ? P.navy : P.errorText }}>Conclusão</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 mt-1">
+                          <MiniBar pct={participacao} color={c.cor || P.navy} />
+                          <span style={{ fontSize: '10px', color: P.textSub, flexShrink: 0 }}>{participacao.toFixed(0)}%</span>
+                        </div>
+                        <div className="flex items-center justify-between mt-1">
+                          <span style={{ fontSize: '11px', color: P.textSub }}>{c.kmTotal.toLocaleString('pt-BR')} km</span>
+                          <span style={{ fontSize: '11px', color: P.textSub }}>{c.duracaoMediaMin > 0 ? formatDuracao(Math.round(c.duracaoMediaMin)) : '—'}</span>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </>
             )}
           </div>
         </div>
@@ -1043,11 +1097,12 @@ export default function RelatoriosPage() {
       ══════════════════════════════════════════════════════ */}
       {tab === 'ocorrencias' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:flex-wrap">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-2">
               {/* Filtro tipo */}
-              <div style={{ position: 'relative' }}>
+              <div style={{ position: 'relative' }} className="w-full sm:w-auto">
                 <select value={tipoOcorrFiltro} onChange={e => setTipoOcorrFiltro(e.target.value)}
+                  className="w-full sm:w-auto"
                   style={{ padding: '8px 30px 8px 10px', fontSize: '12px', fontWeight: 600, border: `1.5px solid ${tipoOcorrFiltro ? P.navy : P.border}`, borderRadius: '2px', color: tipoOcorrFiltro ? P.navy : P.textSub, backgroundColor: tipoOcorrFiltro ? P.navyBg : '#fff', outline: 'none', appearance: 'none', minWidth: '180px', cursor: 'pointer' }}>
                   <option value="">Todos os tipos</option>
                   {tiposOcorrencia.map(t => <option key={t} value={t}>{t}</option>)}
@@ -1058,6 +1113,7 @@ export default function RelatoriosPage() {
             </div>
             <button style={exportBtnStyle} onClick={() => exportarCSVOcorrencias(ocorrFiltradas, periodo)}
               disabled={ocorrFiltradas.length === 0}
+              className="w-full sm:w-auto justify-center"
               onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = P.navy; (e.currentTarget as HTMLElement).style.color = P.navy }}
               onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = P.border; (e.currentTarget as HTMLElement).style.color = P.steel }}>
               <Download size={12} /> Exportar CSV
@@ -1068,48 +1124,50 @@ export default function RelatoriosPage() {
             {loadingOcorr ? <SkeletonRows n={6} cols={5} /> : ocorrFiltradas.length === 0 ? (
               <EmptyState icon={AlertTriangle} msg="Nenhuma ocorrência no período" />
             ) : (
-              <div style={{ overflowX: 'auto' }}>
-                <table className="table-content">
-                  <thead>
-                    <tr>
-                      <th>Data/Hora</th>
-                      <th>Código Escolta</th>
-                      <th>Tipo</th>
-                      <th>Descrição</th>
-                      <th>Registrado por</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {ocorrPagina.map(o => (
-                      <tr key={o.id}>
-                        <td>
-                          <span style={{ fontSize: '11px', color: P.textSub, whiteSpace: 'nowrap' }}>
-                            {new Date(o.data_hora).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' })}
-                          </span>
-                        </td>
-                        <td>
-                          <span style={{ fontFamily: 'monospace', fontSize: '12px', fontWeight: 700, color: P.navy }}>
-                            {o.escolta?.codigo_escolta ?? '—'}
-                          </span>
-                        </td>
-                        <td>
-                          {o.tipo?.nome
-                            ? <span className="badge-warning">{o.tipo.nome}</span>
-                            : <span style={{ fontSize: '11px', color: P.light }}>—</span>}
-                        </td>
-                        <td>
-                          <span style={{ fontSize: '12px', color: P.text, display: 'block', maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {o.descricao}
-                          </span>
-                        </td>
-                        <td>
-                          <span style={{ fontSize: '11px', color: P.textSub }}>{o.autor?.nome_completo ?? '—'}</span>
-                        </td>
+              <>
+                {/* Desktop table */}
+                <div className="hidden md:block" style={{ overflowX: 'auto' }}>
+                  <table className="table-content">
+                    <thead>
+                      <tr>
+                        <th>Data/Hora</th>
+                        <th>Código Escolta</th>
+                        <th>Tipo</th>
+                        <th>Descrição</th>
+                        <th>Registrado por</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody>
+                      {ocorrPagina.map(o => (
+                        <tr key={o.id}>
+                          <td><span style={{ fontSize: '11px', color: P.textSub, whiteSpace: 'nowrap' }}>{new Date(o.data_hora).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' })}</span></td>
+                          <td><span style={{ fontFamily: 'monospace', fontSize: '12px', fontWeight: 700, color: P.navy }}>{o.escolta?.codigo_escolta ?? '—'}</span></td>
+                          <td>{o.tipo?.nome ? <span className="badge-warning">{o.tipo.nome}</span> : <span style={{ fontSize: '11px', color: P.light }}>—</span>}</td>
+                          <td><span style={{ fontSize: '12px', color: P.text, display: 'block', maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{o.descricao}</span></td>
+                          <td><span style={{ fontSize: '11px', color: P.textSub }}>{o.autor?.nome_completo ?? '—'}</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Mobile cards */}
+                <div className="md:hidden space-y-2 p-3">
+                  {ocorrPagina.map(o => (
+                    <div key={o.id} className="rounded-lg p-3 border" style={{ borderColor: P.border, backgroundColor: '#fff' }}>
+                      <div className="flex items-start justify-between gap-2 mb-1.5">
+                        <span style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: 700, color: P.navy }}>{o.escolta?.codigo_escolta ?? '—'}</span>
+                        {o.tipo?.nome ? <span className="badge-warning">{o.tipo.nome}</span> : <span style={{ fontSize: '11px', color: P.light }}>—</span>}
+                      </div>
+                      <p style={{ fontSize: '12px', color: P.text }} className="line-clamp-2 mb-1.5">{o.descricao}</p>
+                      <div className="flex items-center justify-between">
+                        <span style={{ fontSize: '11px', color: P.textSub }}>{o.autor?.nome_completo ?? '—'}</span>
+                        <span style={{ fontSize: '11px', color: P.light }}>{new Date(o.data_hora).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' })}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
 
             {/* Paginação ocorrências */}

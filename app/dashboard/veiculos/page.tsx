@@ -1,4 +1,4 @@
-﻿'use client'
+'use client'
 
 import { useEffect, useState, useCallback } from 'react'
 import { Plus, Search, Edit2, Truck } from 'lucide-react'
@@ -150,6 +150,7 @@ export default function VeiculosPage() {
 
   return (
     <div className="space-y-5">
+      {/* ── Header ── */}
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-white">Veículos</h2>
@@ -160,27 +161,29 @@ export default function VeiculosPage() {
         {podeEditar && (
           <Button onClick={abrirNovo} className="gap-2">
             <Plus size={16} />
-            Novo Veículo
+            <span className="hidden sm:inline">Novo Veículo</span>
+            <span className="sm:hidden">Novo</span>
           </Button>
         )}
       </div>
 
-      <div className="flex gap-3 flex-wrap">
-        <div className="relative flex-1 min-w-48">
+      {/* ── Filtros ── */}
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="relative flex-1">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30" />
           <Input
             placeholder="Buscar por placa, modelo ou tipo..."
             value={busca}
             onChange={(e) => setBusca(e.target.value)}
-            className="pl-9"
+            className="pl-9 w-full"
           />
         </div>
-        <div className="flex gap-1">
+        <div className="flex gap-1 flex-wrap">
           {(['todos', 'ativo', 'inativo', 'manutencao'] as const).map((s) => (
             <button
               key={s}
               onClick={() => setFiltroStatus(s)}
-              className={`px-3 py-1.5 rounded-sm text-xs font-medium transition-colors ${
+              className={`flex-1 sm:flex-none px-3 py-1.5 rounded-sm text-xs font-medium transition-colors ${
                 filtroStatus === s
                   ? 'bg-sky-500 text-white'
                   : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/70'
@@ -192,6 +195,7 @@ export default function VeiculosPage() {
         </div>
       </div>
 
+      {/* ── Lista ── */}
       {loading ? (
         <p className="text-sm text-text-secondary">Carregando...</p>
       ) : filtrados.length === 0 ? (
@@ -207,11 +211,13 @@ export default function VeiculosPage() {
             return (
               <div
                 key={v.id}
-                className="flex items-center gap-4 p-4 bg-white/2 border border-white/5 hover:border-white/10 rounded-sm transition-colors"
+                className="flex items-center gap-3 sm:gap-4 p-4 bg-white/2 border border-white/5 hover:border-white/10 rounded-sm transition-colors"
               >
+                {/* Ícone do caminhão */}
                 <div className="w-9 h-9 rounded-sm bg-white/5 flex items-center justify-center text-white/40 shrink-0">
                   <Truck size={16} />
                 </div>
+                {/* Dados do veículo */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-mono font-semibold text-white">
@@ -226,8 +232,14 @@ export default function VeiculosPage() {
                     <p className="text-xs text-white/40 mt-0.5">{v.modelo}</p>
                   )}
                 </div>
+                {/* Botão editar touch-friendly */}
                 {podeEditar && (
-                  <Button variant="ghost" size="icon-sm" onClick={() => abrirEdicao(v)}>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={() => abrirEdicao(v)}
+                    className="min-h-[44px] min-w-[44px]"
+                  >
                     <Edit2 size={14} />
                   </Button>
                 )}
@@ -237,6 +249,7 @@ export default function VeiculosPage() {
         </div>
       )}
 
+      {/* ── Dialog ── */}
       <Dialog
         isOpen={dialogAberto}
         onClose={() => setDialogAberto(false)}
@@ -255,7 +268,7 @@ export default function VeiculosPage() {
             <p className="text-xs text-red-400 bg-red-500/10 px-3 py-2 rounded-sm">{erro}</p>
           )}
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label className="text-xs text-text-secondary mb-1 block">Placa *</Label>
               <Input
