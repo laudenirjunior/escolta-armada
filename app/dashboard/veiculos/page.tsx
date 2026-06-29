@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useEffect, useState, useCallback } from 'react'
 import { Plus, Search, Edit2, Truck } from 'lucide-react'
@@ -69,7 +69,7 @@ export default function VeiculosPage() {
   const supabase = createClient()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sb = supabase as any
-  const podeEditar = PODE_EDITAR.includes(user?.perfil?.codigo ?? '')
+  const podeEditar = PODE_EDITAR.includes((user?.perfil?.codigo ?? '') as any)
 
   const carregar = useCallback(async () => {
     setLoading(true)

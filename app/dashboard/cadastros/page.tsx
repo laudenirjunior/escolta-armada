@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useEffect, useState, useCallback } from 'react'
 import {
@@ -122,7 +122,7 @@ export default function CadastrosPage() {
 
   const [saving, setSaving] = useState(false)
 
-  const canEdit = ['administrador','gestor','supervisor'].includes(user?.perfil?.codigo ?? '')
+  const canEdit = ['administrador','gestor','supervisor'].includes((user?.perfil?.codigo ?? '') as any)
 
   /* ── Load ── */
   const loadClientes = useCallback(async () => {

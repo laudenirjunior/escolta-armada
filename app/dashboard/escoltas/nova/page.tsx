@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
@@ -257,7 +257,7 @@ export default function NovaEscoltaPage() {
   const [outrosCustos, setOutrosCustos] = useState('')
   const [obsFinanceiro, setObsFinanceiro] = useState('')
   const [periodicidadeCheckin, setPeriodicidadeCheckin] = useState('30')
-  const verFinanceiro = PERFIS_FINANCEIRO.includes(user?.perfil?.codigo ?? '')
+  const verFinanceiro = PERFIS_FINANCEIRO.includes((user?.perfil?.codigo ?? '') as any)
 
   const carregar = useCallback(async () => {
     const [{ data: cls }, { data: vcs }, { data: vgs }] = await Promise.all([

@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import {
@@ -230,7 +230,7 @@ export default function CampoPage() {
   // Emergência
   const [emergConfirm, setEmergConfirm] = useState(false)
 
-  const isAdmin = ['administrador', 'gestor', 'supervisor', 'central'].includes(user?.perfil?.codigo ?? '')
+  const isAdmin = ['administrador', 'gestor', 'supervisor', 'central'].includes((user?.perfil?.codigo ?? '') as any)
 
   const showToast = (tipo: 'ok' | 'erro', texto: string) => {
     setToast({ tipo, texto })

@@ -1,4 +1,4 @@
-'use client'
+﻿'use client'
 
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
@@ -165,7 +165,7 @@ export default function IndicadoresPage() {
   const router = useRouter()
   const sb = createClient()
   const { user } = useAuth()
-  const verFinanceiro = PERFIS_FINANCEIRO_IND.includes(user?.perfil?.codigo ?? '')
+  const verFinanceiro = PERFIS_FINANCEIRO_IND.includes((user?.perfil?.codigo ?? '') as any)
 
   // Filtros
   const [tipoPeriodo, setTipoPeriodo] = useState<TipoPeriodo>('mes')

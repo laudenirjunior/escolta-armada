@@ -1876,7 +1876,7 @@ export default function EscoltaDetalhePage() {
   const totalEfetivo = viaturas.reduce((acc, v) => acc + v.efetivo.length, 0)
   const isFinalizado = ['finalizada', 'cancelada'].includes(escolta.status)
 
-  const verFinanceiroDet = PERFIS_FINANCEIRO_DET.includes(user?.perfil?.codigo ?? '')
+  const verFinanceiroDet = PERFIS_FINANCEIRO_DET.includes((user?.perfil?.codigo ?? '') as any)
 
   const TABS: { key: Tab; label: string; count?: number }[] = [
     { key: 'geral',       label: 'Visão Geral' },
