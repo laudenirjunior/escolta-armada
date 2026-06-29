@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
-import { MapPin, Navigation, ArrowRight, RefreshCw, ExternalLink } from 'lucide-react'
+import { MapPin, ArrowRight, RefreshCw, ExternalLink, ChevronLeft } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
 
@@ -82,6 +82,24 @@ function corSinal(iso: string): string {
 function buildGMapsUrl(lat: number, lng: number) {
   return `https://www.google.com/maps?q=${lat},${lng}`
 }
+
+// Busca rota real via Mapbox Directions API (segue estradas)
+async function fetchRotaReal(
+  origLng: number, origLat: number,
+  destLng: number, destLat: number,
+): Promise<[number, number][]> {
+  try {
+    const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${origLng},${origLat};${destLng},${destLat}?geometries=geojson&overview=full&access_token=${MAPBOX_TOKEN}`
+    const res = await fetch(url)
+    const data = await res.json()
+    if (data.routes?.[0]?.geometry?.coordinates?.length) {
+      return data.routes[0].geometry.coordinates as [number, number][]
+    }
+  } catch {}
+  return []
+}
+
+// ── Criação de elementos HTML para marcadores --------------------------------
 
 function criarElOrigem(color: string): HTMLElement {
   const el = document.createElement('div')
@@ -170,22 +188,24 @@ export default function MapaPage() {
   const [selecionada, setSelecionada]   = useState<EscoltaAtiva | null>(null)
   const [historico, setHistorico]       = useState<HistoricoPos[]>([])
   const [loading, setLoading]           = useState(true)
+  const [rotaLoading, setRotaLoading]   = useState(false)
   const [lastUpdate, setLastUpdate]     = useState<Date>(new Date())
   const [mapReady, setMapReady]         = useState(false)
-  const [tick, setTick]                 = useState(0) // força re-render para "X min atrás"
+  const [tick, setTick]                 = useState(0)
 
   const mapContainerRef = useRef<HTMLDivElement>(null)
   const mapRef          = useRef<mapboxgl.Map | null>(null)
   const markersRef      = useRef<Map<string, MarkerSet>>(new Map())
+  const fittedRef       = useRef(false) // controla o fit-to-all inicial
 
   // Atualiza contadores de tempo a cada minuto
   useEffect(() => {
     const t = setInterval(() => setTick(n => n + 1), 60000)
     return () => clearInterval(t)
   }, [])
-  void tick // usado indiretamente pelo render
+  void tick
 
-  // ── Carregar dados ----------------------------------------------------------
+  // ── Carregar dados ---------------------------------------------------------
   const carregar = useCallback(async () => {
     setLoading(true)
     try {
@@ -208,12 +228,10 @@ export default function MapaPage() {
         return
       }
 
-      // IDs de todos os veículos das escoltas ativas
       const viaturaIds: string[] = (raw as any[]).flatMap(e =>
         (e.veiculos ?? []).map((v: any) => v.id)
       )
 
-      // Último ponto_controle com GPS por viatura
       let ultimosPontos: Record<string, any> = {}
       if (viaturaIds.length > 0) {
         const { data: pontos } = await sb
@@ -225,7 +243,6 @@ export default function MapaPage() {
           .order('data_hora', { ascending: false })
           .limit(viaturaIds.length * 15)
 
-        // Simulação de DISTINCT ON: primeiro = mais recente (já ordenado DESC)
         for (const pt of (pontos ?? []) as any[]) {
           if (!ultimosPontos[pt.escolta_veiculo_id]) {
             ultimosPontos[pt.escolta_veiculo_id] = pt
@@ -267,7 +284,7 @@ export default function MapaPage() {
       setEscoltas(lista)
       setLastUpdate(new Date())
       setSelecionada(prev => {
-        if (!prev) return lista[0] ?? null
+        if (!prev) return null  // mantém "mostrar todos" por padrão
         return lista.find(e => e.id === prev.id) ?? prev
       })
     } finally {
@@ -275,7 +292,7 @@ export default function MapaPage() {
     }
   }, [])
 
-  // Histórico de posições para breadcrumb
+  // Histórico de posições para breadcrumb (rastro)
   const carregarHistorico = useCallback(async (e: EscoltaAtiva) => {
     if (!e.viatura_id) { setHistorico([]); return }
     const { data } = await sb
@@ -300,7 +317,7 @@ export default function MapaPage() {
     else setHistorico([])
   }, [selecionada, carregarHistorico])
 
-  // ── Realtime: novo ponto_controle ------------------------------------------
+  // ── Realtime ---------------------------------------------------------------
   useEffect(() => {
     const ch = sb.channel('mapa-realtime-pontos')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'pontos_controle' },
@@ -315,17 +332,12 @@ export default function MapaPage() {
           const novoPonto: UltimoPonto = { lat: pt.latitude, lng: pt.longitude, data_hora: pt.data_hora, tipo: 'Reporte', endereco }
           setEscoltas(prev => prev.map(e => e.id === vt.escolta_id ? { ...e, ultimo_ponto: novoPonto } : e))
           setSelecionada(prev => (prev?.id === vt.escolta_id && prev) ? ({ ...prev, ultimo_ponto: novoPonto } as EscoltaAtiva) : prev)
-          setHistorico(prev => {
-            // só adiciona se a escolta selecionada é a mesma
-            return prev
-          })
         }
       )
       .subscribe()
     return () => { sb.removeChannel(ch) }
   }, [])
 
-  // ── Realtime: status da escolta muda ---------------------------------------
   useEffect(() => {
     const ch = sb.channel('mapa-realtime-status')
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'escoltas' }, () => carregar())
@@ -347,36 +359,40 @@ export default function MapaPage() {
     map.addControl(new mapboxgl.NavigationControl({ showCompass: false }), 'top-right')
     map.addControl(new mapboxgl.AttributionControl({ compact: true }), 'bottom-right')
     map.on('load', () => {
-      // Rota percorrida (sólida colorida)
-      map.addSource('rota-traj', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+      // Rota real (Mapbox Directions)
+      map.addSource('rota-real', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
       map.addLayer({
-        id: 'rota-traj-line', type: 'line', source: 'rota-traj',
-        paint: { 'line-color': ['get', 'cor'], 'line-width': 3, 'line-opacity': 0.9 },
+        id: 'rota-real-bg', type: 'line', source: 'rota-real',
+        paint: { 'line-color': '#fff', 'line-width': 6, 'line-opacity': 0.6 },
       })
-      // Rota restante (tracejada cinza)
-      map.addSource('rota-rest', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
       map.addLayer({
-        id: 'rota-rest-line', type: 'line', source: 'rota-rest',
-        paint: { 'line-color': '#9CA3AF', 'line-width': 2, 'line-opacity': 0.45, 'line-dasharray': [4, 3] },
+        id: 'rota-real-line', type: 'line', source: 'rota-real',
+        paint: { 'line-color': ['get', 'cor'], 'line-width': 3.5, 'line-opacity': 0.85 },
       })
-      // Breadcrumb dots
+      // Breadcrumb (rastro de posições históricas)
       map.addSource('breadcrumb', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
       map.addLayer({
         id: 'breadcrumb-dots', type: 'circle', source: 'breadcrumb',
-        paint: { 'circle-radius': 4, 'circle-color': ['get', 'cor'], 'circle-opacity': 0.55, 'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5 },
+        paint: {
+          'circle-radius': 4,
+          'circle-color': ['get', 'cor'],
+          'circle-opacity': 0.55,
+          'circle-stroke-color': '#fff',
+          'circle-stroke-width': 1.5,
+        },
       })
       setMapReady(true)
     })
     mapRef.current = map
-    return () => { map.remove(); mapRef.current = null; setMapReady(false) }
+    return () => { map.remove(); mapRef.current = null; setMapReady(false); fittedRef.current = false }
   }, [])
 
-  // ── Atualizar marcadores no mapa -------------------------------------------
+  // ── Atualizar marcadores ---------------------------------------------------
   useEffect(() => {
     if (!mapRef.current || !mapReady) return
     const map = mapRef.current
 
-    // Remove marcadores de escoltas que saíram da lista
+    // Remove marcadores de escoltas que saíram
     const idsAtivos = new Set(escoltas.map(e => e.id))
     markersRef.current.forEach((ms, id) => {
       if (!idsAtivos.has(id)) {
@@ -396,9 +412,9 @@ export default function MapaPage() {
         existing.pos.setLngLat([posLng, posLat])
         existing.pos.getPopup()?.setHTML(popupHTML(e))
       } else {
-        // Criar marcadores
+        // Origem
         const origEl = criarElOrigem(s.color)
-        const origMarker = e.origem_lat && e.origem_lng
+        const origMarker = (e.origem_lat && e.origem_lng)
           ? new mapboxgl.Marker({ element: origEl })
               .setLngLat([e.origem_lng, e.origem_lat])
               .setPopup(new mapboxgl.Popup({ offset: 12, closeButton: false }).setHTML(
@@ -408,6 +424,7 @@ export default function MapaPage() {
               .addTo(map)
           : new mapboxgl.Marker({ element: origEl }).setLngLat([posLng, posLat])
 
+        // Posição atual
         const posEl = criarElPosicao(e.codigo_escolta ?? '—', s.color)
         posEl.addEventListener('click', () => setSelecionada(e))
         const posMarker = new mapboxgl.Marker({ element: posEl, anchor: 'bottom' })
@@ -415,6 +432,7 @@ export default function MapaPage() {
           .setPopup(new mapboxgl.Popup({ offset: 24, closeButton: false }).setHTML(popupHTML(e)))
           .addTo(map)
 
+        // Destino
         let destMarker: mapboxgl.Marker | null = null
         if (e.destino_lat && e.destino_lng) {
           const destEl = criarElDestino()
@@ -429,50 +447,72 @@ export default function MapaPage() {
         markersRef.current.set(e.id, { pos: posMarker, orig: origMarker, dest: destMarker })
       }
     })
-  }, [escoltas, mapReady])
 
-  // ── Rota + breadcrumb para selecionada ------------------------------------
+    // Fit inicial: mostra todos os marcadores quando o mapa está pronto e tem dados
+    if (!fittedRef.current && !selecionada && escoltas.length > 0) {
+      const coords: [number, number][] = []
+      escoltas.forEach(e => {
+        const lat = e.ultimo_ponto?.lat ?? e.origem_lat
+        const lng = e.ultimo_ponto?.lng ?? e.origem_lng
+        if (lat != null && lng != null) coords.push([lng, lat])
+        if (e.destino_lat && e.destino_lng) coords.push([e.destino_lng, e.destino_lat])
+      })
+      if (coords.length > 0) {
+        const b = new mapboxgl.LngLatBounds()
+        coords.forEach(c => b.extend(c))
+        map.fitBounds(b, { padding: { top: 80, bottom: 100, left: 60, right: 60 }, duration: 1200, maxZoom: 13 })
+        fittedRef.current = true
+      }
+    }
+  }, [escoltas, mapReady, selecionada])
+
+  // ── Rota real + breadcrumb ao selecionar/desselecionar ----------------------
   useEffect(() => {
     if (!mapRef.current || !mapReady) return
     const map = mapRef.current
-    const s = selecionada ? (STATUS_MAP[selecionada.status] ?? { color: '#53648A' }) : null
-
-    const posLat = selecionada?.ultimo_ponto?.lat ?? selecionada?.origem_lat
-    const posLng = selecionada?.ultimo_ponto?.lng ?? selecionada?.origem_lng
-
-    // Rota percorrida
-    const trajSrc = map.getSource('rota-traj') as mapboxgl.GeoJSONSource | undefined
-    if (trajSrc) {
-      const coords = (selecionada && selecionada.origem_lat && selecionada.origem_lng && posLat && posLng)
-        ? [[selecionada.origem_lng, selecionada.origem_lat], [posLng, posLat]]
-        : []
-      trajSrc.setData({ type: 'FeatureCollection', features: coords.length ? [{ type: 'Feature', properties: { cor: s?.color ?? '#53648A' }, geometry: { type: 'LineString', coordinates: coords } }] : [] })
-    }
-
-    // Rota restante
-    const restSrc = map.getSource('rota-rest') as mapboxgl.GeoJSONSource | undefined
-    if (restSrc) {
-      const coords = (selecionada && posLat && posLng && selecionada.destino_lat && selecionada.destino_lng)
-        ? [[posLng, posLat], [selecionada.destino_lng, selecionada.destino_lat]]
-        : []
-      restSrc.setData({ type: 'FeatureCollection', features: coords.length ? [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } }] : [] })
-    }
-
-    // Breadcrumb
+    const rotaSrc = map.getSource('rota-real') as mapboxgl.GeoJSONSource | undefined
     const breadSrc = map.getSource('breadcrumb') as mapboxgl.GeoJSONSource | undefined
+
+    if (!selecionada) {
+      // Desselecionar: limpa rota e rastro, mostra todos
+      rotaSrc?.setData({ type: 'FeatureCollection', features: [] })
+      breadSrc?.setData({ type: 'FeatureCollection', features: [] })
+      const coords: [number, number][] = []
+      escoltas.forEach(e => {
+        const lat = e.ultimo_ponto?.lat ?? e.origem_lat
+        const lng = e.ultimo_ponto?.lng ?? e.origem_lng
+        if (lat != null && lng != null) coords.push([lng, lat])
+        if (e.destino_lat && e.destino_lng) coords.push([e.destino_lng, e.destino_lat])
+      })
+      if (coords.length > 0) {
+        const b = new mapboxgl.LngLatBounds()
+        coords.forEach(c => b.extend(c))
+        map.fitBounds(b, { padding: { top: 80, bottom: 100, left: 60, right: 60 }, duration: 900, maxZoom: 13 })
+      }
+      return
+    }
+
+    const s = STATUS_MAP[selecionada.status] ?? { color: '#53648A' }
+    const posLat = selecionada.ultimo_ponto?.lat ?? selecionada.origem_lat
+    const posLng = selecionada.ultimo_ponto?.lng ?? selecionada.origem_lng
+
+    // Breadcrumb (rastro histórico)
     if (breadSrc) {
       breadSrc.setData({
         type: 'FeatureCollection',
         features: historico.map(h => ({
           type: 'Feature' as const,
-          properties: { cor: s?.color ?? '#53648A' },
+          properties: { cor: s.color },
           geometry: { type: 'Point' as const, coordinates: [h.lng, h.lat] },
         })),
       })
     }
 
-    // Câmera
-    if (selecionada && posLat && posLng) {
+    // Limpa rota anterior enquanto busca nova
+    rotaSrc?.setData({ type: 'FeatureCollection', features: [] })
+
+    // Câmera: centraliza na escolta selecionada
+    if (posLat != null && posLng != null) {
       if (selecionada.origem_lat && selecionada.origem_lng && selecionada.destino_lat && selecionada.destino_lng) {
         const b = new mapboxgl.LngLatBounds()
         b.extend([selecionada.origem_lng, selecionada.origem_lat])
@@ -482,12 +522,29 @@ export default function MapaPage() {
       } else {
         map.flyTo({ center: [posLng, posLat], zoom: 13, duration: 900 })
       }
-    } else if (!selecionada) {
-      // Limpar linhas
-      trajSrc?.setData({ type: 'FeatureCollection', features: [] })
-      restSrc?.setData({ type: 'FeatureCollection', features: [] })
-      breadSrc?.setData({ type: 'FeatureCollection', features: [] })
     }
+
+    // Rota real via Mapbox Directions (origem → destino por estradas)
+    if (selecionada.origem_lat && selecionada.origem_lng && selecionada.destino_lat && selecionada.destino_lng) {
+      setRotaLoading(true)
+      fetchRotaReal(
+        selecionada.origem_lng, selecionada.origem_lat,
+        selecionada.destino_lng, selecionada.destino_lat,
+      ).then(coords => {
+        const src = mapRef.current?.getSource('rota-real') as mapboxgl.GeoJSONSource | undefined
+        if (src && coords.length > 0) {
+          src.setData({
+            type: 'FeatureCollection',
+            features: [{
+              type: 'Feature',
+              properties: { cor: s.color },
+              geometry: { type: 'LineString', coordinates: coords },
+            }],
+          })
+        }
+      }).finally(() => setRotaLoading(false))
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selecionada, historico, mapReady])
 
   const comGPS = escoltas.filter(e => e.ultimo_ponto || (e.origem_lat && e.origem_lng))
@@ -523,8 +580,8 @@ export default function MapaPage() {
       {/* ── Stats ── */}
       <div className="grid grid-cols-3 gap-3">
         {[
-          { valor: escoltas.length,  label: 'Escoltas Ativas',  cor: '#1E2D35' },
-          { valor: comGPS.length,    label: 'Com Posição GPS',  cor: '#2563EB' },
+          { valor: escoltas.length,   label: 'Escoltas Ativas', cor: '#1E2D35' },
+          { valor: comGPS.length,     label: 'Com Posição GPS', cor: '#2563EB' },
           { valor: emTransito.length, label: 'Em Trânsito',     cor: '#7C3AED' },
         ].map(({ valor, label, cor }) => (
           <div key={label} className="card-light p-3 md:p-4 text-center">
@@ -540,8 +597,23 @@ export default function MapaPage() {
         <div className="card-light flex flex-col" style={{ maxHeight: '660px' }}>
           <div className="px-4 py-3 border-b" style={{ borderColor: '#E2E8EC' }}>
             <h2 className="text-sm font-bold" style={{ color: '#1E2D35' }}>Escoltas em Campo</h2>
-            <p className="text-[10px] mt-0.5" style={{ color: '#6B7E8A' }}>Posição via último check-in GPS</p>
+            <p className="text-[10px] mt-0.5" style={{ color: '#6B7E8A' }}>
+              {selecionada ? 'Clique em outra para trocar · ' : 'Clique para focar no mapa · '}
+              {escoltas.length} ativas
+            </p>
           </div>
+
+          {/* Botão "Ver Todas" quando há selecionada */}
+          {selecionada && (
+            <button
+              onClick={() => setSelecionada(null)}
+              className="flex items-center gap-1.5 px-4 py-2 text-xs font-bold transition-colors border-b"
+              style={{ borderColor: '#E2E8EC', color: '#2563EB', backgroundColor: '#EFF6FF' }}
+            >
+              <ChevronLeft size={13} />
+              Ver todas no mapa
+            </button>
+          )}
 
           <div className="flex-1 overflow-y-auto">
             {loading ? (
@@ -563,17 +635,16 @@ export default function MapaPage() {
               return (
                 <button
                   key={e.id}
-                  onClick={() => setSelecionada(e)}
+                  onClick={() => setSelecionada(isSel ? null : e)}
                   className="w-full text-left px-4 py-3 transition-all border-b"
                   style={{
                     borderColor: '#E2E8EC',
-                    backgroundColor: isSel ? `${s.color}0A` : '',
+                    backgroundColor: isSel ? `${s.color}0D` : '',
                     borderLeft: isSel ? `3px solid ${s.color}` : '3px solid transparent',
                   }}
                   onMouseEnter={ev => { if (!isSel) (ev.currentTarget as HTMLElement).style.backgroundColor = '#F8FAFC' }}
                   onMouseLeave={ev => { if (!isSel) (ev.currentTarget as HTMLElement).style.backgroundColor = '' }}
                 >
-                  {/* Linha 1: código + badge de status */}
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-mono font-bold truncate" style={{ color: '#1E2D35' }}>
                       {e.codigo_escolta ?? '—'}
@@ -584,25 +655,22 @@ export default function MapaPage() {
                     </span>
                   </div>
 
-                  {/* Linha 2: cliente */}
                   <p className="text-[11px] mt-0.5 truncate" style={{ color: '#6B7E8A' }}>
                     {e.cliente?.nome_cliente ?? '—'}
                   </p>
 
-                  {/* Linha 3: rota compacta origem → destino */}
                   <div className="flex items-center gap-1 mt-1.5">
                     <div style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#1E7C52', flexShrink: 0 }} />
-                    <span className="text-[10px] truncate" style={{ color: '#A8B8C2', maxWidth: 80 }}>
+                    <span className="text-[10px] truncate" style={{ color: '#A8B8C2', maxWidth: 75 }}>
                       {e.origem_endereco?.split(',')[0] ?? '—'}
                     </span>
                     <ArrowRight size={8} style={{ color: '#C8D5DC', flexShrink: 0 }} />
                     <div style={{ width: 0, height: 0, borderLeft: '5px solid transparent', borderRight: '5px solid transparent', borderBottom: '9px solid #B83832', flexShrink: 0 }} />
-                    <span className="text-[10px] truncate" style={{ color: '#A8B8C2', maxWidth: 80 }}>
+                    <span className="text-[10px] truncate" style={{ color: '#A8B8C2', maxWidth: 75 }}>
                       {e.destino_endereco?.split(',')[0] ?? '—'}
                     </span>
                   </div>
 
-                  {/* Linha 4: último GPS */}
                   {pt ? (
                     <div className="mt-2 flex items-start gap-1.5 rounded px-2 py-1.5"
                       style={{ backgroundColor: `${sinalCor}12`, border: `1px solid ${sinalCor}25` }}>
@@ -622,7 +690,7 @@ export default function MapaPage() {
                     <div className="mt-2 flex items-center gap-1 px-2 py-1 rounded" style={{ backgroundColor: '#F3F4F6' }}>
                       <MapPin size={9} style={{ color: '#9CA3AF', flexShrink: 0 }} />
                       <span className="text-[9px]" style={{ color: '#9CA3AF' }}>
-                        {e.origem_lat ? 'Sem check-in · usando origem' : 'Sem GPS registrado'}
+                        {e.origem_lat ? 'Sem check-in · usando origem' : 'Sem GPS'}
                       </span>
                     </div>
                   )}
@@ -642,9 +710,8 @@ export default function MapaPage() {
                 </div>
               ))}
             </div>
-            <p className="text-[9px] font-bold uppercase tracking-widest pt-1" style={{ color: '#A8B8C2' }}>Sinal GPS</p>
-            <div className="flex gap-x-3 flex-wrap">
-              {[{ cor: '#1E7C52', txt: '< 30min' }, { cor: '#D97706', txt: '30-90min' }, { cor: '#B83832', txt: '> 90min' }].map(x => (
+            <div className="flex gap-x-3 flex-wrap pt-1">
+              {[{ cor: '#1E7C52', txt: 'GPS < 30min' }, { cor: '#D97706', txt: '30-90min' }, { cor: '#B83832', txt: '> 90min' }].map(x => (
                 <div key={x.txt} className="flex items-center gap-1">
                   <div style={{ width: 7, height: 7, borderRadius: '50%', backgroundColor: x.cor }} />
                   <span style={{ fontSize: '9px', color: '#6B7E8A' }}>{x.txt}</span>
@@ -657,12 +724,12 @@ export default function MapaPage() {
         {/* ── Mapa ── */}
         <div className="lg:col-span-2 card-light flex flex-col overflow-hidden" style={{ minHeight: '560px' }}>
 
-          {/* Cabeçalho da escolta selecionada */}
-          {selecionada && (() => {
-            const s = STATUS_MAP[selecionada.status] ?? { label: selecionada.status, color: '#53648A' }
-            const pt = selecionada.ultimo_ponto
-            return (
-              <div className="px-4 py-3 border-b shrink-0" style={{ borderColor: '#E2E8EC' }}>
+          {/* Cabeçalho: escolta selecionada ou modo geral */}
+          <div className="px-4 py-3 border-b shrink-0" style={{ borderColor: '#E2E8EC' }}>
+            {selecionada ? (() => {
+              const s = STATUS_MAP[selecionada.status] ?? { label: selecionada.status, color: '#53648A' }
+              const pt = selecionada.ultimo_ponto
+              return (
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -674,6 +741,11 @@ export default function MapaPage() {
                         style={{ backgroundColor: `${s.color}18`, color: s.color, border: `1px solid ${s.color}30` }}>
                         {s.label}
                       </span>
+                      {rotaLoading && (
+                        <span className="flex items-center gap-1 text-[9px]" style={{ color: '#9CA3AF' }}>
+                          <RefreshCw size={10} className="animate-spin" /> calculando rota...
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                       <div style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#1E7C52', flexShrink: 0 }} />
@@ -688,16 +760,9 @@ export default function MapaPage() {
                         <span className="text-[10px]" style={{ color: '#6B7E8A' }}>
                           Último GPS: <strong style={{ color: corSinal(pt.data_hora) }}>{tempoAtras(pt.data_hora)}</strong>
                           {' · '}{pt.tipo}
+                          {historico.length > 0 && <span style={{ color: '#A8B8C2' }}> · {historico.length} pontos registrados</span>}
                         </span>
-                        {historico.length > 0 && (
-                          <span className="text-[9px]" style={{ color: '#A8B8C2' }}>
-                            · {historico.length} pontos
-                          </span>
-                        )}
                       </div>
-                    )}
-                    {!pt && (
-                      <p className="text-[10px] mt-1" style={{ color: '#9CA3AF' }}>Sem check-in · exibindo coordenadas de origem</p>
                     )}
                   </div>
                   {pt && (
@@ -707,9 +772,18 @@ export default function MapaPage() {
                     </a>
                   )}
                 </div>
+              )
+            })() : (
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-bold" style={{ color: '#1E2D35' }}>Todas as Escoltas Ativas</p>
+                  <p className="text-[10px] mt-0.5" style={{ color: '#6B7E8A' }}>
+                    {comGPS.length} com GPS · clique no marcador ou no painel para ver detalhes
+                  </p>
+                </div>
               </div>
-            )
-          })()}
+            )}
+          </div>
 
           {/* Container do mapa */}
           <div className="flex-1 relative" style={{ minHeight: '460px' }}>
@@ -719,16 +793,7 @@ export default function MapaPage() {
                 <p className="text-sm font-semibold" style={{ color: '#6B7E8A' }}>Token Mapbox não configurado</p>
               </div>
             ) : (
-              <>
-                <div ref={mapContainerRef} style={{ width: '100%', height: '100%', minHeight: '460px' }} />
-                {!selecionada && !loading && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none"
-                    style={{ backgroundColor: 'rgba(255,255,255,0.65)' }}>
-                    <Navigation size={28} style={{ color: '#C8D5DC' }} />
-                    <p className="text-sm font-semibold" style={{ color: '#6B7E8A' }}>Selecione uma escolta no painel</p>
-                  </div>
-                )}
-              </>
+              <div ref={mapContainerRef} style={{ width: '100%', height: '100%', minHeight: '460px' }} />
             )}
           </div>
         </div>
