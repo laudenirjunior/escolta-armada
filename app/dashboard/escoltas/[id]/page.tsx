@@ -463,6 +463,12 @@ export default function EscoltaDetalhePage() {
     return () => clearInterval(t)
   }, [])
 
+  useEffect(() => {
+    if (escolta?.status === 'em_pre_inicio' && !wizardStartedRef.current) {
+      wizardStartedRef.current = new Date().toISOString()
+    }
+  }, [escolta?.status])
+
   const [dialogAvanco, setDialogAvanco] = useState(false)
   const [motivoAvanco, setMotivoAvanco] = useState('')
   const [avancando, setAvancando] = useState(false)
@@ -501,6 +507,16 @@ export default function EscoltaDetalhePage() {
   const [obsCheckin, setObsCheckin] = useState('')
   const [gpsCheckin, setGpsCheckin] = useState<{ lat: number; lng: number; precisao: number; endereco: string } | null>(null)
   const [gpsCheckinLoading, setGpsCheckinLoading] = useState(false)
+
+  // GPS da Parada
+  const [gpsParada, setGpsParada] = useState<{ lat: number; lng: number; precisao: number; endereco: string } | null>(null)
+  const [gpsParadaLoading, setGpsParadaLoading] = useState(false)
+
+  // Checklist tracking
+  const wizardStartedRef = useRef<string | null>(null)
+  const [finalizacaoAbertoEm, setFinalizacaoAbertoEm] = useState<string | null>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [checklists, setChecklists] = useState<any[]>([])
 
   // Periodicidade de check-in
   const [editandoPeriodicidade, setEditandoPeriodicidade] = useState(false)
@@ -657,9 +673,10 @@ export default function EscoltaDetalhePage() {
     const { data: chks } = viaturaIds.length > 0
       ? await sb
           .from('checklists')
-          .select(`id, escolta_veiculo_id, tipo, concluido, data_conclusao, modelo:checklist_modelos(nome), autor:usuarios!responsavel_id(nome_completo), respostas:checklist_respostas(id, descricao_item, conforme, observacao, foto:fotos(id, caminho_arquivo))`)
+          .select(`id, escolta_veiculo_id, tipo, concluido, data_inicio, data_conclusao, modelo:checklist_modelos(nome), autor:usuarios!responsavel_id(nome_completo), respostas:checklist_respostas(id, descricao_item, conforme, observacao, foto:fotos(id, caminho_arquivo))`)
           .in('escolta_veiculo_id', viaturaIds)
       : { data: null }
+    setChecklists(chks ?? [])
 
     // ── Montar timeline integrada ─────────────────────────────────────────────
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -971,6 +988,7 @@ export default function EscoltaDetalhePage() {
         modelo_id: null,
         tipo: 'material',
         concluido: true,
+        data_inicio: wizardStartedRef.current ?? new Date().toISOString(),
         data_conclusao: new Date().toISOString(),
         responsavel_id: user?.id,
         sincronizado: true,
@@ -998,6 +1016,7 @@ export default function EscoltaDetalhePage() {
         modelo_id: null,
         tipo: 'viatura',
         concluido: true,
+        data_inicio: wizardStartedRef.current ?? new Date().toISOString(),
         data_conclusao: new Date().toISOString(),
         responsavel_id: user?.id,
         sincronizado: true,
@@ -1252,7 +1271,9 @@ export default function EscoltaDetalhePage() {
     if (!obsParada.trim()) { setErro('A justificativa é obrigatória.'); return }
     setLoading(true)
     try {
-      const { lat, lng, precisao } = await obterGPS()
+      const lat = gpsParada?.lat ?? 0
+      const lng = gpsParada?.lng ?? 0
+      const precisao = gpsParada?.precisao ?? 0
       const tipoInfo = TIPOS_PARADA.find(t => t.value === tipoParada)
 
       let fotoIdPrincipal: string | null = null
@@ -1266,6 +1287,7 @@ export default function EscoltaDetalhePage() {
         tipo: tipoParada,
         tipoLabel: tipoInfo?.label ?? tipoParada,
         justificativa: obsParada.trim(),
+        endereco: gpsParada?.endereco,
         foto_ids: fotosIds,
       })
 
@@ -1290,6 +1312,8 @@ export default function EscoltaDetalhePage() {
       })
 
       setDialogParada(false)
+      setGpsParada(null)
+      setGpsParadaLoading(false)
       setObsParada('')
       setFotosParada([])
       setTipoParada('parada_curta')
@@ -1743,6 +1767,26 @@ export default function EscoltaDetalhePage() {
         for (const e of efetivos) texto += `  • ${esc(e)}\n`
       }
 
+      if (viaturas.length > 0) {
+        texto += `\n🚗 <b>Veículos (${viaturas.length}):</b>\n`
+        for (const v of viaturas) {
+          const kmV = (v.quilometragem_saida != null && v.quilometragem_retorno != null)
+            ? ` — ${(v.quilometragem_retorno - v.quilometragem_saida).toLocaleString('pt-BR')} km rodados`
+            : ''
+          texto += `  • ${esc(v.veiculo?.placa ?? '???')}${v.veiculo?.modelo ? ` (${esc(v.veiculo.modelo)})` : ''}${kmV}\n`
+        }
+      }
+
+      const todosChecklists = checklists
+      if (todosChecklists.length > 0) {
+        texto += `\n📋 <b>Checklists:</b>\n`
+        for (const cl of todosChecklists) {
+          const icon = (cl as any).concluido ? '✅' : '⏳'
+          const tipoLabel = (cl as any).tipo === 'material' ? 'Material' : 'Viatura'
+          texto += `  ${icon} ${tipoLabel} — ${(cl as any).concluido ? `concluído ${(cl as any).data_conclusao ? `às ${fmt((cl as any).data_conclusao)}` : ''}` : 'pendente'}\n`
+        }
+      }
+
       if (eventos.length > 0) {
         texto += `\n📋 <b>Linha do Tempo (${eventos.length} eventos):</b>\n`
         for (const ev of eventos) texto += `${ev}\n`
@@ -1755,7 +1799,7 @@ export default function EscoltaDetalhePage() {
       }\n`
 
       if (relatorioFinal.trim()) {
-        texto += `\n📝 <b>Relatório Final:</b>\n<i>${esc(relatorioFinal.trim().slice(0, 600))}</i>\n`
+        texto += `\n📝 <b>Relatório Final:</b>\n<i>${esc(relatorioFinal.trim())}</i>\n`
       }
 
       if (appUrl && escolta!.id) {
@@ -1814,6 +1858,7 @@ export default function EscoltaDetalhePage() {
         modelo_id: null,
         tipo: 'viatura',
         concluido: true,
+        data_inicio: finalizacaoAbertoEm ?? new Date().toISOString(),
         data_conclusao: new Date().toISOString(),
         responsavel_id: user?.id,
         sincronizado: true,
@@ -2490,7 +2535,22 @@ export default function EscoltaDetalhePage() {
 
             {/* 2. Registrar Parada */}
             {['em_andamento', 'na_origem', 'no_destino', 'retornando'].includes(escolta.status) && (
-              <button onClick={() => { setErro(null); setDialogParada(true) }}
+              <button onClick={() => {
+                setErro(null)
+                setGpsParada(null)
+                setGpsParadaLoading(true)
+                setDialogParada(true)
+                navigator.geolocation.getCurrentPosition(
+                  async (pos) => {
+                    const { latitude: lat, longitude: lng, accuracy: precisao } = pos.coords
+                    const endereco = await reverseGeocode(lat, lng)
+                    setGpsParada({ lat, lng, precisao, endereco })
+                    setGpsParadaLoading(false)
+                  },
+                  () => setGpsParadaLoading(false),
+                  { timeout: 10000, enableHighAccuracy: true }
+                )
+              }}
                 className="h-11 md:h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-all"
                 style={{ backgroundColor: '#FBF3DE', color: '#8B6914', border: '1.5px solid rgba(139,105,20,0.25)' }}
                 onMouseEnter={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#F5E8B8'}
@@ -2545,7 +2605,7 @@ export default function EscoltaDetalhePage() {
 
             {/* 7. Finalizar Escolta */}
             {escolta.status === 'na_base' && (
-              <button onClick={() => { setErro(null); setDialogFinalizacao(true) }}
+              <button onClick={() => { setErro(null); setDialogFinalizacao(true); setFinalizacaoAbertoEm(new Date().toISOString()) }}
                 className="h-11 md:h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 text-white active:scale-95 transition-all"
                 style={{ backgroundColor: '#1E7C52', boxShadow: '0 2px 8px rgba(30,124,82,0.3)' }}
                 onMouseEnter={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#166040'}
@@ -3776,6 +3836,27 @@ export default function EscoltaDetalhePage() {
                   <p style={{ fontSize: '12px', fontWeight: 900, color: '#0E1A33' }}>{nowLocalStr()}</p>
                 </div>
               </div>
+              <div className="p-3 rounded" style={{ backgroundColor: gpsParada ? '#F0FAF5' : '#F5F7FA', border: `1.5px solid ${gpsParada ? '#1E7C5240' : '#E2E8EC'}` }}>
+                <div className="flex items-start gap-2">
+                  <Locate size={13} style={{ color: gpsParada ? '#1E7C52' : '#A8B8C2', flexShrink: 0, marginTop: '2px' }} />
+                  <div className="flex-1">
+                    <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: gpsParada ? '#1E7C52' : '#A8B8C2' }}>
+                      {gpsParadaLoading ? 'Obtendo localização...' : gpsParada ? 'Localização capturada' : 'Localização não disponível'}
+                    </p>
+                    {gpsParada && (
+                      <div>
+                        <p style={{ fontSize: '11px', fontWeight: 600, color: '#0E1A33', marginTop: '2px', lineHeight: 1.4 }}>{gpsParada.endereco}</p>
+                        <p style={{ fontSize: '10px', color: '#A8B8C2', fontFamily: 'monospace', marginTop: '2px' }}>
+                          {gpsParada.lat.toFixed(6)}, {gpsParada.lng.toFixed(6)} · ±{gpsParada.precisao.toFixed(0)}m
+                        </p>
+                      </div>
+                    )}
+                    {gpsParadaLoading && (
+                      <p style={{ fontSize: '10px', color: '#A8B8C2', marginTop: '2px' }}>Aguardando GPS do dispositivo...</p>
+                    )}
+                  </div>
+                </div>
+              </div>
               <div>
                 <label className="block text-xs font-semibold mb-1.5 text-[#5A6A80]">Tipo de Parada *</label>
                 <select
@@ -3807,7 +3888,7 @@ export default function EscoltaDetalhePage() {
               </div>
             </div>
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
-              <button onClick={() => setDialogParada(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
+              <button onClick={() => { setDialogParada(false); setGpsParada(null); setGpsParadaLoading(false) }} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleParada}
                 disabled={loading}
@@ -4150,8 +4231,8 @@ export default function EscoltaDetalhePage() {
                 <TextAreaWithTools
                   value={relatorioFinal}
                   onChange={(v) => setRelatorioFinal(v)}
-                  placeholder="Redija o relatório sobre o andamento e as informações do dia..."
-                  rows={4}
+                  placeholder="Descreva como foi a operação: condições da viagem, comportamento da equipe, intercorrências não formais, estado da carga/cliente e pontos de atenção para próximas escoltas..."
+                  rows={6}
                   textareaClassName="input-light resize-none"
                   contextoAI="Relatório diário da operação de escolta armada"
                 />

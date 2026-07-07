@@ -1,4 +1,4 @@
-﻿'use client'
+'use client'
 
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
@@ -76,6 +76,7 @@ interface AlertaSLA {
   id: string; codigo: string; cliente: string
   minutosEmCampo: number; minutosExcedidos: number
 }
+interface VigRanking { nome: string; total: number; escoltaIds: string[] }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function diffMinutes(from: string) {
@@ -131,6 +132,8 @@ function exportarCSV(escoltas: EscoltaRow[], labelPeriodo: string) {
   URL.revokeObjectURL(url)
 }
 
+const MESES_ABREV = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+
 // ─── Sub-componentes ──────────────────────────────────────────────────────────
 function SectionTitle({ icon: Icon, label }: { icon: React.ElementType; label: string }) {
   return (
@@ -181,6 +184,12 @@ export default function IndicadoresPage() {
   const [alertasSLA, setAlertasSLA]   = useState<AlertaSLA[]>([])
   const [alertasFechados, setAlertasFechados] = useState<Set<string>>(new Set())
 
+  // Novos states
+  const [volumeMensal, setVolumeMensal] = useState<{ label: string; total: number; finalizadas: number }[]>([])
+  const [tempos, setTempos] = useState<{ media: number; menor: number; maior: number } | null>(null)
+  const [rankingVigilantes, setRankingVigilantes] = useState<VigRanking[]>([])
+  const [rankingVeiculos, setRankingVeiculos] = useState<{ placa: string; modelo: string | null; kmTotal: number; viagens: number }[]>([])
+
   const labelPeriodo = tipoPeriodo === 'hoje' ? 'hoje'
     : tipoPeriodo === 'semana' ? 'semana'
     : tipoPeriodo === 'mes'    ? 'mes'
@@ -193,8 +202,44 @@ export default function IndicadoresPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Carrega volume mensal (independente do filtro de período)
+  useEffect(() => {
+    const dozeAtras = new Date()
+    dozeAtras.setMonth(dozeAtras.getMonth() - 11)
+    dozeAtras.setDate(1)
+    dozeAtras.setHours(0, 0, 0, 0)
+
+    sb.from('escoltas')
+      .select('data_hora_prevista, status')
+      .gte('data_hora_prevista', dozeAtras.toISOString())
+      .not('status', 'in', '(rascunho,cancelada)')
+      .then(({ data }) => {
+        const agora = new Date()
+        const meses: { label: string; total: number; finalizadas: number }[] = []
+        for (let i = 11; i >= 0; i--) {
+          const d = new Date(agora.getFullYear(), agora.getMonth() - i, 1)
+          meses.push({ label: `${MESES_ABREV[d.getMonth()]}/${String(d.getFullYear()).slice(2)}`, total: 0, finalizadas: 0 })
+        }
+        ;(data ?? []).forEach((e: any) => {
+          const d = new Date(e.data_hora_prevista)
+          const diffMes = (agora.getFullYear() - d.getFullYear()) * 12 + (agora.getMonth() - d.getMonth())
+          if (diffMes >= 0 && diffMes <= 11) {
+            const idx = 11 - diffMes
+            meses[idx].total++
+            if (e.status === 'finalizada') meses[idx].finalizadas++
+          }
+        })
+        setVolumeMensal(meses)
+      })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const carregar = useCallback(async () => {
     setLoading(true)
+    setTempos(null)
+    setRankingVigilantes([])
+    setRankingVeiculos([])
+
     const { from, to } = computeRange(tipoPeriodo, dataInicio, dataFim)
 
     let q = sb.from('escoltas').select(`
@@ -232,6 +277,87 @@ export default function IndicadoresPage() {
       .filter(a => a.minutosExcedidos > 0)
 
     setAlertasSLA(alertas)
+
+    if (rows.length > 0) {
+      const rowIds = rows.map((e: any) => e.id)
+      const escoltasFinalizadasIds = rows.filter(e => e.status === 'finalizada').map(e => e.id)
+
+      const [{ data: efetivos }, { data: escVeics }] = await Promise.all([
+        sb.from('escolta_efetivo')
+          .select('vigilante_id, vigilante:vigilantes(nome_completo), escolta_id')
+          .in('escolta_id', rowIds),
+        sb.from('escolta_veiculos')
+          .select('veiculo_id, veiculo:veiculos(placa, modelo), quilometragem_saida, quilometragem_retorno, escolta_id')
+          .in('escolta_id', rowIds)
+          .not('quilometragem_retorno', 'is', null)
+          .not('quilometragem_saida', 'is', null),
+      ])
+
+      // Ranking de vigilantes
+      const vigMap: Record<string, VigRanking> = {}
+      ;(efetivos ?? []).forEach((ef: any) => {
+        const vid = ef.vigilante_id
+        if (!vid) return
+        const nome = (ef.vigilante as any)?.nome_completo ?? 'Desconhecido'
+        if (!vigMap[vid]) vigMap[vid] = { nome, total: 0, escoltaIds: [] }
+        vigMap[vid].total++
+        vigMap[vid].escoltaIds.push(ef.escolta_id)
+      })
+      setRankingVigilantes(Object.values(vigMap).sort((a, b) => b.total - a.total).slice(0, 5))
+
+      // Ranking de veículos por KM
+      const veicMap: Record<string, { placa: string; modelo: string | null; kmTotal: number; viagens: number }> = {}
+      ;(escVeics ?? []).forEach((ev: any) => {
+        const vid = ev.veiculo_id
+        if (!vid) return
+        const km = (ev.quilometragem_retorno ?? 0) - (ev.quilometragem_saida ?? 0)
+        if (km <= 0) return
+        const placa = (ev.veiculo as any)?.placa ?? '—'
+        const modelo = (ev.veiculo as any)?.modelo ?? null
+        if (!veicMap[vid]) veicMap[vid] = { placa, modelo, kmTotal: 0, viagens: 0 }
+        veicMap[vid].kmTotal += km
+        veicMap[vid].viagens++
+      })
+      setRankingVeiculos(Object.values(veicMap).sort((a, b) => b.kmTotal - a.kmTotal).slice(0, 5))
+
+      // Tempo médio de escolta
+      if (escoltasFinalizadasIds.length > 0) {
+        const { data: histStatus } = await sb.from('escolta_status_historico')
+          .select('escolta_id, status_novo, data_hora')
+          .in('escolta_id', escoltasFinalizadasIds)
+          .in('status_novo', ['em_andamento', 'finalizada'])
+
+        if (histStatus && histStatus.length > 0) {
+          const porEscolta: Record<string, { inicio?: number; fim?: number }> = {}
+          ;(histStatus as any[]).forEach(h => {
+            if (!porEscolta[h.escolta_id]) porEscolta[h.escolta_id] = {}
+            const ts = new Date(h.data_hora).getTime()
+            if (h.status_novo === 'em_andamento') {
+              if (!porEscolta[h.escolta_id].inicio || ts < porEscolta[h.escolta_id].inicio!) {
+                porEscolta[h.escolta_id].inicio = ts
+              }
+            }
+            if (h.status_novo === 'finalizada') {
+              if (!porEscolta[h.escolta_id].fim || ts > porEscolta[h.escolta_id].fim!) {
+                porEscolta[h.escolta_id].fim = ts
+              }
+            }
+          })
+
+          const duracoes: number[] = Object.values(porEscolta)
+            .filter(d => d.inicio && d.fim && d.fim > d.inicio)
+            .map(d => Math.round((d.fim! - d.inicio!) / 60000))
+
+          if (duracoes.length > 0) {
+            const media = Math.round(duracoes.reduce((s, v) => s + v, 0) / duracoes.length)
+            const menor = Math.min(...duracoes)
+            const maior = Math.max(...duracoes)
+            setTempos({ media, menor, maior })
+          }
+        }
+      }
+    }
+
     setLoading(false)
   }, [tipoPeriodo, dataInicio, dataFim, clienteFiltroId])
 
@@ -273,9 +399,27 @@ export default function IndicadoresPage() {
   const margemBruta   = receitaTotal - custoTotal
   const txMargem      = receitaTotal > 0 ? (margemBruta / receitaTotal) * 100 : null
 
+  // Financeiro por cliente
+  const finPorCliente = Object.values(
+    escoltasConcluidas.reduce((acc, e) => {
+      const nome = e.cliente?.nome_cliente ?? 'Sem cliente'
+      const cor  = e.cliente?.cor_destaque ?? P.steel
+      if (!acc[nome]) acc[nome] = { nome, cor, total: 0, receita: 0, custo: 0 }
+      acc[nome].total++
+      acc[nome].receita += e.valor_cobrado ?? 0
+      const cp = e.efetivo_financeiro.reduce((s, ef) => s + (ef.valor_pago_vigilante ?? 0), 0)
+      const cc = e.veiculos.reduce((s, v) => s + (v.abastecimento_valor ?? 0), 0)
+      acc[nome].custo += cp + cc + (e.outros_custos ?? 0)
+      return acc
+    }, {} as Record<string, { nome: string; cor: string; total: number; receita: number; custo: number }>)
+  ).map(r => ({ ...r, margem: r.receita - r.custo, margemPct: r.receita > 0 ? ((r.receita - r.custo) / r.receita) * 100 : null }))
+    .sort((a, b) => b.receita - a.receita)
+
   const now = new Date()
   const mesLabel = now.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
   const nomeCliente = clientes.find(c => c.id === clienteFiltroId)?.nome_cliente
+
+  const maxVolumeMensal = Math.max(...volumeMensal.map(m => m.total), 1)
 
   const KPI_CARDS = [
     { label: 'Escoltas no Período', valor: loading ? '—' : totalMes,      sub: nomeCliente ?? `filtro: ${tipoPeriodo}`,           tendencia: 'neutro',                                   icon: Shield,       cor: P.navy,      corBg: P.navyBg,  dark: false },
@@ -533,13 +677,93 @@ export default function IndicadoresPage() {
                   </span>
                 ))}
               </div>
+              {/* Tabela financeiro por cliente */}
+              {finPorCliente.length > 0 && (
+                <div style={{ marginTop: '16px' }}>
+                  <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.16em', color: P.textSub, marginBottom: '8px' }}>Financeiro por Cliente</p>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+                      <thead>
+                        <tr style={{ borderBottom: `1px solid ${P.border}` }}>
+                          {['Cliente', 'Escoltas', 'Receita', 'Custo', 'Margem', 'Margem %'].map(h => (
+                            <th key={h} style={{ textAlign: 'left', padding: '4px 8px', fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.12em', color: P.textSub, whiteSpace: 'nowrap' }}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {finPorCliente.map((r, idx) => (
+                          <tr key={r.nome} style={{ borderBottom: `1px solid ${P.steelBg}`, backgroundColor: idx % 2 === 0 ? '#fff' : P.bg }}>
+                            <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <div style={{ width: '7px', height: '7px', backgroundColor: r.cor, borderRadius: '2px', flexShrink: 0 }} />
+                                <span style={{ color: P.text, fontWeight: 600 }}>{r.nome}</span>
+                              </div>
+                            </td>
+                            <td style={{ padding: '5px 8px', color: P.textSub, fontWeight: 700, textAlign: 'right' }}>{r.total}</td>
+                            <td style={{ padding: '5px 8px', color: '#1E7C52', fontWeight: 700, whiteSpace: 'nowrap' }}>{fmtBRL(r.receita)}</td>
+                            <td style={{ padding: '5px 8px', color: P.errorText, fontWeight: 700, whiteSpace: 'nowrap' }}>{fmtBRL(r.custo)}</td>
+                            <td style={{ padding: '5px 8px', color: r.margem >= 0 ? '#1E7C52' : P.errorText, fontWeight: 700, whiteSpace: 'nowrap' }}>{fmtBRL(r.margem)}</td>
+                            <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}>
+                              <span style={{ fontSize: '10px', fontWeight: 900, color: r.margemPct != null ? (r.margemPct >= 0 ? '#1E7C52' : P.errorText) : P.light }}>
+                                {r.margemPct != null ? `${r.margemPct.toFixed(1)}%` : '—'}
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
       )}
 
-      {/* ── Linha 2: Clientes + Resumo ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      {/* ── Volume Mensal ── */}
+      <div className="card-light p-5">
+        <div className="flex items-center justify-between mb-5">
+          <SectionTitle icon={BarChart2} label="Volume Mensal — Últimos 12 Meses" />
+        </div>
+        {volumeMensal.length === 0 ? (
+          <div className="animate-pulse" style={{ height: '160px', backgroundColor: P.steelBg, borderRadius: '2px' }} />
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: '6px', height: '160px', paddingBottom: '0' }}>
+            {volumeMensal.map((m, idx) => {
+              const pctTotal = maxVolumeMensal > 0 ? (m.total / maxVolumeMensal) * 100 : 0
+              const pctFin   = m.total > 0 ? (m.finalizadas / m.total) * 100 : 0
+              const barH     = Math.max(pctTotal * 1.2, m.total > 0 ? 6 : 0)
+              return (
+                <div key={m.label} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', minWidth: 0 }}>
+                  <span style={{ fontSize: '9px', fontWeight: 900, color: m.total > 0 ? P.text : P.light, lineHeight: 1 }}>{m.total > 0 ? m.total : ''}</span>
+                  <div style={{ width: '100%', height: '120px', display: 'flex', alignItems: 'flex-end', position: 'relative' }}>
+                    <div style={{ width: '100%', height: `${pctTotal}%`, backgroundColor: P.navyBg, borderRadius: '2px 2px 0 0', position: 'relative', overflow: 'hidden', minHeight: m.total > 0 ? '4px' : '0' }}>
+                      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: `${pctFin}%`, backgroundColor: P.navy, borderRadius: '2px 2px 0 0', transition: 'height 0.8s ease' }} />
+                      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, top: 0, backgroundColor: P.steel, opacity: 0.18 }} />
+                    </div>
+                  </div>
+                  <span style={{ fontSize: '8px', fontWeight: 700, color: P.textSub, textAlign: 'center', lineHeight: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%' }}>{m.label}</span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+        {volumeMensal.length > 0 && (
+          <div style={{ display: 'flex', gap: '14px', marginTop: '10px', flexWrap: 'wrap' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: P.textSub }}>
+              <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '2px', backgroundColor: P.navy }} />
+              Finalizadas
+            </span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: P.textSub }}>
+              <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '2px', backgroundColor: P.navyBg, border: `1px solid ${P.border}` }} />
+              Demais status
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* ── Linha 2: Clientes + Resumo + Tempo Médio ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
 
         {/* Escoltas por Cliente */}
         <div className="card-light p-5 animate-in fade-in slide-in-from-left-4" style={{ animationDuration: '600ms', animationFillMode: 'both' }}>
@@ -570,6 +794,68 @@ export default function IndicadoresPage() {
                   </div>
                 )
               })}
+            </div>
+          )}
+
+          {/* Ranking de Vigilantes */}
+          {rankingVigilantes.length > 0 && (
+            <div style={{ marginTop: '20px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' }}>
+                <div style={{ width: '4px', height: '4px', borderRadius: '1px', backgroundColor: P.steel, flexShrink: 0 }} />
+                <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.18em', color: P.textSub }}>Top 5 Vigilantes</p>
+              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${P.border}` }}>
+                    {['#', 'Nome', 'Escoltas'].map(h => (
+                      <th key={h} style={{ textAlign: h === 'Escoltas' ? 'right' : 'left', padding: '3px 6px', fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: P.textSub }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rankingVigilantes.map((v, idx) => (
+                    <tr key={v.nome} style={{ borderBottom: `1px solid ${P.steelBg}` }}>
+                      <td style={{ padding: '4px 6px', color: P.light, fontWeight: 900, fontSize: '10px' }}>{idx + 1}</td>
+                      <td style={{ padding: '4px 6px', color: P.text, fontWeight: 600 }}>{v.nome}</td>
+                      <td style={{ padding: '4px 6px', color: P.navy, fontWeight: 900, textAlign: 'right' }}>{v.total}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Ranking de Veículos */}
+          {rankingVeiculos.length > 0 && (
+            <div style={{ marginTop: '20px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' }}>
+                <div style={{ width: '4px', height: '4px', borderRadius: '1px', backgroundColor: P.steel, flexShrink: 0 }} />
+                <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.18em', color: P.textSub }}>Top 5 Veículos por KM</p>
+              </div>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${P.border}` }}>
+                    {['#', 'Placa', 'KM', 'Viagens'].map(h => (
+                      <th key={h} style={{ textAlign: h === '#' || h === 'Placa' ? 'left' : 'right', padding: '3px 6px', fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: P.textSub }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rankingVeiculos.map((v, idx) => (
+                    <tr key={v.placa} style={{ borderBottom: `1px solid ${P.steelBg}` }}>
+                      <td style={{ padding: '4px 6px', color: P.light, fontWeight: 900, fontSize: '10px' }}>{idx + 1}</td>
+                      <td style={{ padding: '4px 6px' }}>
+                        <div>
+                          <span style={{ color: P.text, fontWeight: 700, fontFamily: 'monospace' }}>{v.placa}</span>
+                          {v.modelo && <span style={{ display: 'block', fontSize: '9px', color: P.light }}>{v.modelo}</span>}
+                        </div>
+                      </td>
+                      <td style={{ padding: '4px 6px', color: P.navy, fontWeight: 900, textAlign: 'right' }}>{v.kmTotal.toLocaleString('pt-BR')}</td>
+                      <td style={{ padding: '4px 6px', color: P.textSub, fontWeight: 700, textAlign: 'right' }}>{v.viagens}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
@@ -623,6 +909,41 @@ export default function IndicadoresPage() {
               escolta ativa ultrapassa <strong style={{ color: P.navy }}>{SLA_HORAS_LIMITE}h</strong> do horário de início previsto.
             </p>
           </div>
+        </div>
+
+        {/* Tempo Médio de Escolta */}
+        <div className="card-light p-5 animate-in fade-in slide-in-from-right-4" style={{ animationDuration: '600ms', animationDelay: '80ms', animationFillMode: 'both' }}>
+          <div className="mb-5">
+            <SectionTitle icon={Clock} label="Tempo de Escolta" />
+          </div>
+          {loading ? (
+            <div className="space-y-3">{[1,2,3].map(i => (
+              <div key={i} className="animate-pulse h-14" style={{ backgroundColor: P.steelBg, borderRadius: '2px' }} />
+            ))}</div>
+          ) : tempos === null ? (
+            <p className="text-xs text-center py-8" style={{ color: P.light }}>Sem dados de duração no período</p>
+          ) : (
+            <div className="space-y-3">
+              {[
+                { label: 'Tempo Médio', valor: formatDuracao(tempos.media), cor: P.navy, bg: P.navyBg },
+                { label: 'Menor Tempo', valor: formatDuracao(tempos.menor), cor: P.steel, bg: P.steelBg },
+                { label: 'Maior Tempo', valor: formatDuracao(tempos.maior), cor: P.textSub, bg: P.bg },
+              ].map(t => (
+                <div key={t.label} style={{ backgroundColor: t.bg, borderRadius: '2px', padding: '12px 14px', border: `1px solid ${P.border}` }}>
+                  <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.16em', color: P.textSub, marginBottom: '4px' }}>{t.label}</p>
+                  <p style={{ fontSize: '22px', fontWeight: 900, color: t.cor, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{t.valor}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          {!loading && tempos !== null && (
+            <div className="mt-4 p-3 flex items-start gap-2" style={{ backgroundColor: P.steelBg, borderRadius: '2px' }}>
+              <Info size={12} style={{ color: P.steel, flexShrink: 0, marginTop: '1px' }} />
+              <p style={{ fontSize: '10px', color: P.textSub, lineHeight: 1.5 }}>
+                Calculado com base nas escoltas com status <strong style={{ color: P.navy }}>finalizadas</strong> no período, a partir do registro de histórico de status.
+              </p>
+            </div>
+          )}
         </div>
       </div>
 

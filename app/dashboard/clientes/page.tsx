@@ -24,6 +24,8 @@ interface ClienteRow {
   observacoes: string | null
   status: 'ativo' | 'inativo'
   valor_padrao_escolta: number | null
+  km_franquia: number | null
+  valor_km_excedente: number | null
   criado_em: string
 }
 
@@ -37,6 +39,8 @@ type FormData = {
   observacoes: string
   status: 'ativo' | 'inativo'
   valor_padrao_escolta: string
+  km_franquia: string
+  valor_km_excedente: string
 }
 
 const FORM_VAZIO: FormData = {
@@ -49,6 +53,8 @@ const FORM_VAZIO: FormData = {
   observacoes: '',
   status: 'ativo',
   valor_padrao_escolta: '',
+  km_franquia: '',
+  valor_km_excedente: '',
 }
 
 const PODE_VER_FINANCEIRO = ['administrador', 'gestor', 'supervisor']
@@ -75,7 +81,7 @@ export default function ClientesPage() {
     setLoading(true)
     const { data } = await sb
       .from('clientes')
-      .select('id, nome_cliente, cnpj, contato, telefone, cor_destaque, telegram_chat_id, observacoes, status, valor_padrao_escolta, criado_em')
+      .select('id, nome_cliente, cnpj, contato, telefone, cor_destaque, telegram_chat_id, observacoes, status, valor_padrao_escolta, km_franquia, valor_km_excedente, criado_em')
       .order('nome_cliente') as { data: ClienteRow[] | null }
     setClientes(data ?? [])
     setLoading(false)
@@ -102,6 +108,8 @@ export default function ClientesPage() {
       observacoes: c.observacoes ?? '',
       status: c.status,
       valor_padrao_escolta: c.valor_padrao_escolta?.toString() ?? '',
+      km_franquia: c.km_franquia?.toString() ?? '',
+      valor_km_excedente: c.valor_km_excedente?.toString() ?? '',
     })
     setErro(null)
     setDialogAberto(true)
@@ -125,6 +133,8 @@ export default function ClientesPage() {
       observacoes: form.observacoes.trim() || null,
       status: form.status,
       valor_padrao_escolta: form.valor_padrao_escolta ? parseFloat(form.valor_padrao_escolta) : null,
+      km_franquia: form.km_franquia ? parseInt(form.km_franquia) : 200,
+      valor_km_excedente: form.valor_km_excedente ? parseFloat(form.valor_km_excedente) : 0,
     }
 
     const { error } = editando
@@ -350,6 +360,33 @@ export default function ClientesPage() {
                   Preenchido automaticamente ao criar uma nova escolta para este cliente.
                 </p>
               </div>
+              <div className="grid grid-cols-2 gap-3" style={{ marginTop: '12px' }}>
+                <div>
+                  <Label className="text-xs text-text-secondary mb-1 block">Franquia KM</Label>
+                  <Input
+                    type="number"
+                    min="1"
+                    step="1"
+                    value={form.km_franquia}
+                    onChange={(e) => upd({ km_franquia: e.target.value })}
+                    placeholder="200"
+                  />
+                </div>
+                <div>
+                  <Label className="text-xs text-text-secondary mb-1 block">Valor por KM Excedente (R$)</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={form.valor_km_excedente}
+                    onChange={(e) => upd({ valor_km_excedente: e.target.value })}
+                    placeholder="0,00"
+                  />
+                </div>
+              </div>
+              <p style={{ fontSize: '10px', color: 'rgba(255,255,255,0.25)', marginTop: '4px' }}>
+                Quilômetros extras acima da franquia serão cobrados pelo valor por KM.
+              </p>
             </div>
           )}
 
