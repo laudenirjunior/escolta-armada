@@ -752,7 +752,7 @@ export default function IndicadoresPage() {
       </div>
 
       {/* ── Barra de Abas ── */}
-      <div style={{ display: 'flex', borderBottom: `1px solid ${P.border}`, flexWrap: 'wrap', gap: '0' }}>
+      <div style={{ display: 'flex', borderBottom: `2px solid ${P.border}`, flexWrap: 'wrap', backgroundColor: '#fff', borderRadius: '2px 2px 0 0', gap: '0' }}>
         {([
           { key: 'operacional', label: 'Operacional' },
           { key: 'financeiro',  label: 'Financeiro',   hidden: !verFinanceiro },
@@ -763,15 +763,13 @@ export default function IndicadoresPage() {
         ] as { key: Aba; label: string; hidden?: boolean }[]).filter(t => !t.hidden).map(tab => (
           <button key={tab.key} onClick={() => setAbaAtiva(tab.key)}
             style={{
-              padding: '10px 18px', fontSize: '11px', fontWeight: 700,
+              padding: '11px 20px', fontSize: '11px', fontWeight: 700,
               textTransform: 'uppercase', letterSpacing: '0.08em',
-              borderBottom: abaAtiva === tab.key ? `2px solid ${P.navy}` : '2px solid transparent',
-              color: abaAtiva === tab.key ? P.navy : P.textSub,
-              backgroundColor: abaAtiva === tab.key ? P.navyBg : 'transparent',
-              marginBottom: '-1px', border: 'none', cursor: 'pointer',
+              outline: 'none', cursor: 'pointer', background: 'none',
               borderTop: 'none', borderLeft: 'none', borderRight: 'none',
-              borderBottomColor: abaAtiva === tab.key ? P.navy : 'transparent',
-              borderBottomWidth: '2px', borderBottomStyle: 'solid',
+              borderBottom: abaAtiva === tab.key ? `3px solid ${P.navy}` : '3px solid transparent',
+              color: abaAtiva === tab.key ? P.navy : P.textSub,
+              marginBottom: '-2px',
             }}>
             {tab.label}
           </button>
