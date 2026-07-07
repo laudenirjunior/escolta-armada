@@ -54,6 +54,7 @@ const STATUS_BADGE: Record<string, string> = {
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 type TipoPeriodo = 'hoje' | 'semana' | 'mes' | 'personalizado'
+type Aba = 'operacional' | 'financeiro' | 'pessoas' | 'frota' | 'qualidade' | 'clientes'
 
 interface EscoltaRow {
   id: string
@@ -66,7 +67,7 @@ interface EscoltaRow {
   valor_cobrado: number | null
   outros_custos: number | null
   cliente: { nome_cliente: string; cor_destaque: string | null } | null
-  veiculos: { abastecimento_valor: number | null }[]
+  veiculos: { abastecimento_valor: number | null; abastecimento_litros: number | null }[]
   efetivo_financeiro: { valor_pago_vigilante: number | null }[]
 }
 
@@ -77,6 +78,28 @@ interface AlertaSLA {
   minutosEmCampo: number; minutosExcedidos: number
 }
 interface VigRanking { nome: string; total: number; escoltaIds: string[] }
+
+interface CheckinsData { total: number; mediaPerEscolta: number; offlineCount: number; precisaoMedia: number | null }
+interface EmergenciasData { total: number; abertas: number; encerradas: number; tempoMedioResolucaoMin: number | null }
+interface PessoasData {
+  totalEfetivo: number; confirmados: number; comPresenca: number
+  porPapel: { comandante: number; operador: number }
+  rankingRemuneracao: { nome: string; total: number; escalacoes: number }[]
+}
+interface FrotaDetalhe { placa: string; modelo: string | null; kmTotal: number; litros: number; custo: number; viagens: number }
+interface FrotaGlobal {
+  veiculosPorStatus: { ativo: number; inativo: number; manutencao: number }
+  armamentosPorTipo: { tipo: string; qtd: number }[]
+  armamentosAtivos: number; armamentosInativos: number
+}
+interface QualidadeData {
+  total: number; concluidos: number; totalItens: number; conformes: number
+  material: { total: number; conformes: number }
+  viatura: { total: number; conformes: number }
+  itensMaisReprovados: { descricao: string; total: number }[]
+  tempoMedioMin: number | null
+}
+interface ClientesGlobal { ativos: number; inativos: number; comTelegram: number; semTelegram: number }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function diffMinutes(from: string) {
@@ -170,6 +193,9 @@ export default function IndicadoresPage() {
   const { user } = useAuth()
   const verFinanceiro = PERFIS_FINANCEIRO_IND.includes((user?.perfil?.codigo ?? '') as any)
 
+  // Aba ativa
+  const [abaAtiva, setAbaAtiva] = useState<Aba>('operacional')
+
   // Filtros
   const [tipoPeriodo, setTipoPeriodo] = useState<TipoPeriodo>('mes')
   const [dataInicio, setDataInicio]   = useState('')
@@ -189,6 +215,16 @@ export default function IndicadoresPage() {
   const [tempos, setTempos] = useState<{ media: number; menor: number; maior: number } | null>(null)
   const [rankingVigilantes, setRankingVigilantes] = useState<VigRanking[]>([])
   const [rankingVeiculos, setRankingVeiculos] = useState<{ placa: string; modelo: string | null; kmTotal: number; viagens: number }[]>([])
+
+  // Estados das novas abas
+  const [checkinsStats, setCheckinsStats] = useState<CheckinsData | null>(null)
+  const [emergenciasStats, setEmergenciasStats] = useState<EmergenciasData | null>(null)
+  const [pessoasStats, setPessoasStats] = useState<PessoasData | null>(null)
+  const [frotaDetalhes, setFrotaDetalhes] = useState<FrotaDetalhe[]>([])
+  const [frotaGlobal, setFrotaGlobal] = useState<FrotaGlobal | null>(null)
+  const [qualidadeStats, setQualidadeStats] = useState<QualidadeData | null>(null)
+  const [clientesGlobal, setClientesGlobal] = useState<ClientesGlobal | null>(null)
+  const [ocorrTipos, setOcorrTipos] = useState<{ tipo: string; total: number }[]>([])
 
   const labelPeriodo = tipoPeriodo === 'hoje' ? 'hoje'
     : tipoPeriodo === 'semana' ? 'semana'
@@ -234,11 +270,58 @@ export default function IndicadoresPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Frota global (period-independent)
+  useEffect(() => {
+    Promise.all([
+      sb.from('veiculos').select('id, status'),
+      sb.from('armamentos').select('id, status, tipo:dom_tipos_armamento(nome)'),
+    ]).then(([{ data: veics }, { data: arms }]) => {
+      const vsArr = (veics ?? []) as any[]
+      const armsArr = (arms ?? []) as any[]
+      const armTipos: Record<string, number> = {}
+      armsArr.forEach((a: any) => {
+        const tipo = (a.tipo as any)?.nome ?? 'Outros'
+        armTipos[tipo] = (armTipos[tipo] ?? 0) + 1
+      })
+      setFrotaGlobal({
+        veiculosPorStatus: {
+          ativo: vsArr.filter(v => v.status === 'ativo').length,
+          inativo: vsArr.filter(v => v.status === 'inativo').length,
+          manutencao: vsArr.filter(v => v.status === 'manutencao').length,
+        },
+        armamentosPorTipo: Object.entries(armTipos).map(([tipo, qtd]) => ({ tipo, qtd })).sort((a, b) => b.qtd - a.qtd),
+        armamentosAtivos: armsArr.filter((a: any) => a.status === 'ativo').length,
+        armamentosInativos: armsArr.filter((a: any) => a.status === 'inativo').length,
+      })
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Clientes global (period-independent)
+  useEffect(() => {
+    sb.from('clientes').select('id, status, telegram_chat_id').then(({ data }) => {
+      const arr = (data ?? []) as any[]
+      setClientesGlobal({
+        ativos: arr.filter(c => c.status === 'ativo').length,
+        inativos: arr.filter(c => c.status === 'inativo').length,
+        comTelegram: arr.filter(c => c.telegram_chat_id).length,
+        semTelegram: arr.filter(c => !c.telegram_chat_id).length,
+      })
+    })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const carregar = useCallback(async () => {
     setLoading(true)
     setTempos(null)
     setRankingVigilantes([])
     setRankingVeiculos([])
+    setCheckinsStats(null)
+    setEmergenciasStats(null)
+    setPessoasStats(null)
+    setFrotaDetalhes([])
+    setQualidadeStats(null)
+    setOcorrTipos([])
 
     const { from, to } = computeRange(tipoPeriodo, dataInicio, dataFim)
 
@@ -246,7 +329,7 @@ export default function IndicadoresPage() {
       id, codigo_escolta, status, data_hora_prevista, data_finalizacao,
       origem_endereco, destino_endereco, valor_cobrado, outros_custos,
       cliente:clientes(nome_cliente, cor_destaque),
-      veiculos:escolta_veiculos(abastecimento_valor),
+      veiculos:escolta_veiculos(abastecimento_valor, abastecimento_litros),
       efetivo_financeiro:escolta_efetivo(valor_pago_vigilante)
     `)
     .gte('data_hora_prevista', from)
@@ -282,9 +365,12 @@ export default function IndicadoresPage() {
       const rowIds = rows.map((e: any) => e.id)
       const escoltasFinalizadasIds = rows.filter(e => e.status === 'finalizada').map(e => e.id)
 
-      const [{ data: efetivos }, { data: escVeics }] = await Promise.all([
+      const [{ data: efetivos }, { data: escVeicsAll }, { data: escVeics }] = await Promise.all([
         sb.from('escolta_efetivo')
-          .select('vigilante_id, vigilante:vigilantes(nome_completo), escolta_id')
+          .select('vigilante_id, vigilante:vigilantes(nome_completo), escolta_id, confirmado, papel_na_escolta, valor_pago_vigilante')
+          .in('escolta_id', rowIds),
+        sb.from('escolta_veiculos')
+          .select('id, veiculo_id, veiculo:veiculos(placa, modelo), quilometragem_saida, quilometragem_retorno, abastecimento_litros, abastecimento_valor, escolta_id')
           .in('escolta_id', rowIds),
         sb.from('escolta_veiculos')
           .select('veiculo_id, veiculo:veiculos(placa, modelo), quilometragem_saida, quilometragem_retorno, escolta_id')
@@ -319,6 +405,121 @@ export default function IndicadoresPage() {
         veicMap[vid].viagens++
       })
       setRankingVeiculos(Object.values(veicMap).sort((a, b) => b.kmTotal - a.kmTotal).slice(0, 5))
+
+      // Frota detalhes (todos veículos, com litros/custo)
+      const veicMapFrota: Record<string, FrotaDetalhe> = {}
+      ;(escVeicsAll ?? []).forEach((ev: any) => {
+        const vid = ev.veiculo_id; if (!vid) return
+        const km = (ev.quilometragem_retorno ?? 0) - (ev.quilometragem_saida ?? 0)
+        const placa = (ev.veiculo as any)?.placa ?? '—'
+        const modelo = (ev.veiculo as any)?.modelo ?? null
+        if (!veicMapFrota[vid]) veicMapFrota[vid] = { placa, modelo, kmTotal: 0, litros: 0, custo: 0, viagens: 0 }
+        if (km > 0) { veicMapFrota[vid].kmTotal += km; veicMapFrota[vid].viagens++ }
+        veicMapFrota[vid].litros += ev.abastecimento_litros ?? 0
+        veicMapFrota[vid].custo += ev.abastecimento_valor ?? 0
+      })
+      setFrotaDetalhes(Object.values(veicMapFrota).sort((a, b) => b.kmTotal - a.kmTotal))
+
+      // IDs de escolta_veiculos para queries de pontos/checklists
+      const escoltaVeiculoIds = (escVeicsAll ?? []).map((ev: any) => ev.id as string)
+
+      // Segunda bateria de queries (operacional/qualidade/pessoas)
+      const [{ data: pontosData }, { data: emergData }, { data: presData }, { data: clkData }, { data: ocorrTipoData }] = await Promise.all([
+        escoltaVeiculoIds.length > 0
+          ? sb.from('pontos_controle').select('id, criado_offline, precisao_metros, escolta_veiculo_id').in('escolta_veiculo_id', escoltaVeiculoIds)
+          : Promise.resolve({ data: [] as any[] }),
+        sb.from('emergencias').select('id, status, data_hora, atualizado_em').in('escolta_id', rowIds),
+        sb.from('presencas').select('vigilante_id, escolta_id').in('escolta_id', rowIds),
+        escoltaVeiculoIds.length > 0
+          ? sb.from('checklists').select('id, concluido, data_inicio, data_conclusao, tipo, checklist_respostas(conforme, descricao_item)').in('escolta_veiculo_id', escoltaVeiculoIds)
+          : Promise.resolve({ data: [] as any[] }),
+        sb.from('ocorrencias').select('id, tipo:dom_tipos_ocorrencia(nome)').gte('data_hora', from).lte('data_hora', to),
+      ])
+
+      // Check-ins stats
+      const pontos = (pontosData ?? []) as any[]
+      const evIdsComPontos = [...new Set(pontos.map((p: any) => p.escolta_veiculo_id))]
+      setCheckinsStats({
+        total: pontos.length,
+        mediaPerEscolta: evIdsComPontos.length > 0 ? Math.round(pontos.length / evIdsComPontos.length) : 0,
+        offlineCount: pontos.filter((p: any) => p.criado_offline).length,
+        precisaoMedia: pontos.filter((p: any) => p.precisao_metros).length > 0
+          ? Math.round(pontos.filter((p: any) => p.precisao_metros).reduce((s: number, p: any) => s + Number(p.precisao_metros), 0) / pontos.filter((p: any) => p.precisao_metros).length)
+          : null,
+      })
+
+      // Emergências stats
+      const emergs = (emergData ?? []) as any[]
+      const emergEncerradas = emergs.filter((e: any) => e.status === 'encerrada')
+      const temposEncerr = emergEncerradas
+        .filter((e: any) => e.data_hora && e.atualizado_em)
+        .map((e: any) => new Date(e.atualizado_em).getTime() - new Date(e.data_hora).getTime())
+        .filter((t: number) => t > 0)
+      setEmergenciasStats({
+        total: emergs.length,
+        abertas: emergs.filter((e: any) => e.status !== 'encerrada').length,
+        encerradas: emergEncerradas.length,
+        tempoMedioResolucaoMin: temposEncerr.length > 0
+          ? Math.round(temposEncerr.reduce((s: number, t: number) => s + t, 0) / temposEncerr.length / 60000)
+          : null,
+      })
+
+      // Pessoas stats
+      const presArr = (presData ?? []) as any[]
+      const vigilantesComPresenca = new Set(presArr.map((p: any) => p.vigilante_id))
+      const efetivosArr = (efetivos ?? []) as any[]
+      const remunMap: Record<string, { nome: string; total: number; escalacoes: number }> = {}
+      efetivosArr.forEach((ef: any) => {
+        const vid = ef.vigilante_id; if (!vid) return
+        const nome = (ef.vigilante as any)?.nome_completo ?? 'Desconhecido'
+        if (!remunMap[vid]) remunMap[vid] = { nome, total: 0, escalacoes: 0 }
+        remunMap[vid].total += ef.valor_pago_vigilante ?? 0
+        remunMap[vid].escalacoes++
+      })
+      setPessoasStats({
+        totalEfetivo: efetivosArr.length,
+        confirmados: efetivosArr.filter((ef: any) => ef.confirmado).length,
+        comPresenca: efetivosArr.filter((ef: any) => vigilantesComPresenca.has(ef.vigilante_id)).length,
+        porPapel: {
+          comandante: efetivosArr.filter((ef: any) => ef.papel_na_escolta === 'comandante').length,
+          operador: efetivosArr.filter((ef: any) => ef.papel_na_escolta === 'operador').length,
+        },
+        rankingRemuneracao: Object.values(remunMap).sort((a, b) => b.total - a.total).slice(0, 5),
+      })
+
+      // Qualidade stats
+      const clks = (clkData ?? []) as any[]
+      let qTotalItens = 0, qConformes = 0, qMatTotal = 0, qMatConf = 0, qViatTotal = 0, qViatConf = 0
+      const repMap: Record<string, number> = {}
+      const temposClk: number[] = []
+      clks.forEach((c: any) => {
+        if (c.data_inicio && c.data_conclusao) {
+          const t = new Date(c.data_conclusao).getTime() - new Date(c.data_inicio).getTime()
+          if (t > 0) temposClk.push(t)
+        }
+        ;(c.checklist_respostas ?? []).forEach((r: any) => {
+          qTotalItens++
+          if (c.tipo === 'material') qMatTotal++; else qViatTotal++
+          if (r.conforme) { qConformes++; if (c.tipo === 'material') qMatConf++; else qViatConf++ }
+          else { const d = r.descricao_item ?? '—'; repMap[d] = (repMap[d] ?? 0) + 1 }
+        })
+      })
+      setQualidadeStats({
+        total: clks.length, concluidos: clks.filter((c: any) => c.concluido).length,
+        totalItens: qTotalItens, conformes: qConformes,
+        material: { total: qMatTotal, conformes: qMatConf },
+        viatura: { total: qViatTotal, conformes: qViatConf },
+        itensMaisReprovados: Object.entries(repMap).map(([descricao, total]) => ({ descricao, total })).sort((a, b) => b.total - a.total).slice(0, 5),
+        tempoMedioMin: temposClk.length > 0 ? Math.round(temposClk.reduce((s, t) => s + t, 0) / temposClk.length / 60000) : null,
+      })
+
+      // Ocorrências por tipo
+      const ocorrMap: Record<string, number> = {}
+      ;(ocorrTipoData ?? []).forEach((o: any) => {
+        const tipo = (o.tipo as any)?.nome ?? 'Outros'
+        ocorrMap[tipo] = (ocorrMap[tipo] ?? 0) + 1
+      })
+      setOcorrTipos(Object.entries(ocorrMap).map(([tipo, total]) => ({ tipo, total })).sort((a, b) => b.total - a.total))
 
       // Tempo médio de escolta
       if (escoltasFinalizadasIds.length > 0) {
@@ -414,6 +615,23 @@ export default function IndicadoresPage() {
     }, {} as Record<string, { nome: string; cor: string; total: number; receita: number; custo: number }>)
   ).map(r => ({ ...r, margem: r.receita - r.custo, margemPct: r.receita > 0 ? ((r.receita - r.custo) / r.receita) * 100 : null }))
     .sort((a, b) => b.receita - a.receita)
+
+  // Frota totais do período
+  const litrosTotalPeriodo = escoltas.reduce((s, e) => s + e.veiculos.reduce((ss, v) => ss + (v.abastecimento_litros ?? 0), 0), 0)
+  const custoCombuPeriodo  = escoltas.reduce((s, e) => s + e.veiculos.reduce((ss, v) => ss + (v.abastecimento_valor ?? 0), 0), 0)
+  const kmTotalPeriodo     = frotaDetalhes.reduce((s, v) => s + v.kmTotal, 0)
+
+  // Qualidade rates
+  const taxaConclusaoClk = qualidadeStats && qualidadeStats.total > 0
+    ? Math.round((qualidadeStats.concluidos / qualidadeStats.total) * 100) : null
+  const taxaConformidade = qualidadeStats && qualidadeStats.totalItens > 0
+    ? Math.round((qualidadeStats.conformes / qualidadeStats.totalItens) * 100) : null
+
+  // Pessoas rates
+  const taxaConfirmacao = pessoasStats && pessoasStats.totalEfetivo > 0
+    ? Math.round((pessoasStats.confirmados / pessoasStats.totalEfetivo) * 100) : null
+  const taxaPresenca = pessoasStats && pessoasStats.totalEfetivo > 0
+    ? Math.round((pessoasStats.comPresenca / pessoasStats.totalEfetivo) * 100) : null
 
   const now = new Date()
   const mesLabel = now.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
@@ -533,6 +751,36 @@ export default function IndicadoresPage() {
         </div>
       </div>
 
+      {/* ── Barra de Abas ── */}
+      <div style={{ display: 'flex', borderBottom: `1px solid ${P.border}`, flexWrap: 'wrap', gap: '0' }}>
+        {([
+          { key: 'operacional', label: 'Operacional' },
+          { key: 'financeiro',  label: 'Financeiro',   hidden: !verFinanceiro },
+          { key: 'pessoas',     label: 'Pessoas' },
+          { key: 'frota',       label: 'Frota & Armas' },
+          { key: 'qualidade',   label: 'Qualidade' },
+          { key: 'clientes',    label: 'Clientes' },
+        ] as { key: Aba; label: string; hidden?: boolean }[]).filter(t => !t.hidden).map(tab => (
+          <button key={tab.key} onClick={() => setAbaAtiva(tab.key)}
+            style={{
+              padding: '10px 18px', fontSize: '11px', fontWeight: 700,
+              textTransform: 'uppercase', letterSpacing: '0.08em',
+              borderBottom: abaAtiva === tab.key ? `2px solid ${P.navy}` : '2px solid transparent',
+              color: abaAtiva === tab.key ? P.navy : P.textSub,
+              backgroundColor: abaAtiva === tab.key ? P.navyBg : 'transparent',
+              marginBottom: '-1px', border: 'none', cursor: 'pointer',
+              borderTop: 'none', borderLeft: 'none', borderRight: 'none',
+              borderBottomColor: abaAtiva === tab.key ? P.navy : 'transparent',
+              borderBottomWidth: '2px', borderBottomStyle: 'solid',
+            }}>
+            {tab.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── ABA: OPERACIONAL ── */}
+      {abaAtiva === 'operacional' && <>
+
       {/* ── Alertas SLA ── */}
       {alertasVisiveis.length > 0 && (
         <div className="space-y-2">
@@ -638,87 +886,45 @@ export default function IndicadoresPage() {
         })}
       </div>
 
-      {/* ── KPIs Financeiros (supervisor+) ── */}
-      {verFinanceiro && (
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px' }}>
-            <div style={{ width: '3px', height: '3px', backgroundColor: '#1E7C52', borderRadius: '50%' }} />
-            <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.22em', color: P.textSub }}>Painel Financeiro · Escoltas Concluídas</p>
+      {/* ── Check-ins + Emergências ── */}
+      {(checkinsStats || emergenciasStats) && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {[
+            { label: 'Check-ins Realizados', valor: checkinsStats?.total ?? '—', sub: `média ${checkinsStats?.mediaPerEscolta ?? 0}/veículo`, cor: P.navy, corTop: P.steel },
+            { label: 'Check-ins Offline',    valor: checkinsStats?.offlineCount ?? '—', sub: 'criados sem conexão', cor: checkinsStats?.offlineCount ? P.steel : P.light, corTop: P.light },
+            { label: 'Emergências',          valor: emergenciasStats?.total ?? '—', sub: `${emergenciasStats?.abertas ?? 0} abertas · ${emergenciasStats?.encerradas ?? 0} encerradas`, cor: (emergenciasStats?.abertas ?? 0) > 0 ? P.errorText : P.navy, corTop: (emergenciasStats?.abertas ?? 0) > 0 ? P.errorText : P.light },
+            { label: 'Tempo Médio Emergência', valor: emergenciasStats?.tempoMedioResolucaoMin != null ? formatDuracao(emergenciasStats.tempoMedioResolucaoMin) : '—', sub: 'tempo médio de encerramento', cor: P.navy, corTop: P.steel },
+          ].map(k => (
+            <div key={k.label} style={{ backgroundColor: '#fff', border: `1px solid ${P.border}`, borderRadius: '2px', padding: '14px', borderTop: `3px solid ${k.corTop}` }}>
+              <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.16em', color: P.textSub, marginBottom: '6px' }}>{k.label}</p>
+              <p style={{ fontSize: '22px', fontWeight: 900, color: k.cor, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{loading ? '—' : k.valor}</p>
+              <p style={{ fontSize: '10px', color: P.light, marginTop: '4px' }}>{k.sub}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Ocorrências por Tipo ── */}
+      {ocorrTipos.length > 0 && (
+        <div style={{ backgroundColor: '#fff', border: `1px solid ${P.border}`, borderRadius: '2px', padding: '16px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+            <div style={{ width: '5px', height: '5px', borderRadius: '1px', backgroundColor: P.steel }} />
+            <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.18em', color: P.textSub }}>Ocorrências por Tipo</p>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {[
-              { label: 'Receita Total', value: loading ? '—' : fmtBRL(receitaTotal), color: receitaTotal > 0 ? '#1E7C52' : P.light, sub: `${escoltasConcluidas.length} escolta(s) concluída(s)` },
-              { label: 'Custo Total', value: loading ? '—' : fmtBRL(custoTotal), color: custoTotal > 0 ? '#B83832' : P.light, sub: `Pessoal + combustível + outros` },
-              { label: 'Margem Bruta', value: loading ? '—' : fmtBRL(margemBruta), color: margemBruta >= 0 ? '#1E7C52' : '#B83832', sub: txMargem != null ? `${txMargem.toFixed(1)}% da receita` : 'Sem receita' },
-              { label: 'Custo de Pessoal', value: loading ? '—' : fmtBRL(custoPessoal), color: '#B83832', sub: `+ ${fmtBRL(custoCombustivel)} combustível` },
-            ].map(k => (
-              <div key={k.label} style={{ backgroundColor: '#fff', border: `1px solid ${P.border}`, borderRadius: '2px', padding: '14px', borderTop: `3px solid ${k.color}` }}>
-                <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.16em', color: P.textSub, marginBottom: '6px' }}>{k.label}</p>
-                <p style={{ fontSize: '18px', fontWeight: 900, color: k.color, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{k.value}</p>
-                <p style={{ fontSize: '10px', color: P.light, marginTop: '4px' }}>{k.sub}</p>
+          <div className="space-y-2">
+            {ocorrTipos.map(o => (
+              <div key={o.tipo} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '11px', color: P.text, fontWeight: 600, minWidth: '160px' }}>{o.tipo}</span>
+                <div style={{ flex: 1, height: '8px', backgroundColor: P.steelBg, borderRadius: '2px', overflow: 'hidden' }}>
+                  <div style={{ width: `${(o.total / (ocorrTipos[0]?.total || 1)) * 100}%`, height: '100%', backgroundColor: P.navy, borderRadius: '2px', transition: 'width 0.8s ease' }} />
+                </div>
+                <span style={{ fontSize: '11px', fontWeight: 900, color: P.navy, minWidth: '20px', textAlign: 'right' }}>{o.total}</span>
               </div>
             ))}
           </div>
-          {/* Barra de composição de custos */}
-          {receitaTotal > 0 && !loading && (
-            <div style={{ marginTop: '10px', backgroundColor: '#fff', border: `1px solid ${P.border}`, borderRadius: '2px', padding: '12px 16px' }}>
-              <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.16em', color: P.textSub, marginBottom: '8px' }}>Composição dos Custos sobre Receita</p>
-              <div style={{ display: 'flex', height: '10px', borderRadius: '2px', overflow: 'hidden', backgroundColor: P.steelBg }}>
-                <div title={`Pessoal: ${fmtBRL(custoPessoal)}`} style={{ width: `${Math.min((custoPessoal/receitaTotal)*100,100)}%`, backgroundColor: '#B83832' }} />
-                <div title={`Combustível: ${fmtBRL(custoCombustivel)}`} style={{ width: `${Math.min((custoCombustivel/receitaTotal)*100,100)}%`, backgroundColor: '#D97706' }} />
-                <div title={`Outros: ${fmtBRL(outrosCustsTotal)}`} style={{ width: `${Math.min((outrosCustsTotal/receitaTotal)*100,100)}%`, backgroundColor: P.light }} />
-                {margemBruta > 0 && <div title={`Margem: ${fmtBRL(margemBruta)}`} style={{ flex: 1, backgroundColor: '#1E7C52' }} />}
-              </div>
-              <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginTop: '8px' }}>
-                {[{ l: 'Pessoal', v: custoPessoal, c: '#B83832' }, { l: 'Combustível', v: custoCombustivel, c: '#D97706' }, { l: 'Outros', v: outrosCustsTotal, c: P.light }, { l: 'Margem', v: margemBruta, c: '#1E7C52' }].map(i => (
-                  <span key={i.l} style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: P.textSub }}>
-                    <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '2px', backgroundColor: i.c, flexShrink: 0 }} />
-                    {i.l}: <strong style={{ color: P.text }}>{fmtBRL(i.v)}</strong>
-                  </span>
-                ))}
-              </div>
-              {/* Tabela financeiro por cliente */}
-              {finPorCliente.length > 0 && (
-                <div style={{ marginTop: '16px' }}>
-                  <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.16em', color: P.textSub, marginBottom: '8px' }}>Financeiro por Cliente</p>
-                  <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
-                      <thead>
-                        <tr style={{ borderBottom: `1px solid ${P.border}` }}>
-                          {['Cliente', 'Escoltas', 'Receita', 'Custo', 'Margem', 'Margem %'].map(h => (
-                            <th key={h} style={{ textAlign: 'left', padding: '4px 8px', fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.12em', color: P.textSub, whiteSpace: 'nowrap' }}>{h}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {finPorCliente.map((r, idx) => (
-                          <tr key={r.nome} style={{ borderBottom: `1px solid ${P.steelBg}`, backgroundColor: idx % 2 === 0 ? '#fff' : P.bg }}>
-                            <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <div style={{ width: '7px', height: '7px', backgroundColor: r.cor, borderRadius: '2px', flexShrink: 0 }} />
-                                <span style={{ color: P.text, fontWeight: 600 }}>{r.nome}</span>
-                              </div>
-                            </td>
-                            <td style={{ padding: '5px 8px', color: P.textSub, fontWeight: 700, textAlign: 'right' }}>{r.total}</td>
-                            <td style={{ padding: '5px 8px', color: '#1E7C52', fontWeight: 700, whiteSpace: 'nowrap' }}>{fmtBRL(r.receita)}</td>
-                            <td style={{ padding: '5px 8px', color: P.errorText, fontWeight: 700, whiteSpace: 'nowrap' }}>{fmtBRL(r.custo)}</td>
-                            <td style={{ padding: '5px 8px', color: r.margem >= 0 ? '#1E7C52' : P.errorText, fontWeight: 700, whiteSpace: 'nowrap' }}>{fmtBRL(r.margem)}</td>
-                            <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}>
-                              <span style={{ fontSize: '10px', fontWeight: 900, color: r.margemPct != null ? (r.margemPct >= 0 ? '#1E7C52' : P.errorText) : P.light }}>
-                                {r.margemPct != null ? `${r.margemPct.toFixed(1)}%` : '—'}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
         </div>
       )}
+
 
       {/* ── Volume Mensal ── */}
       <div className="card-light p-5">
@@ -1056,6 +1262,415 @@ export default function IndicadoresPage() {
           </>
         )}
       </div>
+
+      </> /* fim ABA OPERACIONAL */}
+
+      {/* ── ABA: FINANCEIRO ── */}
+      {abaAtiva === 'financeiro' && verFinanceiro && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { label: 'Receita Total',    value: loading ? '—' : fmtBRL(receitaTotal),  color: receitaTotal > 0 ? '#1E7C52' : P.light, sub: `${escoltasConcluidas.length} escolta(s) concluída(s)` },
+              { label: 'Custo Total',      value: loading ? '—' : fmtBRL(custoTotal),    color: custoTotal > 0 ? '#B83832' : P.light,    sub: 'Pessoal + combustível + outros' },
+              { label: 'Margem Bruta',     value: loading ? '—' : fmtBRL(margemBruta),   color: margemBruta >= 0 ? '#1E7C52' : '#B83832', sub: txMargem != null ? `${txMargem.toFixed(1)}% da receita` : 'Sem receita' },
+              { label: 'Custo de Pessoal', value: loading ? '—' : fmtBRL(custoPessoal),  color: '#B83832',                                sub: `+ ${fmtBRL(custoCombustivel)} combustível` },
+            ].map(k => (
+              <div key={k.label} style={{ backgroundColor: '#fff', border: `1px solid ${P.border}`, borderRadius: '2px', padding: '14px', borderTop: `3px solid ${k.color}` }}>
+                <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.16em', color: P.textSub, marginBottom: '6px' }}>{k.label}</p>
+                <p style={{ fontSize: '18px', fontWeight: 900, color: k.color, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{k.value}</p>
+                <p style={{ fontSize: '10px', color: P.light, marginTop: '4px' }}>{k.sub}</p>
+              </div>
+            ))}
+          </div>
+          {receitaTotal > 0 && !loading && (
+            <div style={{ backgroundColor: '#fff', border: `1px solid ${P.border}`, borderRadius: '2px', padding: '16px' }}>
+              <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.16em', color: P.textSub, marginBottom: '10px' }}>Composição dos Custos sobre Receita</p>
+              <div style={{ display: 'flex', height: '10px', borderRadius: '2px', overflow: 'hidden', backgroundColor: P.steelBg }}>
+                <div title={`Pessoal: ${fmtBRL(custoPessoal)}`}       style={{ width: `${Math.min((custoPessoal/receitaTotal)*100,100)}%`,       backgroundColor: '#B83832' }} />
+                <div title={`Combustível: ${fmtBRL(custoCombustivel)}`} style={{ width: `${Math.min((custoCombustivel/receitaTotal)*100,100)}%`,   backgroundColor: '#D97706' }} />
+                <div title={`Outros: ${fmtBRL(outrosCustsTotal)}`}     style={{ width: `${Math.min((outrosCustsTotal/receitaTotal)*100,100)}%`,    backgroundColor: P.light  }} />
+                {margemBruta > 0 && <div title={`Margem: ${fmtBRL(margemBruta)}`} style={{ flex: 1, backgroundColor: '#1E7C52' }} />}
+              </div>
+              <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginTop: '8px' }}>
+                {[{ l: 'Pessoal', v: custoPessoal, c: '#B83832' }, { l: 'Combustível', v: custoCombustivel, c: '#D97706' }, { l: 'Outros', v: outrosCustsTotal, c: P.light }, { l: 'Margem', v: margemBruta, c: '#1E7C52' }].map(i => (
+                  <span key={i.l} style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: P.textSub }}>
+                    <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '2px', backgroundColor: i.c }} />
+                    {i.l}: <strong style={{ color: P.text }}>{fmtBRL(i.v)}</strong>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {finPorCliente.length > 0 && (
+            <div style={{ backgroundColor: '#fff', border: `1px solid ${P.border}`, borderRadius: '2px', padding: '16px' }}>
+              <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.16em', color: P.textSub, marginBottom: '10px' }}>Financeiro por Cliente</p>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+                  <thead>
+                    <tr style={{ borderBottom: `1px solid ${P.border}` }}>
+                      {['Cliente', 'Escoltas', 'Receita', 'Custo', 'Margem', 'Margem %'].map(h => (
+                        <th key={h} style={{ textAlign: 'left', padding: '4px 8px', fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.12em', color: P.textSub, whiteSpace: 'nowrap' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {finPorCliente.map((r, idx) => (
+                      <tr key={r.nome} style={{ borderBottom: `1px solid ${P.steelBg}`, backgroundColor: idx % 2 === 0 ? '#fff' : P.bg }}>
+                        <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            <div style={{ width: '7px', height: '7px', backgroundColor: r.cor, borderRadius: '2px', flexShrink: 0 }} />
+                            <span style={{ color: P.text, fontWeight: 600 }}>{r.nome}</span>
+                          </div>
+                        </td>
+                        <td style={{ padding: '5px 8px', color: P.textSub, fontWeight: 700, textAlign: 'right' }}>{r.total}</td>
+                        <td style={{ padding: '5px 8px', color: '#1E7C52', fontWeight: 700, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{fmtBRL(r.receita)}</td>
+                        <td style={{ padding: '5px 8px', color: P.errorText, fontWeight: 700, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{fmtBRL(r.custo)}</td>
+                        <td style={{ padding: '5px 8px', color: r.margem >= 0 ? '#1E7C52' : P.errorText, fontWeight: 700, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{fmtBRL(r.margem)}</td>
+                        <td style={{ padding: '5px 8px', whiteSpace: 'nowrap' }}>
+                          <span style={{ fontSize: '10px', fontWeight: 900, color: r.margemPct != null ? (r.margemPct >= 0 ? '#1E7C52' : P.errorText) : P.light }}>
+                            {r.margemPct != null ? `${r.margemPct.toFixed(1)}%` : '—'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          {escoltasConcluidas.length === 0 && !loading && (
+            <p style={{ textAlign: 'center', color: P.light, fontSize: '13px', padding: '40px' }}>Sem escoltas concluídas no período</p>
+          )}
+        </div>
+      )}
+
+      {/* ── ABA: PESSOAS ── */}
+      {abaAtiva === 'pessoas' && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+            {[
+              { label: 'Total Efetivo',    valor: pessoasStats?.totalEfetivo ?? '—',    sub: 'escalações no período',                                   cor: P.navy,      corTop: P.navy    },
+              { label: 'Confirmados',      valor: pessoasStats?.confirmados ?? '—',      sub: `${taxaConfirmacao ?? '—'}% de confirmação`,                cor: '#1E7C52',   corTop: '#1E7C52' },
+              { label: 'Taxa Confirmação', valor: taxaConfirmacao != null ? `${taxaConfirmacao}%` : '—', sub: 'efetivo confirmado',                      cor: taxaConfirmacao != null && taxaConfirmacao >= 80 ? '#1E7C52' : '#B83832', corTop: taxaConfirmacao != null && taxaConfirmacao >= 80 ? '#1E7C52' : '#B83832' },
+              { label: 'Com Presença',     valor: pessoasStats?.comPresenca ?? '—',      sub: `${taxaPresenca ?? '—'}% do efetivo`,                      cor: P.steel,     corTop: P.steel   },
+              { label: 'Comandantes',      valor: pessoasStats?.porPapel.comandante ?? '—', sub: 'papel: comandante',                                    cor: P.navy,      corTop: P.navy    },
+              { label: 'Operadores',       valor: pessoasStats?.porPapel.operador ?? '—',   sub: 'papel: operador',                                     cor: P.steel,     corTop: P.steel   },
+            ].map(k => (
+              <div key={k.label} style={{ backgroundColor: '#fff', border: `1px solid ${P.border}`, borderRadius: '2px', padding: '16px', borderTop: `3px solid ${k.corTop}` }}>
+                <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.16em', color: P.textSub, marginBottom: '8px' }}>{k.label}</p>
+                <p style={{ fontSize: '22px', fontWeight: 900, color: k.cor, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{loading ? '—' : k.valor}</p>
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="card-light p-5">
+              <SectionTitle icon={Users} label="Distribuição de Papéis" />
+              <div className="mt-4 space-y-4">
+                {pessoasStats ? (() => {
+                  const total = pessoasStats.porPapel.comandante + pessoasStats.porPapel.operador
+                  return [
+                    { label: 'Comandantes', valor: pessoasStats.porPapel.comandante, cor: P.navy },
+                    { label: 'Operadores',  valor: pessoasStats.porPapel.operador,   cor: P.steel },
+                  ].map(r => (
+                    <div key={r.label}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                        <span style={{ fontSize: '12px', fontWeight: 600, color: P.text }}>{r.label}</span>
+                        <span style={{ fontSize: '12px', fontWeight: 900, color: r.cor }}>{r.valor} <span style={{ color: P.light, fontWeight: 400 }}>({total > 0 ? Math.round(r.valor/total*100) : 0}%)</span></span>
+                      </div>
+                      <MiniBar pct={total > 0 ? (r.valor/total)*100 : 0} />
+                    </div>
+                  ))
+                })() : <p style={{ fontSize: '11px', color: P.light, textAlign: 'center', padding: '20px' }}>Sem dados no período</p>}
+                {pessoasStats && (
+                  <div style={{ marginTop: '12px', padding: '10px', backgroundColor: P.steelBg, borderRadius: '2px' }}>
+                    <p style={{ fontSize: '10px', color: P.textSub }}>
+                      <strong style={{ color: P.navy }}>Confirmados:</strong> {pessoasStats.confirmados}/{pessoasStats.totalEfetivo}
+                      {' · '}
+                      <strong style={{ color: P.navy }}>Com Presença:</strong> {pessoasStats.comPresenca}/{pessoasStats.totalEfetivo}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="card-light p-5">
+              <SectionTitle icon={Users} label="Top Vigilantes" />
+              <div className="mt-4">
+                <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.16em', color: P.textSub, marginBottom: '8px' }}>Por Escalações</p>
+                {rankingVigilantes.length > 0 ? (
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+                    <thead><tr style={{ borderBottom: `1px solid ${P.border}` }}>
+                      {['#', 'Nome', 'Esc.'].map(h => (<th key={h} style={{ textAlign: h === 'Esc.' ? 'right' : 'left', padding: '3px 6px', fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: P.textSub }}>{h}</th>))}
+                    </tr></thead>
+                    <tbody>{rankingVigilantes.map((v, idx) => (
+                      <tr key={v.nome} style={{ borderBottom: `1px solid ${P.steelBg}` }}>
+                        <td style={{ padding: '4px 6px', color: P.light, fontWeight: 900, fontSize: '10px' }}>{idx + 1}</td>
+                        <td style={{ padding: '4px 6px', color: P.text, fontWeight: 600 }}>{v.nome}</td>
+                        <td style={{ padding: '4px 6px', color: P.navy, fontWeight: 900, textAlign: 'right' }}>{v.total}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                ) : <p style={{ fontSize: '11px', color: P.light }}>Sem dados</p>}
+                {pessoasStats?.rankingRemuneracao.some(r => r.total > 0) && (
+                  <div style={{ marginTop: '16px' }}>
+                    <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.16em', color: P.textSub, marginBottom: '8px' }}>Por Remuneração</p>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+                      <thead><tr style={{ borderBottom: `1px solid ${P.border}` }}>
+                        {['#', 'Nome', 'Total Pago'].map(h => (<th key={h} style={{ textAlign: h === 'Total Pago' ? 'right' : 'left', padding: '3px 6px', fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: P.textSub }}>{h}</th>))}
+                      </tr></thead>
+                      <tbody>{pessoasStats.rankingRemuneracao.map((v, idx) => (
+                        <tr key={v.nome} style={{ borderBottom: `1px solid ${P.steelBg}` }}>
+                          <td style={{ padding: '4px 6px', color: P.light, fontWeight: 900, fontSize: '10px' }}>{idx + 1}</td>
+                          <td style={{ padding: '4px 6px', color: P.text, fontWeight: 600 }}>{v.nome}</td>
+                          <td style={{ padding: '4px 6px', color: '#1E7C52', fontWeight: 900, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{fmtBRL(v.total)}</td>
+                        </tr>
+                      ))}</tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ABA: FROTA & ARMAS ── */}
+      {abaAtiva === 'frota' && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { label: 'Veículos Ativos',    valor: frotaGlobal?.veiculosPorStatus.ativo ?? '—',        sub: 'na frota',               cor: '#1E7C52', corTop: '#1E7C52' },
+              { label: 'Em Manutenção',      valor: frotaGlobal?.veiculosPorStatus.manutencao ?? '—',   sub: 'indisponíveis',          cor: '#D97706', corTop: '#D97706' },
+              { label: 'KM Rodado',          valor: kmTotalPeriodo > 0 ? kmTotalPeriodo.toLocaleString('pt-BR') : '—', sub: 'no período', cor: P.navy, corTop: P.navy },
+              { label: 'Litros Abastecidos', valor: litrosTotalPeriodo > 0 ? litrosTotalPeriodo.toLocaleString('pt-BR', { maximumFractionDigits: 1 }) : '—', sub: `custo: ${fmtBRL(custoCombuPeriodo)}`, cor: P.steel, corTop: P.steel },
+            ].map(k => (
+              <div key={k.label} style={{ backgroundColor: '#fff', border: `1px solid ${P.border}`, borderRadius: '2px', padding: '14px', borderTop: `3px solid ${k.corTop}` }}>
+                <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.16em', color: P.textSub, marginBottom: '6px' }}>{k.label}</p>
+                <p style={{ fontSize: '22px', fontWeight: 900, color: k.cor, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{loading ? '—' : k.valor}</p>
+                <p style={{ fontSize: '10px', color: P.light, marginTop: '4px' }}>{k.sub}</p>
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="card-light p-5">
+              <SectionTitle icon={Truck} label="Status da Frota" />
+              <div className="mt-4 space-y-3">
+                {frotaGlobal ? (() => {
+                  const tot = frotaGlobal.veiculosPorStatus.ativo + frotaGlobal.veiculosPorStatus.inativo + frotaGlobal.veiculosPorStatus.manutencao
+                  return [
+                    { label: 'Ativos',         valor: frotaGlobal.veiculosPorStatus.ativo,       cor: '#1E7C52' },
+                    { label: 'Em Manutenção',  valor: frotaGlobal.veiculosPorStatus.manutencao,  cor: '#D97706' },
+                    { label: 'Inativos',       valor: frotaGlobal.veiculosPorStatus.inativo,     cor: P.light   },
+                  ].map(r => (
+                    <div key={r.label}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                        <span style={{ fontSize: '12px', fontWeight: 600, color: P.text }}>{r.label}</span>
+                        <span style={{ fontSize: '12px', fontWeight: 900, color: r.cor }}>{r.valor}</span>
+                      </div>
+                      <div style={{ height: '8px', backgroundColor: P.steelBg, borderRadius: '2px', overflow: 'hidden' }}>
+                        <div style={{ width: `${tot > 0 ? (r.valor/tot)*100 : 0}%`, height: '100%', backgroundColor: r.cor, borderRadius: '2px', transition: 'width 0.8s ease' }} />
+                      </div>
+                    </div>
+                  ))
+                })() : <p style={{ fontSize: '11px', color: P.light }}>Carregando...</p>}
+              </div>
+              {frotaGlobal && (
+                <div style={{ marginTop: '20px' }}>
+                  <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.18em', color: P.textSub, marginBottom: '10px' }}>Armamentos</p>
+                  <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+                    <div style={{ flex: 1, padding: '10px', backgroundColor: '#E6F4EC', borderRadius: '2px', textAlign: 'center' }}>
+                      <p style={{ fontSize: '18px', fontWeight: 900, color: '#1E7C52' }}>{frotaGlobal.armamentosAtivos}</p>
+                      <p style={{ fontSize: '9px', color: '#1E7C52', fontWeight: 700, textTransform: 'uppercase' }}>Ativos</p>
+                    </div>
+                    <div style={{ flex: 1, padding: '10px', backgroundColor: P.errorBg, borderRadius: '2px', textAlign: 'center' }}>
+                      <p style={{ fontSize: '18px', fontWeight: 900, color: P.errorText }}>{frotaGlobal.armamentosInativos}</p>
+                      <p style={{ fontSize: '9px', color: P.errorText, fontWeight: 700, textTransform: 'uppercase' }}>Inativos</p>
+                    </div>
+                  </div>
+                  {frotaGlobal.armamentosPorTipo.length > 0 && (
+                    <div className="space-y-2">
+                      {frotaGlobal.armamentosPorTipo.map(a => (
+                        <div key={a.tipo} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontSize: '11px', color: P.text, fontWeight: 600, minWidth: '120px' }}>{a.tipo}</span>
+                          <div style={{ flex: 1, height: '6px', backgroundColor: P.steelBg, borderRadius: '2px', overflow: 'hidden' }}>
+                            <div style={{ width: `${(a.qtd / (frotaGlobal.armamentosPorTipo[0]?.qtd || 1)) * 100}%`, height: '100%', backgroundColor: P.navy, borderRadius: '2px' }} />
+                          </div>
+                          <span style={{ fontSize: '11px', fontWeight: 900, color: P.navy, minWidth: '20px', textAlign: 'right' }}>{a.qtd}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="card-light p-5">
+              <SectionTitle icon={Truck} label="Veículos — Detalhes do Período" />
+              <div className="mt-4 overflow-x-auto">
+                {frotaDetalhes.length > 0 ? (
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+                    <thead><tr style={{ borderBottom: `1px solid ${P.border}` }}>
+                      {['Placa', 'KM', 'Litros', 'Custo', 'Viag.'].map(h => (
+                        <th key={h} style={{ textAlign: h === 'Placa' ? 'left' : 'right', padding: '3px 6px', fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: P.textSub }}>{h}</th>
+                      ))}
+                    </tr></thead>
+                    <tbody>{frotaDetalhes.map((v, idx) => (
+                      <tr key={v.placa} style={{ borderBottom: `1px solid ${P.steelBg}`, backgroundColor: idx % 2 === 0 ? '#fff' : P.bg }}>
+                        <td style={{ padding: '5px 6px' }}>
+                          <span style={{ fontFamily: 'monospace', fontWeight: 700, color: P.text }}>{v.placa}</span>
+                          {v.modelo && <span style={{ display: 'block', fontSize: '9px', color: P.light }}>{v.modelo}</span>}
+                        </td>
+                        <td style={{ padding: '5px 6px', textAlign: 'right', color: P.navy, fontWeight: 900, fontVariantNumeric: 'tabular-nums' }}>{v.kmTotal > 0 ? v.kmTotal.toLocaleString('pt-BR') : '—'}</td>
+                        <td style={{ padding: '5px 6px', textAlign: 'right', color: P.textSub, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{v.litros > 0 ? v.litros.toLocaleString('pt-BR', { maximumFractionDigits: 1 }) : '—'}</td>
+                        <td style={{ padding: '5px 6px', textAlign: 'right', color: P.steel, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{v.custo > 0 ? fmtBRL(v.custo) : '—'}</td>
+                        <td style={{ padding: '5px 6px', textAlign: 'right', color: P.textSub, fontWeight: 700 }}>{v.viagens}</td>
+                      </tr>
+                    ))}</tbody>
+                  </table>
+                ) : <p style={{ fontSize: '11px', color: P.light, padding: '20px', textAlign: 'center' }}>Sem dados de veículos no período</p>}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ABA: QUALIDADE ── */}
+      {abaAtiva === 'qualidade' && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { label: 'Total Checklists',   valor: qualidadeStats?.total ?? '—',                                                               sub: `${qualidadeStats?.concluidos ?? 0} concluídos`,            cor: P.navy,      corTop: P.navy    },
+              { label: 'Taxa de Conclusão',  valor: taxaConclusaoClk != null ? `${taxaConclusaoClk}%` : '—',                                    sub: 'checklists concluídos',                                     cor: taxaConclusaoClk != null && taxaConclusaoClk >= 80 ? '#1E7C52' : '#B83832', corTop: taxaConclusaoClk != null && taxaConclusaoClk >= 80 ? '#1E7C52' : '#B83832' },
+              { label: 'Taxa Conformidade',  valor: taxaConformidade != null ? `${taxaConformidade}%` : '—',                                    sub: `${qualidadeStats?.conformes ?? 0}/${qualidadeStats?.totalItens ?? 0} itens`, cor: taxaConformidade != null && taxaConformidade >= 90 ? '#1E7C52' : '#D97706', corTop: taxaConformidade != null && taxaConformidade >= 90 ? '#1E7C52' : '#D97706' },
+              { label: 'Não Conformidades',  valor: qualidadeStats ? qualidadeStats.totalItens - qualidadeStats.conformes : '—',                sub: 'itens reprovados',                                          cor: (qualidadeStats && qualidadeStats.totalItens - qualidadeStats.conformes > 0) ? '#B83832' : '#1E7C52', corTop: (qualidadeStats && qualidadeStats.totalItens - qualidadeStats.conformes > 0) ? '#B83832' : '#1E7C52' },
+            ].map(k => (
+              <div key={k.label} style={{ backgroundColor: '#fff', border: `1px solid ${P.border}`, borderRadius: '2px', padding: '14px', borderTop: `3px solid ${k.corTop}` }}>
+                <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.16em', color: P.textSub, marginBottom: '6px' }}>{k.label}</p>
+                <p style={{ fontSize: '22px', fontWeight: 900, color: k.cor, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{loading ? '—' : k.valor}</p>
+                <p style={{ fontSize: '10px', color: P.light, marginTop: '4px' }}>{k.sub}</p>
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div className="card-light p-5">
+              <SectionTitle icon={CheckCircle2} label="Material vs Viatura" />
+              <div className="mt-4 space-y-4">
+                {qualidadeStats ? [
+                  { label: 'Checklist Material', total: qualidadeStats.material.total, conformes: qualidadeStats.material.conformes },
+                  { label: 'Checklist Viatura',  total: qualidadeStats.viatura.total,  conformes: qualidadeStats.viatura.conformes  },
+                ].map(r => {
+                  const pct = r.total > 0 ? Math.round((r.conformes / r.total) * 100) : null
+                  return (
+                    <div key={r.label}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                        <span style={{ fontSize: '12px', fontWeight: 600, color: P.text }}>{r.label}</span>
+                        <span style={{ fontSize: '12px', fontWeight: 900, color: pct != null && pct >= 90 ? '#1E7C52' : '#D97706' }}>{pct != null ? `${pct}%` : '—'}</span>
+                      </div>
+                      <div style={{ height: '8px', backgroundColor: P.steelBg, borderRadius: '2px', overflow: 'hidden' }}>
+                        <div style={{ width: `${pct ?? 0}%`, height: '100%', backgroundColor: pct != null && pct >= 90 ? '#1E7C52' : '#D97706', borderRadius: '2px', transition: 'width 0.8s ease' }} />
+                      </div>
+                      <p style={{ fontSize: '10px', color: P.light, marginTop: '3px' }}>{r.conformes}/{r.total} itens conformes</p>
+                    </div>
+                  )
+                }) : <p style={{ fontSize: '11px', color: P.light, textAlign: 'center', padding: '20px' }}>Sem dados no período</p>}
+                {qualidadeStats?.tempoMedioMin != null && (
+                  <div style={{ padding: '10px', backgroundColor: P.steelBg, borderRadius: '2px', marginTop: '8px' }}>
+                    <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.14em', color: P.textSub }}>Tempo Médio p/ Completar</p>
+                    <p style={{ fontSize: '18px', fontWeight: 900, color: P.navy, marginTop: '4px', fontVariantNumeric: 'tabular-nums' }}>{formatDuracao(qualidadeStats.tempoMedioMin)}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="card-light p-5">
+              <SectionTitle icon={AlertTriangle} label="Itens Mais Reprovados" />
+              <div className="mt-4">
+                {qualidadeStats?.itensMaisReprovados.length ? (
+                  <div className="space-y-2">
+                    {qualidadeStats.itensMaisReprovados.map((item, i) => (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontSize: '10px', color: P.light, fontWeight: 900, minWidth: '16px' }}>{i + 1}</span>
+                        <span style={{ fontSize: '11px', color: P.text, fontWeight: 600, flex: 1 }}>{item.descricao}</span>
+                        <span style={{ fontSize: '11px', fontWeight: 900, color: '#B83832', minWidth: '20px', textAlign: 'right' }}>{item.total}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : <p style={{ fontSize: '11px', color: P.light, textAlign: 'center', padding: '20px' }}>Nenhuma não conformidade no período</p>}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── ABA: CLIENTES ── */}
+      {abaAtiva === 'clientes' && (
+        <div className="space-y-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {[
+              { label: 'Clientes Ativos',  valor: clientesGlobal?.ativos ?? '—',       sub: 'na base cadastral',         cor: '#1E7C52', corTop: '#1E7C52' },
+              { label: 'Inativos',         valor: clientesGlobal?.inativos ?? '—',      sub: 'sem atividade',             cor: P.light,   corTop: P.border  },
+              { label: 'Com Telegram',     valor: clientesGlobal?.comTelegram ?? '—',   sub: 'notificações ativas',       cor: P.navy,    corTop: P.navy    },
+              { label: 'Sem Telegram',     valor: clientesGlobal?.semTelegram ?? '—',   sub: 'sem integração de alerta',  cor: P.textSub, corTop: P.light   },
+            ].map(k => (
+              <div key={k.label} style={{ backgroundColor: '#fff', border: `1px solid ${P.border}`, borderRadius: '2px', padding: '14px', borderTop: `3px solid ${k.corTop}` }}>
+                <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.16em', color: P.textSub, marginBottom: '6px' }}>{k.label}</p>
+                <p style={{ fontSize: '22px', fontWeight: 900, color: k.cor, fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{k.valor}</p>
+                <p style={{ fontSize: '10px', color: P.light, marginTop: '4px' }}>{k.sub}</p>
+              </div>
+            ))}
+          </div>
+          <div className="card-light p-5">
+            <SectionTitle icon={Users} label="Escoltas por Cliente no Período" />
+            <div className="mt-4 space-y-3">
+              {porCliente.length > 0 ? porCliente.map((c, idx) => {
+                const cor = c.cor !== P.steel ? c.cor : gradientCors[idx] ?? P.light
+                return (
+                  <div key={c.nome} className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div style={{ width: '8px', height: '8px', backgroundColor: cor, borderRadius: '2px', flexShrink: 0 }} />
+                        <span className="text-xs font-semibold" style={{ color: P.text }}>{c.nome}</span>
+                      </div>
+                      <span style={{ fontSize: '10px', color: P.textSub }}>{c.concluidas}/{c.total}</span>
+                    </div>
+                    <ClienteBar value={c.total} max={maxCliente} cor={cor} />
+                  </div>
+                )
+              }) : <p style={{ fontSize: '11px', color: P.light, textAlign: 'center', padding: '20px' }}>Sem dados no período</p>}
+            </div>
+          </div>
+          {verFinanceiro && finPorCliente.length > 0 && (
+            <div className="card-light p-5">
+              <SectionTitle icon={Users} label="Financeiro por Cliente" />
+              <div className="mt-4 overflow-x-auto">
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '11px' }}>
+                  <thead><tr style={{ borderBottom: `1px solid ${P.border}` }}>
+                    {['Cliente', 'Escoltas', 'Receita', 'Custo', 'Margem', '%'].map(h => (
+                      <th key={h} style={{ textAlign: h === 'Cliente' ? 'left' : 'right', padding: '4px 8px', fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.12em', color: P.textSub }}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>{finPorCliente.map((r, idx) => (
+                    <tr key={r.nome} style={{ borderBottom: `1px solid ${P.steelBg}`, backgroundColor: idx % 2 === 0 ? '#fff' : P.bg }}>
+                      <td style={{ padding: '5px 8px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <div style={{ width: '7px', height: '7px', backgroundColor: r.cor, borderRadius: '2px', flexShrink: 0 }} />
+                          <span style={{ color: P.text, fontWeight: 600 }}>{r.nome}</span>
+                        </div>
+                      </td>
+                      <td style={{ padding: '5px 8px', textAlign: 'right', color: P.textSub, fontWeight: 700 }}>{r.total}</td>
+                      <td style={{ padding: '5px 8px', textAlign: 'right', color: '#1E7C52', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{fmtBRL(r.receita)}</td>
+                      <td style={{ padding: '5px 8px', textAlign: 'right', color: P.errorText, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{fmtBRL(r.custo)}</td>
+                      <td style={{ padding: '5px 8px', textAlign: 'right', color: r.margem >= 0 ? '#1E7C52' : P.errorText, fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{fmtBRL(r.margem)}</td>
+                      <td style={{ padding: '5px 8px', textAlign: 'right' }}>
+                        <span style={{ fontSize: '10px', fontWeight: 900, color: r.margemPct != null ? (r.margemPct >= 0 ? '#1E7C52' : P.errorText) : P.light }}>
+                          {r.margemPct != null ? `${r.margemPct.toFixed(1)}%` : '—'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
     </div>
   )
