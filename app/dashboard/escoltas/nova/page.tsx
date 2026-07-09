@@ -10,7 +10,6 @@ import {
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
 import { AiTextButton } from '@/components/ui/ai-text-button'
-import { VoiceInputButton } from '@/components/ui/voice-input-button'
 
 // ─── Palette ──────────────────────────────────────────────────────────────────
 const P = {
@@ -653,7 +652,6 @@ export default function NovaEscoltaPage() {
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
                     <span style={{ fontSize: '10px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.14em', color: P.sub }}>Observação Financeira</span>
                     <div style={{ display: 'flex', gap: '4px' }}>
-                      <VoiceInputButton onTranscript={t => setObsFinanceiro(v => v ? `${v} ${t}` : t)} />
                       <AiTextButton value={obsFinanceiro} onChange={setObsFinanceiro} contexto="Observação financeira de contrato de escolta armada" />
                     </div>
                   </div>

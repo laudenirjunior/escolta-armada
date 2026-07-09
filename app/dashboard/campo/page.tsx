@@ -10,7 +10,6 @@ import {
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
 import { AiTextButton } from '@/components/ui/ai-text-button'
-import { VoiceInputButton } from '@/components/ui/voice-input-button'
 
 const supabase = createClient()
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -913,7 +912,6 @@ export default function CampoPage() {
                           Observação (opcional)
                         </label>
                         <div style={{ display: 'flex', gap: '4px' }}>
-                          <VoiceInputButton onTranscript={t => setObsAvanco(v => v ? `${v} ${t}` : t)} />
                           <AiTextButton value={obsAvanco} onChange={setObsAvanco} contexto="Observação de ponto de controle em escolta armada" />
                         </div>
                       </div>
@@ -1130,7 +1128,6 @@ export default function CampoPage() {
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
                         <label className="block text-[11px] font-black uppercase tracking-widest" style={{ color: '#6B7E8A' }}>Descrição *</label>
                         <div style={{ display: 'flex', gap: '4px' }}>
-                          <VoiceInputButton onTranscript={t => setDescOcorrencia(v => v ? `${v} ${t}` : t)} />
                           <AiTextButton value={descOcorrencia} onChange={setDescOcorrencia} contexto="Descrição de ocorrência em escolta armada" />
                         </div>
                       </div>
