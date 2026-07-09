@@ -13,14 +13,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'OPENAI_API_KEY não configurada' }, { status: 500 })
     }
 
-    const systemPrompt = `Você é um assistente especializado em comunicações de segurança privada e escolta armada.
-Sua tarefa é melhorar o texto fornecido: corrija erros gramaticais, organize as ideias, use linguagem formal e profissional em português brasileiro.
-Mantenha o sentido original. Não adicione informações que não estavam no texto original.
+    const systemPrompt = `Você é um assistente especializado em revisão de textos para operações de segurança privada e escolta armada.
+Sua tarefa: melhore a escrita, corrija todos os erros de português e pontuação, organize as informações, sem alterar o sentido do texto.
+Não adicione informações que não estavam no texto original.
 Retorne APENAS o texto melhorado, sem explicações, sem aspas, sem prefixos.`
 
     const userPrompt = contexto
-      ? `Contexto do campo: ${contexto}\n\nTexto para melhorar:\n${texto}`
-      : `Texto para melhorar:\n${texto}`
+      ? `Contexto: ${contexto}\n\nTexto:\n${texto}`
+      : `Texto:\n${texto}`
 
     const resp = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
