@@ -114,15 +114,23 @@ const STATUS_LABELS: Record<string, string> = {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-function obterGPS(): Promise<{ lat: number; lng: number; precisao: number }> {
-  return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) { reject(new Error('GPS não disponível')); return }
-    navigator.geolocation.getCurrentPosition(
-      (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, precisao: p.coords.accuracy }),
-      (e) => reject(new Error(e.message)),
-      { enableHighAccuracy: true, timeout: 10000 }
-    )
-  })
+async function obterGPS(): Promise<{ lat: number; lng: number; precisao: number }> {
+  if (!navigator.geolocation) throw new Error('GPS não disponível')
+
+  const tentarObter = (highAccuracy: boolean, timeout: number, maximumAge: number) =>
+    new Promise<{ lat: number; lng: number; precisao: number }>((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(
+        (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, precisao: p.coords.accuracy }),
+        reject,
+        { enableHighAccuracy: highAccuracy, timeout, maximumAge }
+      )
+    })
+
+  try {
+    return await tentarObter(true, 15000, 0)
+  } catch {
+    return await tentarObter(false, 10000, 30000)
+  }
 }
 
 function formatarCarimbo(timestamp: string, gps: { lat: number; lng: number } | null): string {

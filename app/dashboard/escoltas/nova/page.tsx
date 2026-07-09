@@ -122,7 +122,8 @@ function AddressAutocomplete({
     if (typeof navigator === 'undefined' || !navigator.geolocation) return
     navigator.geolocation.getCurrentPosition(
       (p) => { proximidade.current = `${p.coords.longitude},${p.coords.latitude}` },
-      () => {}
+      () => {},
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
     )
   }, [])
 

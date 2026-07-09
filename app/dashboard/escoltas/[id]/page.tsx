@@ -1161,21 +1161,28 @@ export default function EscoltaDetalhePage() {
 
   // ── Obter GPS local com fallback ─────────────────────────────────────────────
   const obterGPS = async (): Promise<{ lat: number; lng: number; precisao: number }> => {
-    return new Promise((resolve) => {
-      if (!navigator.geolocation) {
-        resolve({ lat: -19.916681, lng: -43.934493, precisao: 99 }) // Default: Belo Horizonte
-        return
-      }
-      navigator.geolocation.getCurrentPosition(
-        (pos) => resolve({
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          precisao: pos.coords.accuracy,
-        }),
-        () => resolve({ lat: -19.916681, lng: -43.934493, precisao: 99 }),
-        { enableHighAccuracy: true, timeout: 5000 }
-      )
-    })
+    if (!navigator.geolocation) throw new Error('GPS não disponível neste dispositivo')
+
+    const tentarObter = (highAccuracy: boolean, timeout: number, maximumAge: number) =>
+      new Promise<{ lat: number; lng: number; precisao: number }>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => resolve({
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            precisao: pos.coords.accuracy,
+          }),
+          reject,
+          { enableHighAccuracy: highAccuracy, timeout, maximumAge }
+        )
+      })
+
+    try {
+      // 1ª tentativa: GPS de alta precisão, sem cache, 15s
+      return await tentarObter(true, 15000, 0)
+    } catch {
+      // 2ª tentativa: rede/torre celular, aceita cache de 30s, 10s
+      return await tentarObter(false, 10000, 30000)
+    }
   }
 
   // ── Upload de Foto ───────────────────────────────────────────────────────────
@@ -2540,16 +2547,13 @@ export default function EscoltaDetalhePage() {
                 setGpsParada(null)
                 setGpsParadaLoading(true)
                 setDialogParada(true)
-                navigator.geolocation.getCurrentPosition(
-                  async (pos) => {
-                    const { latitude: lat, longitude: lng, accuracy: precisao } = pos.coords
+                obterGPS()
+                  .then(async ({ lat, lng, precisao }) => {
                     const endereco = await reverseGeocode(lat, lng)
                     setGpsParada({ lat, lng, precisao, endereco })
                     setGpsParadaLoading(false)
-                  },
-                  () => setGpsParadaLoading(false),
-                  { timeout: 10000, enableHighAccuracy: true }
-                )
+                  })
+                  .catch(() => setGpsParadaLoading(false))
               }}
                 className="h-11 md:h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-all"
                 style={{ backgroundColor: '#FBF3DE', color: '#8B6914', border: '1.5px solid rgba(139,105,20,0.25)' }}
