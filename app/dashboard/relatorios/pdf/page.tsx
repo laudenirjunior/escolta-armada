@@ -68,16 +68,40 @@ function fmtDur(min: number) {
 }
 function fmtBRL(v: number) { return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) }
 
+// ─── Cabeçalho com logos (aparece em todas as seções no topo) ────────────────
+function CabecalhoLogos({ clienteLogoUrl, clienteNome }: { clienteLogoUrl?: string; clienteNome?: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 60px', borderBottom: '1px solid #EBF0F8', backgroundColor: '#F5F7FA' }}>
+      {/* Logo Esquematiza */}
+      <img src="/logo.png" alt="Esquematiza" style={{ height: '32px', objectFit: 'contain' }} />
+      {/* Logo do cliente */}
+      {clienteLogoUrl && (
+        <img src={clienteLogoUrl} alt={clienteNome ?? 'Cliente'} style={{ height: '32px', maxWidth: '160px', objectFit: 'contain' }} />
+      )}
+    </div>
+  )
+}
+
 // ─── Componentes de Seção ────────────────────────────────────────────────────
-function SecaoCapa({ clienteNome, periodo }: { clienteNome: string; periodo: string }) {
+function SecaoCapa({ clienteNome, clienteLogoUrl, periodo }: { clienteNome: string; clienteLogoUrl?: string; periodo: string }) {
   const agora = new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })
   return (
-    <div className="secao capa" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '80px 60px' }}>
-      <div style={{ borderBottom: '3px solid #1E7C52', paddingBottom: '32px', marginBottom: '32px' }}>
-        <p style={{ fontSize: '11px', fontWeight: 800, letterSpacing: '0.2em', textTransform: 'uppercase', color: '#1E7C52', marginBottom: '16px' }}>Escolta Armada · Plataforma de Gestão</p>
-        <h1 style={{ fontSize: '36px', fontWeight: 900, color: '#0E1A33', lineHeight: 1.2, marginBottom: '8px' }}>Relatório Operacional</h1>
-        <p style={{ fontSize: '16px', color: '#53648A' }}>Centro de Relatórios — Documento Gerado Automaticamente</p>
+    <div className="secao capa" style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: '0' }}>
+      {/* Topo: logos */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '32px 60px 24px', borderBottom: '1px solid #EBF0F8' }}>
+        <img src="/logo.png" alt="Esquematiza" style={{ height: '40px', objectFit: 'contain' }} />
+        {clienteLogoUrl && (
+          <img src={clienteLogoUrl} alt={clienteNome} style={{ height: '40px', maxWidth: '180px', objectFit: 'contain' }} />
+        )}
       </div>
+
+      {/* Corpo principal */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', padding: '60px' }}>
+        <div style={{ borderBottom: '3px solid #1E7C52', paddingBottom: '32px', marginBottom: '32px' }}>
+          <p style={{ fontSize: '11px', fontWeight: 800, letterSpacing: '0.2em', textTransform: 'uppercase', color: '#1E7C52', marginBottom: '16px' }}>Escolta Armada · Plataforma de Gestão</p>
+          <h1 style={{ fontSize: '40px', fontWeight: 900, color: '#0E1A33', lineHeight: 1.2, marginBottom: '8px' }}>Relatório Operacional</h1>
+          <p style={{ fontSize: '16px', color: '#53648A' }}>Documento gerado automaticamente pelo sistema</p>
+        </div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '40px' }}>
         <div>
           <p style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.15em', color: '#ABB5C9', marginBottom: '6px' }}>Cliente / Destino</p>
@@ -95,6 +119,7 @@ function SecaoCapa({ clienteNome, periodo }: { clienteNome: string; periodo: str
           <p style={{ fontSize: '10px', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.15em', color: '#ABB5C9', marginBottom: '6px' }}>Classificação</p>
           <p style={{ fontSize: '16px', fontWeight: 600, color: '#53648A' }}>Documento Confidencial</p>
         </div>
+      </div>
       </div>
     </div>
   )
@@ -529,6 +554,7 @@ export default function RelatoriosPDFPage() {
   const [ocorrencias, setOcorrencias] = useState<OcorrenciaPDF[]>([])
   const [checklists, setChecklists] = useState<ChecklistPDF[]>([])
   const [clienteNome, setClienteNome] = useState('')
+  const [clienteLogoUrl, setClienteLogoUrl] = useState('')
 
   const carregar = useCallback(async () => {
     try {
@@ -584,8 +610,9 @@ export default function RelatoriosPDFPage() {
       } else promises.push(Promise.resolve({ data: [] }))
 
       if (clienteId) {
-        const { data: cliData } = await sb.from('clientes').select('nome_cliente').eq('id', clienteId).maybeSingle()
+        const { data: cliData } = await sb.from('clientes').select('nome_cliente, metadados').eq('id', clienteId).maybeSingle() as any
         setClienteNome(cliData?.nome_cliente ?? '')
+        setClienteLogoUrl(cliData?.metadados?.logo_url ?? '')
       }
 
       const [escResult, ocorrResult, checkResult] = await Promise.all(promises)
@@ -690,7 +717,7 @@ export default function RelatoriosPDFPage() {
 
       <div style={{ paddingTop: '40px' }}>
         {secoesOrdenadas.map(s => {
-          if (s === 'capa')        return <SecaoCapa key={s} clienteNome={clienteNome} periodo={labelPeriodo()} />
+          if (s === 'capa')        return <SecaoCapa key={s} clienteNome={clienteNome} clienteLogoUrl={clienteLogoUrl} periodo={labelPeriodo()} />
           if (s === 'resumo')      return <SecaoResumo key={s} escoltas={escoltas} />
           if (s === 'escoltas')    return <SecaoEscoltas key={s} escoltas={escoltas} />
           if (s === 'clientes')    return <SecaoClientes key={s} escoltas={escoltas} />

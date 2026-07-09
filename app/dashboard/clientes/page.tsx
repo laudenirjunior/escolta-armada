@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { Plus, Search, Edit2 } from 'lucide-react'
+import { Plus, Search, Edit2, Upload, X, ImageIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -27,6 +27,7 @@ interface ClienteRow {
   km_franquia: number | null
   valor_km_excedente: number | null
   criado_em: string
+  metadados: { logo_url?: string } | null
 }
 
 type FormData = {
@@ -70,6 +71,8 @@ export default function ClientesPage() {
   const [form, setForm] = useState<FormData>(FORM_VAZIO)
   const [salvando, setSalvando] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
+  const [logoFile, setLogoFile] = useState<File | null>(null)
+  const [logoPreview, setLogoPreview] = useState<string>('')
   const { user } = useAuth()
   const supabase = createClient()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -81,7 +84,7 @@ export default function ClientesPage() {
     setLoading(true)
     const { data } = await sb
       .from('clientes')
-      .select('id, nome_cliente, cnpj, contato, telefone, cor_destaque, telegram_chat_id, observacoes, status, valor_padrao_escolta, km_franquia, valor_km_excedente, criado_em')
+      .select('id, nome_cliente, cnpj, contato, telefone, cor_destaque, telegram_chat_id, observacoes, status, valor_padrao_escolta, km_franquia, valor_km_excedente, criado_em, metadados')
       .order('nome_cliente') as { data: ClienteRow[] | null }
     setClientes(data ?? [])
     setLoading(false)
@@ -92,6 +95,8 @@ export default function ClientesPage() {
   const abrirNovo = () => {
     setEditando(null)
     setForm(FORM_VAZIO)
+    setLogoFile(null)
+    setLogoPreview('')
     setErro(null)
     setDialogAberto(true)
   }
@@ -111,8 +116,22 @@ export default function ClientesPage() {
       km_franquia: c.km_franquia?.toString() ?? '',
       valor_km_excedente: c.valor_km_excedente?.toString() ?? '',
     })
+    setLogoFile(null)
+    setLogoPreview(c.metadados?.logo_url ?? '')
     setErro(null)
     setDialogAberto(true)
+  }
+
+  const selecionarLogo = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setLogoFile(file)
+    setLogoPreview(URL.createObjectURL(file))
+  }
+
+  const removerLogo = () => {
+    setLogoFile(null)
+    setLogoPreview('')
   }
 
   const salvar = async () => {
@@ -137,14 +156,37 @@ export default function ClientesPage() {
       valor_km_excedente: form.valor_km_excedente ? parseFloat(form.valor_km_excedente) : 0,
     }
 
-    const { error } = editando
-      ? await sb.from('clientes').update(payload).eq('id', editando.id)
-      : await sb.from('clientes').insert(payload)
+    let clienteId = editando?.id ?? ''
+
+    const { data: savedData, error } = editando
+      ? await sb.from('clientes').update(payload).eq('id', editando.id).select('id').single()
+      : await sb.from('clientes').insert(payload).select('id').single()
 
     if (error) {
       setErro(error.message)
       setSalvando(false)
       return
+    }
+
+    if (!clienteId && savedData?.id) clienteId = savedData.id
+
+    // Upload da logo se houver arquivo novo
+    if (logoFile && clienteId) {
+      const ext = logoFile.name.split('.').pop()?.toLowerCase() ?? 'png'
+      const path = `logos/clientes/${clienteId}/logo.${ext}`
+      const { error: upErr } = await sb.storage.from('fotos').upload(path, logoFile, { upsert: true })
+      if (!upErr) {
+        const { data: pub } = sb.storage.from('fotos').getPublicUrl(path)
+        const metaAtual = editando?.metadados ?? {}
+        await sb.from('clientes').update({
+          metadados: { ...metaAtual, logo_url: pub.publicUrl },
+        }).eq('id', clienteId)
+      }
+    } else if (!logoPreview && editando?.metadados?.logo_url) {
+      // Logo foi removida manualmente
+      const metaAtual = { ...editando.metadados }
+      delete metaAtual.logo_url
+      await sb.from('clientes').update({ metadados: metaAtual }).eq('id', clienteId)
     }
 
     setDialogAberto(false)
@@ -212,6 +254,12 @@ export default function ClientesPage() {
               className="flex items-center gap-4 p-4 bg-white/2 border border-white/5 hover:border-white/10 rounded-sm transition-colors"
               style={{ borderLeftColor: c.cor_destaque, borderLeftWidth: 3 }}
             >
+              {/* Logo do cliente */}
+              <div style={{ width: '40px', height: '40px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)', overflow: 'hidden', flexShrink: 0, backgroundColor: 'rgba(255,255,255,0.04)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {c.metadados?.logo_url
+                  ? <img src={c.metadados.logo_url} alt={c.nome_cliente} style={{ width: '100%', height: '100%', objectFit: 'contain', padding: '4px' }} />
+                  : <ImageIcon size={16} style={{ color: 'rgba(255,255,255,0.15)' }} />}
+              </div>
               <div className="flex-1 min-w-0">
                 {/* Linha 1: nome + badges */}
                 <div className="flex items-center gap-2 flex-wrap">
@@ -389,6 +437,41 @@ export default function ClientesPage() {
               </p>
             </div>
           )}
+
+          {/* ── Logo do Cliente ── */}
+          <div>
+            <Label className="text-xs text-text-secondary mb-1 block">Logo do Cliente</Label>
+            {logoPreview ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', padding: '10px 12px', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', backgroundColor: 'rgba(255,255,255,0.03)' }}>
+                <img
+                  src={logoPreview}
+                  alt="Logo"
+                  style={{ width: '64px', height: '40px', objectFit: 'contain', borderRadius: '2px', backgroundColor: '#fff', padding: '4px' }}
+                />
+                <div style={{ flex: 1 }}>
+                  <p style={{ fontSize: '11px', color: 'rgba(255,255,255,0.7)', marginBottom: '2px' }}>{logoFile ? logoFile.name : 'Logo atual'}</p>
+                  <p style={{ fontSize: '10px', color: 'rgba(255,255,255,0.3)' }}>Será usada nos relatórios PDF</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={removerLogo}
+                  style={{ padding: '4px', color: 'rgba(255,255,255,0.4)', background: 'none', border: 'none', cursor: 'pointer', borderRadius: '2px' }}
+                  title="Remover logo"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            ) : (
+              <label style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '10px 14px', border: '1.5px dashed rgba(255,255,255,0.12)', borderRadius: '4px', cursor: 'pointer', backgroundColor: 'rgba(255,255,255,0.02)' }}
+                onMouseEnter={e => (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,255,255,0.25)'}
+                onMouseLeave={e => (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,255,255,0.12)'}
+              >
+                <Upload size={15} style={{ color: 'rgba(255,255,255,0.3)', flexShrink: 0 }} />
+                <span style={{ fontSize: '12px', color: 'rgba(255,255,255,0.4)' }}>Clique para selecionar — PNG, JPG, SVG</span>
+                <input type="file" accept="image/png,image/jpeg,image/svg+xml,image/webp" onChange={selecionarLogo} style={{ display: 'none' }} />
+              </label>
+            )}
+          </div>
 
           <div>
             <Label className="text-xs text-text-secondary mb-1 block">Observações</Label>
