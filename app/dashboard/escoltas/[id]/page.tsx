@@ -1306,7 +1306,7 @@ export default function EscoltaDetalhePage() {
       if (ptErr) throw new Error(ptErr.message)
 
       notificarTelegram({
-        titulo: `Parada em Rota — ${tipoInfo?.label ?? tipoParada}`,
+        titulo: tipoInfo?.label ?? tipoParada,
         descricao: obsParada.trim(),
         fotoId: fotoIdPrincipal,
       })
@@ -2432,7 +2432,7 @@ export default function EscoltaDetalhePage() {
                 <div className="flex items-center gap-2 mb-2">
                   <Octagon size={10} style={{ color: '#8B6914' }} />
                   <span style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#8B6914' }}>
-                    Paradas Registradas ({paradas.length})
+                    Reportes Registrados ({paradas.length})
                   </span>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -3823,7 +3823,7 @@ export default function EscoltaDetalhePage() {
         <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
           <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden rounded-t-2xl sm:rounded-2xl" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
-              <h2 className="font-bold text-base text-[#0E1A33]">Registrar Parada na Rota</h2>
+              <h2 className="font-bold text-base text-[#0E1A33]">Registrar Reporte Periódico</h2>
             </div>
             <div className="px-6 py-5 space-y-4">
               {erro && (
