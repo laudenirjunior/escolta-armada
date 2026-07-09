@@ -7,6 +7,7 @@ import {
   MapPin, AlertTriangle, CheckCircle2, XCircle, Clock, ChevronRight, Search,
   RefreshCw, TrendingUp, TrendingDown, Minus, FileDown, Table2, PieChart,
   Activity, Info, ChevronDown,
+  CheckSquare, Square, ChevronUp, Layers,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 
@@ -96,6 +97,28 @@ interface ClienteMetrica {
   duracaoMediaMin: number
 }
 interface ClienteOpt { id: string; nome_cliente: string }
+
+type SecaoId = 'capa' | 'resumo' | 'escoltas' | 'clientes' | 'ocorrencias' | 'efetivo' | 'frota' | 'financeiro' | 'checklists' | 'sla'
+
+const SECOES_DEF: { id: SecaoId; label: string; grupo: string; desc: string; internalOnly?: boolean }[] = [
+  { id: 'capa',        label: 'Capa do Documento',      grupo: 'Estrutura',    desc: 'Logomarca, cliente, período, data de emissão' },
+  { id: 'resumo',      label: 'Resumo Executivo',        grupo: 'Operacional',  desc: 'KPIs do período: total, concluídas, KM, ocorrências' },
+  { id: 'escoltas',    label: 'Lista de Escoltas',       grupo: 'Operacional',  desc: 'Tabela completa de escoltas com rota e status' },
+  { id: 'clientes',    label: 'Análise por Cliente',     grupo: 'Operacional',  desc: 'Métricas por cliente: total, taxa conclusão, KM' },
+  { id: 'ocorrencias', label: 'Ocorrências',             grupo: 'Operacional',  desc: 'Ocorrências registradas no período' },
+  { id: 'sla',         label: 'SLA e Pontualidade',      grupo: 'Qualidade',    desc: 'Desvio de horário e escoltas acima do limite' },
+  { id: 'checklists',  label: 'Conformidade Checklists', grupo: 'Qualidade',    desc: 'Taxa de conformidade por tipo e itens reprovados' },
+  { id: 'efetivo',     label: 'Efetivo / Vigilantes',    grupo: 'Gestão',       desc: 'Escalações e confirmações por vigilante', internalOnly: true },
+  { id: 'frota',       label: 'Frota e Combustível',     grupo: 'Gestão',       desc: 'KM rodado e abastecimento por veículo', internalOnly: true },
+  { id: 'financeiro',  label: 'Financeiro',              grupo: 'Financeiro',   desc: 'Faturamento, custos e margem operacional', internalOnly: true },
+]
+
+const PRESETS: { label: string; desc: string; secoes: SecaoId[] }[] = [
+  { label: 'Para o Cliente',   desc: 'Sem dados internos', secoes: ['capa', 'resumo', 'escoltas', 'ocorrencias', 'sla'] },
+  { label: 'Fechamento',       desc: 'Financeiro + gestão', secoes: ['resumo', 'escoltas', 'clientes', 'financeiro', 'efetivo', 'frota'] },
+  { label: 'Operacional',      desc: 'Operação + qualidade', secoes: ['resumo', 'escoltas', 'clientes', 'ocorrencias', 'checklists', 'sla'] },
+  { label: 'Completo',         desc: 'Todas as seções', secoes: ['capa', 'resumo', 'escoltas', 'clientes', 'ocorrencias', 'sla', 'checklists', 'efetivo', 'frota', 'financeiro'] },
+]
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function diffMinutes(from: string): number {
@@ -305,6 +328,32 @@ export default function RelatoriosPage() {
   // Tabela Ocorrências
   const [pageOcorr, setPageOcorr]   = useState(0)
   const PAGE_OCORR = 15
+
+  // Report Builder
+  const [showBuilder, setShowBuilder] = useState(false)
+  const [secoesAtivas, setSecoesAtivas] = useState<Set<SecaoId>>(new Set(['capa', 'resumo', 'escoltas', 'ocorrencias']))
+
+  const toggleSecao = (id: SecaoId) => {
+    setSecoesAtivas(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id); else next.add(id)
+      return next
+    })
+  }
+
+  const aplicarPreset = (secoes: SecaoId[]) => setSecoesAtivas(new Set(secoes))
+
+  const gerarPDF = () => {
+    const { from, to } = computeRange(tipoPeriodo, dataInicio, dataFim)
+    const params = new URLSearchParams({
+      secoes: Array.from(secoesAtivas).join(','),
+      from,
+      to,
+      ...(clienteFiltroId ? { clienteId: clienteFiltroId } : {}),
+      periodo: labelPeriodoStr(tipoPeriodo, dataInicio, dataFim),
+    })
+    window.open(`/dashboard/relatorios/pdf?${params.toString()}`, '_blank')
+  }
 
   // Clientes
   const [clientesMetrica, setClientesMetrica] = useState<ClienteMetrica[]>([])
@@ -603,6 +652,121 @@ export default function RelatoriosPage() {
             <RefreshCw size={12} /> Gerar Relatório
           </button>
         </div>
+      </div>
+
+      {/* ── Report Builder ── */}
+      <div style={{ ...cardStyle, overflow: 'visible' }}>
+        <button
+          onClick={() => setShowBuilder(v => !v)}
+          style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left' }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Layers size={14} style={{ color: P.steel }} />
+            <span style={{ fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: P.text }}>Compor Relatório PDF</span>
+            {secoesAtivas.size > 0 && (
+              <span style={{ fontSize: '9px', fontWeight: 900, backgroundColor: P.navy, color: '#fff', borderRadius: '2px', padding: '1px 6px' }}>
+                {secoesAtivas.size} seção{secoesAtivas.size !== 1 ? 'ões' : ''} selecionada{secoesAtivas.size !== 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+          {showBuilder
+            ? <ChevronUp size={14} style={{ color: P.steel }} />
+            : <ChevronDown size={14} style={{ color: P.steel }} />}
+        </button>
+
+        {showBuilder && (
+          <div style={{ borderTop: `1px solid ${P.border}`, padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {/* Presets */}
+            <div>
+              <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.13em', color: P.textSub, marginBottom: '8px' }}>Presets</p>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                {PRESETS.map(p => (
+                  <button
+                    key={p.label}
+                    onClick={() => aplicarPreset(p.secoes)}
+                    style={{ padding: '5px 12px', fontSize: '11px', fontWeight: 700, border: `1.5px solid ${P.border}`, borderRadius: '2px', backgroundColor: '#fff', color: P.steel, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '1px' }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = P.navy; (e.currentTarget as HTMLElement).style.color = P.navy }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = P.border; (e.currentTarget as HTMLElement).style.color = P.steel }}
+                  >
+                    <span>{p.label}</span>
+                    <span style={{ fontSize: '9px', fontWeight: 500, color: P.light }}>{p.desc}</span>
+                  </button>
+                ))}
+                <button
+                  onClick={() => setSecoesAtivas(new Set())}
+                  style={{ padding: '5px 12px', fontSize: '11px', fontWeight: 700, border: `1.5px solid ${P.border}`, borderRadius: '2px', backgroundColor: '#fff', color: P.light, cursor: 'pointer' }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = P.errorText }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = P.light }}
+                >
+                  Limpar
+                </button>
+              </div>
+            </div>
+
+            {/* Seções por grupo */}
+            {['Estrutura', 'Operacional', 'Qualidade', 'Gestão', 'Financeiro'].map(grupo => {
+              const secoesGrupo = SECOES_DEF.filter(s => s.grupo === grupo)
+              return (
+                <div key={grupo}>
+                  <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.13em', color: P.textSub, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    {grupo}
+                    {grupo === 'Financeiro' || grupo === 'Gestão' ? (
+                      <span style={{ fontSize: '8px', fontWeight: 700, backgroundColor: P.alertBg, color: P.alertText, borderRadius: '2px', padding: '1px 4px' }}>Interno</span>
+                    ) : null}
+                  </p>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '6px' }}>
+                    {secoesGrupo.map(s => {
+                      const ativa = secoesAtivas.has(s.id)
+                      return (
+                        <button
+                          key={s.id}
+                          onClick={() => toggleSecao(s.id)}
+                          style={{
+                            display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '10px 12px',
+                            border: `1.5px solid ${ativa ? P.navy : P.border}`,
+                            borderRadius: '2px', backgroundColor: ativa ? P.navyBg : '#fff',
+                            cursor: 'pointer', textAlign: 'left',
+                          }}
+                        >
+                          {ativa
+                            ? <CheckSquare size={14} style={{ color: P.navy, flexShrink: 0, marginTop: '1px' }} />
+                            : <Square size={14} style={{ color: P.light, flexShrink: 0, marginTop: '1px' }} />}
+                          <div>
+                            <p style={{ fontSize: '12px', fontWeight: 700, color: ativa ? P.navy : P.text, margin: 0 }}>{s.label}</p>
+                            <p style={{ fontSize: '10px', color: P.light, margin: '2px 0 0' }}>{s.desc}</p>
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })}
+
+            {/* Botão Gerar PDF */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '10px', borderTop: `1px solid ${P.border}`, paddingTop: '14px' }}>
+              <span style={{ fontSize: '11px', color: P.textSub }}>
+                {secoesAtivas.size === 0 ? 'Selecione ao menos uma seção' : `${secoesAtivas.size} seção${secoesAtivas.size !== 1 ? 'ões' : ''} no PDF`}
+              </span>
+              <button
+                onClick={gerarPDF}
+                disabled={secoesAtivas.size === 0 || loading}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: '7px',
+                  padding: '10px 20px', fontSize: '11px', fontWeight: 900,
+                  textTransform: 'uppercase', letterSpacing: '0.1em',
+                  backgroundColor: secoesAtivas.size === 0 ? P.border : P.navy,
+                  color: secoesAtivas.size === 0 ? P.textSub : '#fff',
+                  border: 'none', borderRadius: '2px', cursor: secoesAtivas.size === 0 ? 'not-allowed' : 'pointer',
+                }}
+                onMouseEnter={e => { if (secoesAtivas.size > 0) (e.currentTarget as HTMLElement).style.opacity = '0.85' }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '1' }}
+              >
+                <FileText size={13} /> Gerar PDF
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Tab Navigation ── */}
