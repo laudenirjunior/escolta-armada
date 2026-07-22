@@ -33,6 +33,36 @@ export function formatarCPF(cpf: string): string {
     .replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4')
 }
 
+/** Máscara progressiva de CPF: 000.000.000-00 (aceita digitação só de números) */
+export function mascaraCPF(valor: string): string {
+  const d = valor.replace(/\D/g, '').slice(0, 11)
+  if (d.length > 9) return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`
+  if (d.length > 6) return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6)}`
+  if (d.length > 3) return `${d.slice(0, 3)}.${d.slice(3)}`
+  return d
+}
+
+/** Máscara progressiva de telefone: (00) 00000-0000 ou (00) 0000-0000 */
+export function mascaraTelefone(valor: string): string {
+  const d = valor.replace(/\D/g, '').slice(0, 11)
+  if (d.length === 0) return ''
+  if (d.length <= 2) return `(${d}`
+  if (d.length <= 6) return `(${d.slice(0, 2)}) ${d.slice(2)}`
+  if (d.length <= 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`
+  return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`
+}
+
+/** Gera login do operador no formato primeironome_ultimonome (minúsculo, sem acentos) */
+export function gerarLoginOperador(nomeCompleto: string): string {
+  const limpo = nomeCompleto
+    .normalize('NFD').replace(/\p{Diacritic}/gu, '')
+    .toLowerCase().replace(/[^a-z\s]/g, '').trim()
+  const partes = limpo.split(/\s+/).filter(Boolean)
+  if (partes.length === 0) return ''
+  if (partes.length === 1) return partes[0]
+  return `${partes[0]}_${partes[partes.length - 1]}`
+}
+
 export function formatarPlaca(placa: string): string {
   return placa.toUpperCase().replace(/(\w{3})(\w{4})/, '$1-$2')
 }

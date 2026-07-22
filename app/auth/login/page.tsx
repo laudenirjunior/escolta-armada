@@ -21,7 +21,12 @@ export default function LoginPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    const result = await login(email, password)
+    // Operadores acessam pelo usuário (primeironome_ultimonome). Sem "@" → completa com o domínio interno.
+    const identificador = email.trim()
+    const loginEmail = identificador.includes('@')
+      ? identificador.toLowerCase()
+      : `${identificador.toLowerCase()}@operador.local`
+    const result = await login(loginEmail, password)
     if (result.ok) {
       router.replace(result.trocarSenha ? '/auth/trocar-senha' : '/dashboard')
     }
@@ -173,12 +178,12 @@ export default function LoginPage() {
                 <Mail size={18} strokeWidth={2} />
               </div>
               <input
-                type="email"
+                type="text"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
-                placeholder="Seu e-mail de acesso"
+                placeholder="Usuário ou e-mail de acesso"
                 required
-                autoComplete="email"
+                autoComplete="username"
                 className="w-full outline-none transition-all font-bold text-sm"
                 style={{
                   height: '56px',

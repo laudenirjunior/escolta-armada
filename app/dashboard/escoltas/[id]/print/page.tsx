@@ -38,12 +38,13 @@ interface PrintData {
 
 const STATUS_LABEL: Record<string, string> = {
   rascunho: 'Rascunho', agendada: 'Agendada', em_pre_inicio: 'Pré-Início',
-  em_andamento: 'Em Rota', na_origem: 'Na Origem', no_destino: 'No Destino',
+  em_andamento: 'Em Rota', na_origem: 'Na Origem', em_transito_destino: 'Trânsito p/ Destino', no_destino: 'No Destino',
   retornando: 'Em Retorno', na_base: 'Na Base', finalizada: 'Finalizada', cancelada: 'Cancelada',
 }
 
 const TL_LABEL: Record<string, string> = {
   em_andamento: 'Saída da Base', na_origem: 'Chegada na Origem',
+  em_transito_destino: 'Trânsito ao Destino Iniciado',
   no_destino: 'Chegada no Destino', retornando: 'Retorno Iniciado',
   na_base: 'Chegada na Base', finalizada: 'Escolta Finalizada',
   rascunho: 'Rascunho', agendada: 'Agendada', em_pre_inicio: 'Pré-Início',

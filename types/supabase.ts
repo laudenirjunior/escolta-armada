@@ -269,7 +269,7 @@ export type Database = {
           codigo_escolta: string | null
           data_solicitacao: string
           data_hora_prevista: string
-          status: 'rascunho' | 'agendada' | 'em_pre_inicio' | 'em_andamento' | 'na_origem' | 'no_destino' | 'retornando' | 'na_base' | 'finalizada' | 'cancelada'
+          status: 'rascunho' | 'agendada' | 'em_pre_inicio' | 'em_andamento' | 'na_origem' | 'em_transito_destino' | 'no_destino' | 'retornando' | 'na_base' | 'finalizada' | 'cancelada'
           origem_endereco: string
           origem_lat: number
           origem_lng: number
@@ -291,7 +291,7 @@ export type Database = {
           codigo_escolta?: string | null
           data_solicitacao?: string
           data_hora_prevista: string
-          status?: 'rascunho' | 'agendada' | 'em_pre_inicio' | 'em_andamento' | 'na_origem' | 'no_destino' | 'retornando' | 'na_base' | 'finalizada' | 'cancelada'
+          status?: 'rascunho' | 'agendada' | 'em_pre_inicio' | 'em_andamento' | 'na_origem' | 'em_transito_destino' | 'no_destino' | 'retornando' | 'na_base' | 'finalizada' | 'cancelada'
           origem_endereco: string
           origem_lat: number
           origem_lng: number
@@ -306,7 +306,7 @@ export type Database = {
           metadados?: Json | null
         }
         Update: {
-          status?: 'rascunho' | 'agendada' | 'em_pre_inicio' | 'em_andamento' | 'na_origem' | 'no_destino' | 'retornando' | 'na_base' | 'finalizada' | 'cancelada'
+          status?: 'rascunho' | 'agendada' | 'em_pre_inicio' | 'em_andamento' | 'na_origem' | 'em_transito_destino' | 'no_destino' | 'retornando' | 'na_base' | 'finalizada' | 'cancelada'
           checklist_pendente_no_inicio?: boolean
           observacao_fechamento?: string | null
           data_finalizacao?: string | null

@@ -44,7 +44,7 @@ interface EscoltaDetalhe {
 interface ViaturaDetalhe {
   id: string
   veiculo_id: string
-  quilometragem_saida: number
+  quilometragem_saida: number | null
   quilometragem_retorno: number | null
   abastecimento_litros: number | null
   abastecimento_valor: number | null
@@ -136,11 +136,12 @@ function nowLocalStr() {
 }
 
 const TIPO_PONTO_IDS = {
-  BASE_SAIDA:   '18ce0259-8471-46ac-bc12-6602678fa910',
-  ORIGEM:       'e1aec874-4d4e-4aa2-bae2-de4e711a9f9f',
-  DESTINO:      'e4623e3e-a210-4c17-942a-80f01cc28f2d',
-  BASE_RETORNO: 'c9bc3e19-d55d-4174-8acb-12fe1e2b50b7',
-  PARADA:       'e1601f15-5ef9-44e8-abd0-17f65b3aa760',
+  BASE_SAIDA:       '18ce0259-8471-46ac-bc12-6602678fa910',
+  ORIGEM:           'e1aec874-4d4e-4aa2-bae2-de4e711a9f9f',
+  TRANSITO_DESTINO: '86935442-a8d5-4a06-8664-ad51bf7d1e5c',
+  DESTINO:          'e4623e3e-a210-4c17-942a-80f01cc28f2d',
+  BASE_RETORNO:     'c9bc3e19-d55d-4174-8acb-12fe1e2b50b7',
+  PARADA:           'e1601f15-5ef9-44e8-abd0-17f65b3aa760',
 } as const
 
 const TIPO_FOTO_IDS = {
@@ -381,6 +382,7 @@ const STATUS_INFO: Record<string, { label: string; cls: string }> = {
   em_pre_inicio: { label: 'Pré-Início',   cls: 'badge-warning' },
   em_andamento:  { label: 'Em Andamento', cls: 'badge-info' },
   na_origem:     { label: 'Na Origem',    cls: 'badge-info' },
+  em_transito_destino: { label: 'Trânsito p/ Destino', cls: 'badge-info' },
   no_destino:    { label: 'No Destino',   cls: 'badge-success' },
   retornando:    { label: 'Retornando',   cls: 'badge-warning' },
   na_base:       { label: 'Na Base',      cls: 'badge-success' },
@@ -409,8 +411,9 @@ const NEXT_STATUS: Record<string, { status: string; label: string } | null> = {
   rascunho:      { status: 'agendada',      label: 'Agendar Escolta' },
   agendada:      { status: 'em_pre_inicio', label: 'Iniciar Pré-Início' },
   em_pre_inicio: null,
-  em_andamento:  { status: 'na_origem',     label: 'Confirmar na Origem' },
-  na_origem:     { status: 'no_destino',    label: 'Confirmar no Destino' },
+  em_andamento:  { status: 'na_origem',           label: 'Confirmar na Origem' },
+  na_origem:     { status: 'em_transito_destino', label: 'Iniciar Trânsito ao Destino' },
+  em_transito_destino: { status: 'no_destino',    label: 'Confirmar no Destino' },
   no_destino:    { status: 'retornando',    label: 'Iniciar Retorno' },
   retornando:    { status: 'na_base',       label: 'Confirmar na Base' },
   na_base:       { status: 'finalizada',    label: 'Finalizar Escolta' },
@@ -423,6 +426,7 @@ const JORNADA_ETAPAS = [
   { statuses: ['em_pre_inicio'],             label: 'Pré-Início' },
   { statuses: ['em_andamento'],              label: 'Em Trânsito' },
   { statuses: ['na_origem'],                 label: 'Na Origem' },
+  { statuses: ['em_transito_destino'],       label: 'Trânsito p/ Destino' },
   { statuses: ['no_destino'],                label: 'No Destino' },
   { statuses: ['retornando'],                label: 'Retorno' },
   { statuses: ['na_base', 'finalizada'],     label: 'Concluída' },
@@ -485,6 +489,7 @@ export default function EscoltaDetalhePage() {
   const [dialogStartBase, setDialogStartBase] = useState(false)
   const [dialogParada, setDialogParada] = useState(false)
   const [dialogChegadaOrigem, setDialogChegadaOrigem] = useState(false)
+  const [dialogTransitoDestino, setDialogTransitoDestino] = useState(false)
   const [dialogChegadaDestino, setDialogChegadaDestino] = useState(false)
   const [dialogIniciarRetorno, setDialogIniciarRetorno] = useState(false)
   const [dialogChegadaBase, setDialogChegadaBase] = useState(false)
@@ -512,6 +517,10 @@ export default function EscoltaDetalhePage() {
   const [gpsParada, setGpsParada] = useState<{ lat: number; lng: number; precisao: number; endereco: string } | null>(null)
   const [gpsParadaLoading, setGpsParadaLoading] = useState(false)
 
+  // GPS das ações de jornada (Origem / Destino / Retorno) — capturado ao abrir o diálogo
+  const [gpsAcao, setGpsAcao] = useState<{ lat: number; lng: number; precisao: number; endereco: string } | null>(null)
+  const [gpsAcaoLoading, setGpsAcaoLoading] = useState(false)
+
   // Checklist tracking
   const wizardStartedRef = useRef<string | null>(null)
   const [finalizacaoAbertoEm, setFinalizacaoAbertoEm] = useState<string | null>(null)
@@ -529,6 +538,9 @@ export default function EscoltaDetalhePage() {
 
   const [fotoDestino, setFotoDestino] = useState<File | null>(null)
   const [obsDestino, setObsDestino] = useState('')
+
+  const [obsTransitoDestino, setObsTransitoDestino] = useState('')
+  const [fotoTransitoDestino, setFotoTransitoDestino] = useState<File | null>(null)
 
   const [obsRetorno, setObsRetorno] = useState('')
   const [fotoRetorno, setFotoRetorno] = useState<File | null>(null)
@@ -863,7 +875,7 @@ export default function EscoltaDetalhePage() {
 
   // ── Countdown para próximo check-in ──────────────────────────────────────────
   useEffect(() => {
-    if (!escolta?.periodicidade_checkin_min || !['em_andamento', 'na_origem', 'no_destino', 'retornando'].includes(escolta.status)) {
+    if (!escolta?.periodicidade_checkin_min || !['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando'].includes(escolta.status)) {
       setMinutosAteCheckin(null)
       return
     }
@@ -1083,6 +1095,23 @@ export default function EscoltaDetalhePage() {
         status_novo: 'em_andamento',
         observacao: obsPartida.trim(),
         alterado_por: user?.id ?? null,
+      })
+
+      // 8. Notificar Telegram — Checklist inicial concluído / Escolta iniciada
+      const matConformes = Object.values(checkMateriais).filter(Boolean).length
+      const viatConformes = Object.values(checkViatura).filter(Boolean).length
+      const resumoChecklist = [
+        `✅ Materiais: ${matConformes}/${Object.keys(checkMateriais).length} conformes`,
+        `✅ Viatura: ${viatConformes}/${ITENS_CHECKLIST_VIATURA.length} conformes`,
+        `📏 KM de partida: ${Number(kmPartida).toLocaleString('pt-BR')}`,
+        obsPartida.trim(),
+      ].filter(Boolean).join(' · ')
+      notificarTelegram({
+        titulo: 'Escolta Iniciada — Checklist Concluído',
+        tipo: 'status',
+        status_atual: 'Em Trânsito',
+        descricao: resumoChecklist,
+        fotoId: fotoPartId,
       })
 
       carregar()
@@ -1411,6 +1440,53 @@ export default function EscoltaDetalhePage() {
     } catch { /* fire-and-forget */ }
   }
 
+  // ── Captura de GPS ao abrir diálogos de jornada (Origem / Destino / Retorno) ──
+  const capturarGpsAcao = useCallback(async () => {
+    setGpsAcao(null)
+    setGpsAcaoLoading(true)
+    try {
+      const { lat, lng, precisao } = await obterGPS()
+      const endereco = await reverseGeocode(lat, lng)
+      setGpsAcao({ lat, lng, precisao, endereco })
+    } catch {
+      // GPS falhou — operador pode tentar novamente
+    } finally {
+      setGpsAcaoLoading(false)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
+    if (dialogChegadaOrigem || dialogTransitoDestino || dialogChegadaDestino || dialogIniciarRetorno) {
+      capturarGpsAcao()
+    } else {
+      setGpsAcao(null)
+      setGpsAcaoLoading(false)
+    }
+  }, [dialogChegadaOrigem, dialogTransitoDestino, dialogChegadaDestino, dialogIniciarRetorno, capturarGpsAcao])
+
+  // Cartão de status do GPS exibido nos diálogos de jornada
+  const renderGpsAcao = () => (
+    <div className="flex items-start gap-2 p-3" style={{ backgroundColor: gpsAcao ? '#EBF5F1' : '#F5F7FA', border: `1px solid ${gpsAcao ? '#BFE3D0' : '#E2E8EC'}` }}>
+      <MapPin size={13} style={{ color: gpsAcao ? '#1E7C52' : '#53648A', flexShrink: 0, marginTop: 2 }} />
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#A8B8C2' }}>Localização GPS</p>
+        {gpsAcaoLoading ? (
+          <p style={{ fontSize: '12px', fontWeight: 700, color: '#53648A' }}>Obtendo localização...</p>
+        ) : gpsAcao ? (
+          <>
+            <p style={{ fontSize: '12px', fontWeight: 700, color: '#0E1A33', wordBreak: 'break-word' }}>{gpsAcao.endereco}</p>
+            <p style={{ fontSize: '10px', color: '#6B7E8A' }}>Precisão ~{Math.round(gpsAcao.precisao)}m</p>
+          </>
+        ) : (
+          <button type="button" onClick={capturarGpsAcao} style={{ fontSize: '11px', fontWeight: 700, color: '#B83832', textAlign: 'left' }}>
+            GPS indisponível — tocar para tentar novamente
+          </button>
+        )}
+      </div>
+    </div>
+  )
+
   const salvarPeriodicidade = async () => {
     if (!escolta) return
     const mins = periodicidadeEdit === '' ? null : Number(periodicidadeEdit)
@@ -1475,7 +1551,7 @@ export default function EscoltaDetalhePage() {
     if (!escolta) return
     setLoading(true)
     try {
-      const { lat, lng, precisao } = await obterGPS()
+      const { lat, lng, precisao } = gpsAcao ?? (await obterGPS())
       let fotoId: string | null = null
 
       if (fotoOrigem) {
@@ -1526,12 +1602,67 @@ export default function EscoltaDetalhePage() {
     }
   }
 
+  // ── 3b. Iniciar Trânsito ao Destino (origem → destino) ───────────────────────
+  const handleIniciarTransitoDestino = async () => {
+    if (!escolta) return
+    setLoading(true)
+    try {
+      const { lat, lng, precisao } = gpsAcao ?? (await obterGPS())
+
+      let fotoId: string | null = null
+      if (fotoTransitoDestino) {
+        fotoId = await uploadFoto(fotoTransitoDestino, 'transito_destino', lat, lng, precisao)
+      }
+
+      // Atualizar status
+      const { error: escErr } = await sb
+        .from('escoltas')
+        .update({ status: 'em_transito_destino' })
+        .eq('id', escolta.id)
+      if (escErr) throw new Error(escErr.message)
+
+      // Registrar Ponto de Controle
+      const { error: ptErr } = await sb.from('pontos_controle').insert({
+        escolta_veiculo_id: viaturas[0]?.id,
+        tipo_ponto_id: TIPO_PONTO_IDS.TRANSITO_DESTINO,
+        data_hora: new Date().toISOString(),
+        latitude: lat,
+        longitude: lng,
+        precisao_metros: precisao,
+        foto_id: fotoId,
+        lancado_por: user?.id ?? null,
+        observacoes: `Trânsito ao destino iniciado. Obs: ${obsTransitoDestino}`,
+        sincronizado: true,
+      })
+      if (ptErr) throw new Error(ptErr.message)
+
+      // Registrar Histórico
+      await sb.from('escolta_status_historico').insert({
+        escolta_id: escolta.id,
+        status_anterior: escolta.status,
+        status_novo: 'em_transito_destino',
+        observacao: `Trânsito ao destino iniciado.`,
+        alterado_por: user?.id ?? null,
+      })
+
+      notificarTelegram({ titulo: 'Trânsito ao Destino Iniciado', status_atual: 'Trânsito p/ Destino', fotoId, descricao: obsTransitoDestino.trim() || undefined })
+
+      setDialogTransitoDestino(false)
+      setObsTransitoDestino('')
+      setFotoTransitoDestino(null)
+      carregar()
+    } catch (err) {
+      setErro(err instanceof Error ? err.message : 'Erro ao iniciar trânsito ao destino.')
+      setLoading(false)
+    }
+  }
+
   // ── 4. Chegar no Destino ─────────────────────────────────────────────────────
   const handleChegadaDestino = async () => {
     if (!escolta) return
     setLoading(true)
     try {
-      const { lat, lng, precisao } = await obterGPS()
+      const { lat, lng, precisao } = gpsAcao ?? (await obterGPS())
       let fotoId: string | null = null
 
       if (fotoDestino) {
@@ -1586,7 +1717,13 @@ export default function EscoltaDetalhePage() {
     if (!escolta) return
     setLoading(true)
     try {
-      const { lat, lng, precisao } = await obterGPS()
+      const { lat, lng, precisao } = gpsAcao ?? (await obterGPS())
+
+      // Upload da foto de início de retorno (se houver)
+      let fotoId: string | null = null
+      if (fotoRetorno) {
+        fotoId = await uploadFoto(fotoRetorno, 'retorno', lat, lng, precisao)
+      }
 
       // Atualizar status
       const { error: escErr } = await sb
@@ -1603,6 +1740,7 @@ export default function EscoltaDetalhePage() {
         latitude: lat,
         longitude: lng,
         precisao_metros: precisao,
+        foto_id: fotoId,
         lancado_por: user?.id ?? null,
         observacoes: `Retorno iniciado. Obs: ${obsRetorno}`,
         sincronizado: true,
@@ -1618,10 +1756,11 @@ export default function EscoltaDetalhePage() {
         alterado_por: user?.id ?? null,
       })
 
-      notificarTelegram({ titulo: 'Retorno Iniciado', status_atual: 'Em Retorno', descricao: obsRetorno.trim() || undefined })
+      notificarTelegram({ titulo: 'Retorno Iniciado', status_atual: 'Em Retorno', descricao: obsRetorno.trim() || undefined, fotoId })
 
       setDialogIniciarRetorno(false)
       setObsRetorno('')
+      setFotoRetorno(null)
       carregar()
     } catch (err) {
       setErro(err instanceof Error ? err.message : 'Erro ao iniciar retorno.')
@@ -2526,7 +2665,7 @@ export default function EscoltaDetalhePage() {
             {/* Iniciar Operação: esta ação só é acessível via o wizard de pré-início (checklist obrigatório) */}
 
             {/* Check-in Periódico */}
-            {['em_andamento', 'na_origem', 'no_destino', 'retornando'].includes(escolta.status) && (
+            {['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando'].includes(escolta.status) && (
               <button onClick={abrirDialogCheckin}
                 className="h-11 md:h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 text-white active:scale-95 transition-all"
                 style={{
@@ -2541,7 +2680,7 @@ export default function EscoltaDetalhePage() {
             )}
 
             {/* 2. Registrar Parada */}
-            {['em_andamento', 'na_origem', 'no_destino', 'retornando'].includes(escolta.status) && (
+            {['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando'].includes(escolta.status) && (
               <button onClick={() => {
                 setErro(null)
                 setGpsParada(null)
@@ -2574,8 +2713,19 @@ export default function EscoltaDetalhePage() {
               </button>
             )}
 
-            {/* 4. Chegada no Destino */}
+            {/* 3b. Iniciar Trânsito ao Destino */}
             {escolta.status === 'na_origem' && (
+              <button onClick={() => { setErro(null); setDialogTransitoDestino(true) }}
+                className="h-11 md:h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 text-white active:scale-95 transition-all"
+                style={{ backgroundColor: '#2563EB', boxShadow: '0 2px 8px rgba(37,99,235,0.25)' }}
+                onMouseEnter={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#1D4FD7'}
+                onMouseLeave={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#2563EB'}>
+                <Navigation size={13} /> Trânsito ao Destino
+              </button>
+            )}
+
+            {/* 4. Chegada no Destino */}
+            {escolta.status === 'em_transito_destino' && (
               <button onClick={() => { setErro(null); setDialogChegadaDestino(true) }}
                 className="h-11 md:h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 text-white active:scale-95 transition-all"
                 style={{ backgroundColor: '#9F906D', boxShadow: '0 2px 8px rgba(159,144,109,0.25)' }}
@@ -3070,7 +3220,9 @@ export default function EscoltaDetalhePage() {
               <div className="grid grid-cols-2 gap-3 pt-3 border-t" style={{ borderColor: '#E2E8EC' }}>
                 <div>
                   <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#A8B8C2' }}>KM Saída</p>
-                  <p className="text-sm font-medium mt-0.5" style={{ color: '#1E2D35' }}>{v.quilometragem_saida.toLocaleString('pt-BR')} km</p>
+                  <p className="text-sm font-medium mt-0.5" style={{ color: v.quilometragem_saida != null ? '#1E2D35' : '#C8D5DC' }}>
+                    {v.quilometragem_saida != null ? `${v.quilometragem_saida.toLocaleString('pt-BR')} km` : '—'}
+                  </p>
                 </div>
                 <div>
                   <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#A8B8C2' }}>KM Retorno</p>
@@ -3923,6 +4075,7 @@ export default function EscoltaDetalhePage() {
                   <p style={{ fontSize: '12px', fontWeight: 900, color: '#0E1A33' }}>{nowLocalStr()}</p>
                 </div>
               </div>
+              {renderGpsAcao()}
               <div>
                 <label className="block text-xs font-semibold mb-1.5 text-[#5A6A80]">Foto do Local de Origem *</label>
                 <CameraInput onChange={(fs) => setFotoOrigem(fs[0] ?? null)} />
@@ -3981,6 +4134,51 @@ export default function EscoltaDetalhePage() {
         </div>
       )}
 
+      {/* ── Dialog: Iniciar Trânsito ao Destino ── */}
+      {dialogTransitoDestino && (
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
+          <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden rounded-t-2xl sm:rounded-2xl" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
+            <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
+              <h2 className="font-bold text-base text-[#0E1A33]">Iniciar Trânsito ao Destino</h2>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              {erro && (
+                <p className="text-xs p-3" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
+              )}
+              <p className="text-sm text-[#5A6A80]">
+                Confirmar que a equipe deixou a origem e iniciou a rota rumo ao destino.
+              </p>
+              {renderGpsAcao()}
+              <div>
+                <label className="block text-xs font-semibold mb-1.5 text-[#5A6A80]">Foto de Início do Trânsito *</label>
+                <CameraInput onChange={(fs) => setFotoTransitoDestino(fs[0] ?? null)} />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold mb-1.5 text-[#5A6A80]">Observações *</label>
+                <TextAreaWithTools
+                  value={obsTransitoDestino}
+                  onChange={(v) => setObsTransitoDestino(v)}
+                  placeholder="Condições da carga, rota planejada, observações..."
+                  rows={3}
+                  textareaClassName="input-light resize-none"
+                  contextoAI="Observações de início de trânsito ao destino em escolta armada"
+                />
+              </div>
+            </div>
+            <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
+              <button onClick={() => setDialogTransitoDestino(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
+              <button
+                onClick={handleIniciarTransitoDestino}
+                disabled={loading}
+                className="btn-gradient w-full sm:w-auto"
+              >
+                {loading ? 'Iniciando...' : 'Confirmar Trânsito'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Dialog: Chegada no Destino ── */}
       {dialogChegadaDestino && (
         <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
@@ -3999,6 +4197,7 @@ export default function EscoltaDetalhePage() {
                   <p style={{ fontSize: '12px', fontWeight: 900, color: '#0E1A33' }}>{nowLocalStr()}</p>
                 </div>
               </div>
+              {renderGpsAcao()}
               <div>
                 <label className="block text-xs font-semibold mb-1.5 text-[#5A6A80]">Foto do Local de Entrega/Destino *</label>
                 <CameraInput onChange={(fs) => setFotoDestino(fs[0] ?? null)} />
@@ -4044,6 +4243,8 @@ export default function EscoltaDetalhePage() {
               <p className="text-sm text-[#5A6A80]">
                 Confirmar que a equipe iniciou a rota de regresso à base operacional.
               </p>
+
+              {renderGpsAcao()}
 
               <div>
                 <label className="block text-xs font-semibold mb-1.5 text-[#5A6A80]">Foto de Início de Retorno *</label>

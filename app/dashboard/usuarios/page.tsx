@@ -6,6 +6,7 @@ import {
   RefreshCw, Key, Shield, UserX, UserCheck, Eye, EyeOff,
   Download, Printer, Filter, Users, ChevronDown
 } from 'lucide-react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
 import { PODE_GERENCIAR_USUARIOS } from '@/lib/permissions'
@@ -74,7 +75,12 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; dot: string 
 
 export default function UsuariosPage() {
   const { user } = useAuth()
-  const podeGerenciar = PODE_GERENCIAR.includes((user?.perfil?.codigo ?? '') as any)
+  const router = useRouter()
+  const perfilAtual = (user?.perfil?.codigo ?? '') as string
+  const ehSupervisor = perfilAtual === 'supervisor'
+  // Supervisor tem acesso restrito: vê e gerencia apenas operadores; criação vai para o cadastro de vigilante
+  const podeGerenciar = PODE_GERENCIAR.includes(perfilAtual as any) || ehSupervisor
+  const podeGerenciarTudo = PODE_GERENCIAR.includes(perfilAtual as any)
 
   const [usuarios, setUsuarios] = useState<UsuarioRow[]>([])
   const [perfis, setPerfis] = useState<Perfil[]>([])
@@ -111,9 +117,12 @@ export default function UsuariosPage() {
       .from('usuarios')
       .select('*, perfil:dom_perfis(id, codigo, nome_exibicao)')
       .order('nome_completo')
-    setUsuarios(data ?? [])
+    let rows = (data ?? []) as UsuarioRow[]
+    // Supervisor enxerga somente operadores
+    if (ehSupervisor) rows = rows.filter(u => u.perfil?.codigo === 'operador')
+    setUsuarios(rows)
     setLoading(false)
-  }, [])
+  }, [ehSupervisor])
 
   useEffect(() => {
     carregar()
@@ -129,6 +138,11 @@ export default function UsuariosPage() {
   }
 
   const abrirNovo = () => {
+    // Supervisor cadastra operador (vigilante) na tela de Cadastros, onde o acesso é provisionado automaticamente
+    if (ehSupervisor) {
+      router.push('/dashboard/cadastros')
+      return
+    }
     setEditando(null)
     setForm(FORM_INICIAL)
     setErro('')
@@ -311,7 +325,7 @@ export default function UsuariosPage() {
             style={{ background: 'linear-gradient(135deg, #1A2F4A 0%, #2C4A6B 100%)' }}
           >
             <Plus size={13} />
-            Provisionar Acesso
+            {ehSupervisor ? 'Cadastrar Operador' : 'Provisionar Acesso'}
           </button>
         )}
       </div>
@@ -497,8 +511,8 @@ export default function UsuariosPage() {
                     >
                       <Pencil size={13} />
                     </button>
-                    {/* Excluir (não pode excluir a si mesmo) */}
-                    {!isMe && (
+                    {/* Excluir (não pode excluir a si mesmo; supervisor não exclui) */}
+                    {!isMe && podeGerenciarTudo && (
                       <button
                         onClick={() => setExcluindo(u)}
                         title="Excluir"
@@ -626,7 +640,7 @@ export default function UsuariosPage() {
                         <Pencil size={13} />
                         Editar
                       </button>
-                      {!isMe && (
+                      {!isMe && podeGerenciarTudo && (
                         <button
                           onClick={() => setExcluindo(u)}
                           className="flex items-center justify-center p-2.5 rounded-lg"
@@ -848,6 +862,7 @@ export default function UsuariosPage() {
                 <div>
                   <label className="block text-[10px] font-black uppercase tracking-widest mb-1.5" style={{ color: '#7A8FA0' }}>Perfil *</label>
                   <select value={form.perfil_id} onChange={e => setForm({ ...form, perfil_id: e.target.value })}
+                    disabled={ehSupervisor}
                     className="select-light w-full min-h-[48px] md:min-h-0">
                     <option value="">Selecione...</option>
                     {perfis.map(p => <option key={p.id} value={p.id}>{p.nome_exibicao}</option>)}

@@ -3,10 +3,11 @@
 import { useEffect, useState, useCallback } from 'react'
 import {
   Plus, Search, Pencil, Trash2, X, Building2,
-  UserCheck, Truck, CheckCircle, XCircle,
+  UserCheck, Truck, CheckCircle, XCircle, Key, Copy, CheckCircle2,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
+import { mascaraCPF, mascaraTelefone, gerarLoginOperador } from '@/utils/formatters'
 
 const supabase = createClient()
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -32,8 +33,10 @@ interface Vigilante {
   cnv: string | null; extensao_escolta_armada: string | null
   valor_padrao_pago: number | null; status: string
 }
-const emptyVigilante = (): Omit<Vigilante,'id'> => ({
-  nome_completo:'', cpf:'', funcao_id:'', cnv:'',
+// Campos do formulário — telefone/email pertencem ao acesso (usuarios), não à tabela vigilantes
+type FormVigilante = Omit<Vigilante,'id'> & { telefone: string; email: string }
+const emptyVigilante = (): FormVigilante => ({
+  nome_completo:'', cpf:'', telefone:'', email:'', funcao_id:'', cnv:'',
   extensao_escolta_armada:'', valor_padrao_pago: 0, status:'ativo',
 })
 
@@ -110,8 +113,12 @@ export default function CadastrosPage() {
   const [vigilantes, setVigilantes] = useState<Vigilante[]>([])
   const [funcoes, setFuncoes] = useState<Funcao[]>([])
   const [dialogVigilante, setDialogVigilante] = useState(false)
-  const [formVigilante, setFormVigilante] = useState<Omit<Vigilante,'id'>>(emptyVigilante())
+  const [formVigilante, setFormVigilante] = useState<FormVigilante>(emptyVigilante())
   const [editVigilante, setEditVigilante] = useState<string|null>(null)
+  const [erroVigilante, setErroVigilante] = useState<string|null>(null)
+  // Modal de credenciais do operador recém-provisionado
+  const [credenciais, setCredenciais] = useState<{ login: string; senha: string } | null>(null)
+  const [credCopiado, setCredCopiado] = useState(false)
 
   /* Veículos */
   const [veiculos, setVeiculos] = useState<Veiculo[]>([])
@@ -168,13 +175,44 @@ export default function CadastrosPage() {
   }
 
   const saveVigilante = async () => {
+    setErroVigilante(null)
+    if (!formVigilante.nome_completo.trim()) { setErroVigilante('O nome do operador é obrigatório.'); return }
+    if (!formVigilante.funcao_id) { setErroVigilante('Selecione a função do operador.'); return }
     setSaving(true)
-    if (editVigilante) {
-      await sb.from('vigilantes').update({ ...formVigilante, atualizado_por: user?.id }).eq('id', editVigilante)
-    } else {
-      await sb.from('vigilantes').insert({ ...formVigilante, criado_por: user?.id })
+    try {
+      if (editVigilante) {
+        // Edição: atualiza apenas os campos da tabela vigilantes (telefone/email ficam no acesso)
+        const { telefone: _t, email: _e, ...vigFields } = formVigilante
+        void _t; void _e
+        const { error } = await sb.from('vigilantes')
+          .update({ ...vigFields, atualizado_por: user?.id })
+          .eq('id', editVigilante)
+        if (error) { setErroVigilante(error.message ?? 'Erro ao atualizar.'); return }
+        setDialogVigilante(false); loadVigilantes()
+      } else {
+        // Novo: provisiona login (auth) + usuário (perfil operador) + vigilante numa transação
+        const loginBase = gerarLoginOperador(formVigilante.nome_completo)
+        if (!loginBase) { setErroVigilante('Não foi possível gerar o login a partir do nome.'); return }
+        const { data, error } = await sb.rpc('cadastrar_operador', {
+          p_nome:        formVigilante.nome_completo.trim(),
+          p_login_base:  loginBase,
+          p_cpf:         formVigilante.cpf || null,
+          p_telefone:    formVigilante.telefone || null,
+          p_email:       formVigilante.email || null,
+          p_funcao_id:   formVigilante.funcao_id || null,
+          p_cnv:         formVigilante.cnv || null,
+          p_extensao:    formVigilante.extensao_escolta_armada || null,
+          p_valor_padrao: formVigilante.valor_padrao_pago || null,
+          p_status:      formVigilante.status || 'ativo',
+        })
+        if (error) { setErroVigilante(error.message ?? 'Erro ao cadastrar operador.'); return }
+        setDialogVigilante(false)
+        setCredenciais({ login: data.login, senha: data.senha })
+        loadVigilantes()
+      }
+    } finally {
+      setSaving(false)
     }
-    setSaving(false); setDialogVigilante(false); loadVigilantes()
   }
 
   const deleteVigilante = async (id: string) => {
@@ -272,7 +310,7 @@ export default function CadastrosPage() {
             <button
               onClick={() => {
                 if (tab==='clientes') { setEditCliente(null); setFormCliente(emptyCliente()); setDialogCliente(true) }
-                if (tab==='vigilantes') { setEditVigilante(null); setFormVigilante(emptyVigilante()); setDialogVigilante(true) }
+                if (tab==='vigilantes') { setEditVigilante(null); setFormVigilante(emptyVigilante()); setErroVigilante(null); setDialogVigilante(true) }
                 if (tab==='veiculos') { setEditVeiculo(null); setFormVeiculo(emptyVeiculo()); setDialogVeiculo(true) }
               }}
               className="btn-gradient w-full sm:w-auto min-h-[44px] sm:min-h-0"
@@ -425,7 +463,7 @@ export default function CadastrosPage() {
                       {canEdit && (
                         <td className="text-right">
                           <div className="flex items-center justify-end gap-1">
-                            <button onClick={() => { setEditVigilante(v.id); setFormVigilante({ nome_completo:v.nome_completo, cpf:v.cpf, funcao_id:v.funcao_id??'', cnv:v.cnv??'', extensao_escolta_armada:v.extensao_escolta_armada??'', valor_padrao_pago:v.valor_padrao_pago??0, status:v.status }); setDialogVigilante(true) }}
+                            <button onClick={() => { setEditVigilante(v.id); setFormVigilante({ nome_completo:v.nome_completo, cpf:v.cpf, telefone:'', email:'', funcao_id:v.funcao_id??'', cnv:v.cnv??'', extensao_escolta_armada:v.extensao_escolta_armada??'', valor_padrao_pago:v.valor_padrao_pago??0, status:v.status }); setErroVigilante(null); setDialogVigilante(true) }}
                               className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors">
                               <Pencil size={14} />
                             </button>
@@ -480,7 +518,7 @@ export default function CadastrosPage() {
                   {canEdit && (
                     <div className="flex gap-2 pt-3 border-t border-gray-100">
                       <button
-                        onClick={() => { setEditVigilante(v.id); setFormVigilante({ nome_completo:v.nome_completo, cpf:v.cpf, funcao_id:v.funcao_id??'', cnv:v.cnv??'', extensao_escolta_armada:v.extensao_escolta_armada??'', valor_padrao_pago:v.valor_padrao_pago??0, status:v.status }); setDialogVigilante(true) }}
+                        onClick={() => { setEditVigilante(v.id); setFormVigilante({ nome_completo:v.nome_completo, cpf:v.cpf, telefone:'', email:'', funcao_id:v.funcao_id??'', cnv:v.cnv??'', extensao_escolta_armada:v.extensao_escolta_armada??'', valor_padrao_pago:v.valor_padrao_pago??0, status:v.status }); setErroVigilante(null); setDialogVigilante(true) }}
                         className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold"
                         style={{ backgroundColor: '#EBF3FC', color: '#2166A8' }}>
                         <Pencil size={14} /> Editar
@@ -655,15 +693,31 @@ export default function CadastrosPage() {
         <Field label="Nome Completo *">
           <input className="input-light min-h-[48px] md:min-h-0" value={formVigilante.nome_completo} onChange={e => setFormVigilante(p => ({...p, nome_completo:e.target.value}))} />
         </Field>
+        {!editVigilante && formVigilante.nome_completo.trim() && (
+          <div className="flex items-center gap-2 px-3 py-2 rounded" style={{ backgroundColor: '#EBF3FC', border: '1px solid #C8DCF0' }}>
+            <Key size={12} style={{ color: '#2166A8' }} />
+            <p className="text-xs" style={{ color: '#2166A8' }}>
+              Login gerado: <code className="font-mono font-bold">{gerarLoginOperador(formVigilante.nome_completo) || '—'}</code> · senha inicial <strong>123456</strong>
+            </p>
+          </div>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <Field label="CPF *">
-            <input className="input-light font-mono min-h-[48px] md:min-h-0" value={formVigilante.cpf} onChange={e => setFormVigilante(p => ({...p, cpf:e.target.value}))} />
+            <input className="input-light font-mono min-h-[48px] md:min-h-0" placeholder="000.000.000-00" inputMode="numeric" value={formVigilante.cpf} onChange={e => setFormVigilante(p => ({...p, cpf:mascaraCPF(e.target.value)}))} />
           </Field>
-          <Field label="Função">
+          <Field label="Telefone">
+            <input className="input-light font-mono min-h-[48px] md:min-h-0" placeholder="(00) 00000-0000" inputMode="numeric" value={formVigilante.telefone} onChange={e => setFormVigilante(p => ({...p, telefone:mascaraTelefone(e.target.value)}))} />
+          </Field>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <Field label="Função *">
             <select className="input-light min-h-[48px] md:min-h-0" value={formVigilante.funcao_id??''} onChange={e => setFormVigilante(p => ({...p, funcao_id:e.target.value}))}>
               <option value="">Selecione...</option>
               {funcoes.map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
             </select>
+          </Field>
+          <Field label="E-mail (opcional)">
+            <input type="email" className="input-light min-h-[48px] md:min-h-0" placeholder="opcional" value={formVigilante.email} onChange={e => setFormVigilante(p => ({...p, email:e.target.value}))} disabled={!!editVigilante} />
           </Field>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -685,13 +739,58 @@ export default function CadastrosPage() {
             </select>
           </Field>
         </div>
+        {erroVigilante && (
+          <div className="px-3 py-2 rounded text-xs font-semibold" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erroVigilante}</div>
+        )}
+        {!editVigilante && (
+          <p className="text-[11px]" style={{ color: '#6B7E8A' }}>
+            Ao salvar, o acesso do operador é criado automaticamente (perfil Operador, senha 123456, troca obrigatória no 1º acesso).
+          </p>
+        )}
         <div className="flex flex-col-reverse md:flex-row gap-2 pt-2">
           <button onClick={() => setDialogVigilante(false)} className="btn-outline w-full md:flex-1 min-h-[44px]">Cancelar</button>
-          <button onClick={saveVigilante} disabled={!formVigilante.nome_completo || !formVigilante.cpf || saving} className="btn-gradient w-full md:flex-1 min-h-[44px]">
-            {saving ? 'Salvando...' : 'Salvar'}
+          <button onClick={saveVigilante} disabled={!formVigilante.nome_completo || !formVigilante.funcao_id || saving} className="btn-gradient w-full md:flex-1 min-h-[44px]">
+            {saving ? 'Salvando...' : editVigilante ? 'Salvar' : 'Cadastrar e Provisionar'}
           </button>
         </div>
       </Dialog>
+
+      {/* ── MODAL: Credenciais do operador provisionado ── */}
+      {credenciais && (
+        <div className="fixed inset-0 z-[70] flex items-end md:items-center justify-center md:p-4" style={{ backgroundColor: 'rgba(0,0,0,0.55)' }}>
+          <div className="bg-white rounded-t-2xl md:rounded-2xl shadow-2xl w-full mx-4 md:mx-auto md:max-w-md" style={{ border: '1px solid #E2E8EC' }}>
+            <div className="px-6 pt-6 pb-4 text-center">
+              <div className="w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3" style={{ backgroundColor: '#E8F5EE' }}>
+                <CheckCircle2 size={24} style={{ color: '#1E7C52' }} />
+              </div>
+              <h2 className="text-base font-black mb-1" style={{ color: '#0E1A33' }}>Operador provisionado!</h2>
+              <p className="text-xs" style={{ color: '#6B7E8A' }}>Repasse estas credenciais ao operador. Ele deverá trocar a senha no primeiro acesso.</p>
+            </div>
+            <div className="mx-6 mb-5 rounded-xl overflow-hidden" style={{ border: '1px solid #D5E0E6' }}>
+              <div className="px-4 py-3" style={{ backgroundColor: '#F7FAFC' }}>
+                <p className="text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: '#7A8FA0' }}>Login (usuário)</p>
+                <p className="text-sm font-mono font-semibold" style={{ color: '#1A2535' }}>{credenciais.login}</p>
+              </div>
+              <div className="px-4 py-3 border-t" style={{ borderColor: '#D5E0E6', backgroundColor: '#F0F4FA' }}>
+                <p className="text-[10px] font-bold uppercase tracking-wider mb-1" style={{ color: '#7A8FA0' }}>Senha inicial</p>
+                <p className="text-xl font-mono font-black tracking-widest" style={{ color: '#1A2F4A' }}>{credenciais.senha}</p>
+              </div>
+            </div>
+            <div className="flex gap-3 px-6 pb-6">
+              <button
+                onClick={() => { navigator.clipboard.writeText(`Login: ${credenciais.login}\nSenha: ${credenciais.senha}`); setCredCopiado(true); setTimeout(() => setCredCopiado(false), 2000) }}
+                className="flex-1 flex items-center justify-center gap-2 font-bold text-sm py-3 rounded-lg transition-all"
+                style={{ backgroundColor: '#F0F4FA', color: '#1A2F4A', border: '1px solid #D0DAEB' }}>
+                {credCopiado ? <CheckCircle2 size={14} style={{ color: '#1E7C52' }} /> : <Copy size={14} />}
+                {credCopiado ? 'Copiado!' : 'Copiar'}
+              </button>
+              <button onClick={() => setCredenciais(null)} className="flex-1 font-bold text-sm py-3 rounded-lg text-white" style={{ backgroundColor: '#1A2F4A' }}>
+                Fechar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── DIALOG: VEÍCULO ── */}
       <Dialog open={dialogVeiculo} onClose={() => setDialogVeiculo(false)}

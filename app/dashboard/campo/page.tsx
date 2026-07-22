@@ -24,18 +24,20 @@ const TIPO_FOTO = {
 }
 
 const TIPO_PONTO = {
-  BASE_SAIDA:   '18ce0259-8471-46ac-bc12-6602678fa910',
-  ORIGEM:       'e1aec874-4d4e-4aa2-bae2-de4e711a9f9f',
-  DESTINO:      'e4623e3e-a210-4c17-942a-80f01cc28f2d',
-  BASE_RETORNO: 'c9bc3e19-d55d-4174-8acb-12fe1e2b50b7',
+  BASE_SAIDA:       '18ce0259-8471-46ac-bc12-6602678fa910',
+  ORIGEM:           'e1aec874-4d4e-4aa2-bae2-de4e711a9f9f',
+  TRANSITO_DESTINO: '86935442-a8d5-4a06-8664-ad51bf7d1e5c',
+  DESTINO:          'e4623e3e-a210-4c17-942a-80f01cc28f2d',
+  BASE_RETORNO:     'c9bc3e19-d55d-4174-8acb-12fe1e2b50b7',
 }
 
 // Ao avançar para o status X, qual ponto foi atingido?
 const STATUS_TO_TIPO_PONTO: Record<string, string> = {
-  em_andamento: TIPO_PONTO.BASE_SAIDA,
-  na_origem:    TIPO_PONTO.ORIGEM,
-  no_destino:   TIPO_PONTO.DESTINO,
-  na_base:      TIPO_PONTO.BASE_RETORNO,
+  em_andamento:        TIPO_PONTO.BASE_SAIDA,
+  na_origem:           TIPO_PONTO.ORIGEM,
+  em_transito_destino: TIPO_PONTO.TRANSITO_DESTINO,
+  no_destino:          TIPO_PONTO.DESTINO,
+  na_base:             TIPO_PONTO.BASE_RETORNO,
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -75,40 +77,43 @@ interface TipoOcorrencia { id: string; nome: string }
 
 // ─── Status flow ──────────────────────────────────────────────────────────────
 const PROXIMO_STATUS: Record<string, string> = {
-  em_pre_inicio: 'em_andamento',
-  em_andamento:  'na_origem',
-  na_origem:     'no_destino',
-  no_destino:    'retornando',
-  retornando:    'na_base',
-  na_base:       'finalizada',
+  em_pre_inicio:       'em_andamento',
+  em_andamento:        'na_origem',
+  na_origem:           'em_transito_destino',
+  em_transito_destino: 'no_destino',
+  no_destino:          'retornando',
+  retornando:          'na_base',
+  na_base:             'finalizada',
 }
 
 const BOTAO_AVANCO: Record<string, { label: string; cor: string }> = {
-  em_pre_inicio: { label: 'Confirmar Saída da Base',      cor: '#1A294A' },
-  em_andamento:  { label: 'Confirmar Chegada na Origem',  cor: '#1E7C52' },
-  na_origem:     { label: 'Partir para o Destino',        cor: '#53648A' },
-  no_destino:    { label: 'Confirmar Entrega e Retornar', cor: '#9F906D' },
-  retornando:    { label: 'Confirmar Chegada na Base',    cor: '#1E7C52' },
-  na_base:       { label: 'Finalizar Escolta',            cor: '#1E7C52' },
+  em_pre_inicio:       { label: 'Confirmar Saída da Base',       cor: '#1A294A' },
+  em_andamento:        { label: 'Confirmar Chegada na Origem',   cor: '#1E7C52' },
+  na_origem:           { label: 'Partir para o Destino',         cor: '#2563EB' },
+  em_transito_destino: { label: 'Confirmar Chegada no Destino',  cor: '#9F906D' },
+  no_destino:          { label: 'Confirmar Entrega e Retornar',  cor: '#9F906D' },
+  retornando:          { label: 'Confirmar Chegada na Base',     cor: '#1E7C52' },
+  na_base:             { label: 'Finalizar Escolta',             cor: '#1E7C52' },
 }
 
 const JORNADA = [
-  { status: 'em_pre_inicio', label: 'Base\nSaída',    icon: <Home size={13}/> },
-  { status: 'em_andamento',  label: 'A Caminho\nOrigem', icon: <Navigation size={13}/> },
-  { status: 'na_origem',     label: 'Na\nOrigem',    icon: <Package size={13}/> },
-  { status: 'no_destino',    label: 'No\nDestino',   icon: <Flag size={13}/> },
-  { status: 'retornando',    label: 'Retornando',    icon: <RotateCcw size={13}/> },
-  { status: 'na_base',       label: 'Base\nChegada', icon: <Home size={13}/> },
+  { status: 'em_pre_inicio',       label: 'Base\nSaída',    icon: <Home size={13}/> },
+  { status: 'em_andamento',        label: 'A Caminho\nOrigem', icon: <Navigation size={13}/> },
+  { status: 'na_origem',           label: 'Na\nOrigem',    icon: <Package size={13}/> },
+  { status: 'em_transito_destino', label: 'Rumo ao\nDestino', icon: <Navigation size={13}/> },
+  { status: 'no_destino',          label: 'No\nDestino',   icon: <Flag size={13}/> },
+  { status: 'retornando',          label: 'Retornando',    icon: <RotateCcw size={13}/> },
+  { status: 'na_base',             label: 'Base\nChegada', icon: <Home size={13}/> },
 ]
 
 const STATUS_IDX: Record<string, number> = {
   em_pre_inicio: 0, em_andamento: 1, na_origem: 2,
-  no_destino: 3, retornando: 4, na_base: 5, finalizada: 6,
+  em_transito_destino: 3, no_destino: 4, retornando: 5, na_base: 6, finalizada: 7,
 }
 
 const STATUS_LABELS: Record<string, string> = {
   em_pre_inicio: 'Pré-Início', em_andamento: 'Em Andamento',
-  na_origem: 'Na Origem', no_destino: 'No Destino',
+  na_origem: 'Na Origem', em_transito_destino: 'Trânsito p/ Destino', no_destino: 'No Destino',
   retornando: 'Retornando', na_base: 'Na Base', finalizada: 'Finalizada',
 }
 
@@ -249,7 +254,7 @@ export default function CampoPage() {
     if (!user) return
     setLoading(true)
 
-    const ATIVOS = ['em_pre_inicio', 'em_andamento', 'na_origem', 'no_destino', 'retornando', 'na_base']
+    const ATIVOS = ['em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando', 'na_base']
 
     if (isAdmin) {
       const { data: esc } = await sb
@@ -456,20 +461,22 @@ export default function CampoPage() {
 
       // Notificar Telegram — sempre dispara após qualquer avanço de status
       const STATUS_TG_TITULO: Record<string, string> = {
-        em_andamento: 'Saída da Base',
-        na_origem:    'Chegada na Origem',
-        no_destino:   'Chegada no Destino',
-        retornando:   'Retorno Iniciado',
-        na_base:      'Chegada na Base',
-        finalizada:   'Escolta Finalizada',
+        em_andamento:        'Saída da Base',
+        na_origem:           'Chegada na Origem',
+        em_transito_destino: 'Trânsito ao Destino Iniciado',
+        no_destino:          'Chegada no Destino',
+        retornando:          'Retorno Iniciado',
+        na_base:             'Chegada na Base',
+        finalizada:          'Escolta Finalizada',
       }
       const STATUS_TG_LABEL: Record<string, string> = {
-        em_andamento: 'Em Rota',
-        na_origem:    'Na Origem',
-        no_destino:   'No Destino',
-        retornando:   'Em Retorno',
-        na_base:      'Na Base',
-        finalizada:   'Finalizada',
+        em_andamento:        'Em Rota',
+        na_origem:           'Na Origem',
+        em_transito_destino: 'Trânsito p/ Destino',
+        no_destino:          'No Destino',
+        retornando:          'Em Retorno',
+        na_base:             'Na Base',
+        finalizada:          'Finalizada',
       }
 
       // Foto pública
@@ -528,7 +535,8 @@ export default function CampoPage() {
       const msgs: Record<string, string> = {
         em_andamento: 'Saída registrada! Em deslocamento.',
         na_origem: 'Chegada na Origem confirmada!',
-        no_destino: 'Partiu para o Destino!',
+        em_transito_destino: 'Partiu para o Destino!',
+        no_destino: 'Chegada no Destino confirmada!',
         retornando: 'Entrega confirmada. Retornando...',
         na_base: 'Chegada na Base confirmada!',
         finalizada: 'Escolta finalizada com sucesso!',
@@ -734,7 +742,7 @@ export default function CampoPage() {
   const botaoAvanco = BOTAO_AVANCO[status]
   const podeAvancar = !!PROXIMO_STATUS[status]
   const mostrarChecklist = ['em_pre_inicio', 'na_base'].includes(status)
-  const mostrarOcorrencia = ['em_andamento', 'na_origem', 'no_destino', 'retornando'].includes(status)
+  const mostrarOcorrencia = ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando'].includes(status)
   const checklistRespondidos = checklistItems.filter(i => i.resposta !== null).length
 
   return (

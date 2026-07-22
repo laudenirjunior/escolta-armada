@@ -40,6 +40,7 @@ const STATUS_MAP: Record<string, { label: string; cls: string }> = {
   em_pre_inicio: { label: 'Pré-Início',   cls: 'badge-warning' },
   em_andamento:  { label: 'Em Andamento', cls: 'badge-info' },
   na_origem:     { label: 'Na Origem',    cls: 'badge-info' },
+  em_transito_destino: { label: 'Trânsito p/ Destino', cls: 'badge-info' },
   no_destino:    { label: 'No Destino',   cls: 'badge-success' },
   retornando:    { label: 'Retornando',   cls: 'badge-warning' },
   na_base:       { label: 'Na Base',      cls: 'badge-success' },
@@ -47,7 +48,7 @@ const STATUS_MAP: Record<string, { label: string; cls: string }> = {
   cancelada:     { label: 'Cancelada',    cls: 'badge-danger' },
 }
 
-const STATUS_ATIVOS = ['em_pre_inicio', 'em_andamento', 'na_origem', 'no_destino', 'retornando', 'na_base']
+const STATUS_ATIVOS = ['em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando', 'na_base']
 
 const supabase = createClient()
 const sb = supabase as any

@@ -53,12 +53,13 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
   em_pre_inicio: { label: 'Pré-Início',   color: '#D97706' },
   em_andamento:  { label: 'Em Andamento', color: '#2563EB' },
   na_origem:     { label: 'Na Origem',    color: '#7C3AED' },
+  em_transito_destino: { label: 'Trânsito p/ Destino', color: '#2563EB' },
   no_destino:    { label: 'No Destino',   color: '#059669' },
   retornando:    { label: 'Retornando',   color: '#D97706' },
   na_base:       { label: 'Na Base',      color: '#1E7C52' },
 }
 
-const STATUS_ATIVOS = ['em_pre_inicio', 'em_andamento', 'na_origem', 'no_destino', 'retornando', 'na_base']
+const STATUS_ATIVOS = ['em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando', 'na_base']
 
 // ── Helpers -----------------------------------------------------------------
 
@@ -236,7 +237,7 @@ export default function MapaPage() {
       if (viaturaIds.length > 0) {
         const { data: pontos } = await sb
           .from('pontos_controle')
-          .select('escolta_veiculo_id, latitude, longitude, data_hora, observacoes, tipo_ponto:dom_tipo_ponto(nome)')
+          .select('escolta_veiculo_id, latitude, longitude, data_hora, observacoes, tipo_ponto:dom_tipos_ponto(nome_exibicao)')
           .in('escolta_veiculo_id', viaturaIds)
           .not('latitude', 'is', null)
           .not('longitude', 'is', null)
@@ -261,7 +262,7 @@ export default function MapaPage() {
             lat: ulPt.latitude,
             lng: ulPt.longitude,
             data_hora: ulPt.data_hora,
-            tipo: ulPt.tipo_ponto?.nome ?? 'Reporte',
+            tipo: ulPt.tipo_ponto?.nome_exibicao ?? 'Reporte',
             endereco,
           }
         }
@@ -548,7 +549,7 @@ export default function MapaPage() {
   }, [selecionada, historico, mapReady])
 
   const comGPS = escoltas.filter(e => e.ultimo_ponto || (e.origem_lat && e.origem_lng))
-  const emTransito = escoltas.filter(e => ['em_andamento', 'na_origem', 'no_destino', 'retornando'].includes(e.status))
+  const emTransito = escoltas.filter(e => ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando'].includes(e.status))
 
   return (
     <div className="space-y-4">

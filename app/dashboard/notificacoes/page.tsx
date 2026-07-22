@@ -42,6 +42,7 @@ const ESCOLTA_STATUS: Record<string, { label: string; color: string; bg: string 
   em_pre_inicio: { label: 'Pré-Início',  color: '#8B6914', bg: '#FBF3DE' },
   em_andamento:  { label: 'Em Rota',     color: '#1E7C52', bg: '#E6F4ED' },
   na_origem:     { label: 'Na Origem',   color: '#0891B2', bg: '#E0F4FA' },
+  em_transito_destino: { label: 'Trânsito p/ Destino', color: '#2563EB', bg: '#E7EEFE' },
   no_destino:    { label: 'No Destino',  color: '#0891B2', bg: '#E0F4FA' },
   retornando:    { label: 'Retornando',  color: '#8B6914', bg: '#FBF3DE' },
   na_base:       { label: 'Na Base',     color: '#53648A', bg: '#EBF0F8' },
@@ -51,7 +52,7 @@ const ESCOLTA_STATUS: Record<string, { label: string; color: string; bg: string 
 
 const STATUS_LABEL: Record<string, string> = {
   rascunho: 'Rascunho', agendada: 'Agendada', em_pre_inicio: 'Pré-Início',
-  em_andamento: 'Em Andamento', na_origem: 'Na Origem', no_destino: 'No Destino',
+  em_andamento: 'Em Andamento', na_origem: 'Na Origem', em_transito_destino: 'Trânsito p/ Destino', no_destino: 'No Destino',
   retornando: 'Retornando', na_base: 'Na Base', finalizada: 'Finalizada', cancelada: 'Cancelada',
 }
 
@@ -234,7 +235,7 @@ export default function NotificacoesPage() {
           autor:usuarios!alterado_por(nome_completo),
           escolta:escoltas!escolta_id(id, codigo_escolta, status, cliente:clientes(nome_cliente))
         `)
-        .not('status_novo', 'in', '(na_origem,no_destino,retornando,na_base)')
+        .not('status_novo', 'in', '(na_origem,em_transito_destino,no_destino,retornando,na_base)')
         .order('data_hora', { ascending: false })
         .limit(50)
 

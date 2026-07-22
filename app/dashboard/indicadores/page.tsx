@@ -34,19 +34,20 @@ const P = {
 // ─── Parâmetro SLA ────────────────────────────────────────────────────────────
 const SLA_HORAS_LIMITE = 10   // alerta quando escolta ativa ultrapassa 10h do horário previsto
 
-const STATUSES_ATIVOS    = ['em_andamento', 'na_origem', 'no_destino', 'retornando', 'na_base']
+const STATUSES_ATIVOS    = ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando', 'na_base']
 const STATUSES_CONCLUIDOS = ['finalizada']
 
 const STATUS_LABEL: Record<string, string> = {
   rascunho:     'Rascunho',    agendada:     'Agendada',
   em_pre_inicio:'Pré-Início',  em_andamento: 'Em Andamento',
-  na_origem:    'Na Origem',   no_destino:   'No Destino',
+  na_origem:    'Na Origem',   em_transito_destino: 'Trânsito p/ Destino', no_destino:   'No Destino',
   retornando:   'Retornando',  na_base:      'Na Base',
   finalizada:   'Finalizada',  cancelada:    'Cancelada',
 }
 const STATUS_BADGE: Record<string, string> = {
   finalizada: 'badge-success', retornando: 'badge-warning',
   em_andamento:'badge-info',   na_origem:  'badge-info',
+  em_transito_destino: 'badge-info',
   no_destino: 'badge-info',    na_base:    'badge-warning',
   cancelada:  'badge-danger',  agendada:   'badge-neutral',
   rascunho:   'badge-neutral',

@@ -38,6 +38,7 @@ const STATUS_LABEL: Record<string, string> = {
   em_pre_inicio:'Pré-Início',
   em_andamento: 'Em Andamento',
   na_origem:    'Na Origem',
+  em_transito_destino: 'Trânsito p/ Destino',
   no_destino:   'No Destino',
   retornando:   'Retornando',
   na_base:      'Na Base',
@@ -49,6 +50,7 @@ const STATUS_BADGE: Record<string, string> = {
   cancelada:    'badge-danger',
   em_andamento: 'badge-info',
   na_origem:    'badge-info',
+  em_transito_destino: 'badge-info',
   no_destino:   'badge-info',
   na_base:      'badge-warning',
   retornando:   'badge-warning',
@@ -56,7 +58,7 @@ const STATUS_BADGE: Record<string, string> = {
   rascunho:     'badge-neutral',
   em_pre_inicio:'badge-warning',
 }
-const STATUSES_ATIVOS     = ['em_andamento', 'na_origem', 'no_destino', 'retornando', 'na_base']
+const STATUSES_ATIVOS     = ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando', 'na_base']
 const STATUSES_CONCLUIDOS = ['finalizada']
 const STATUSES_CANCELADOS = ['cancelada']
 

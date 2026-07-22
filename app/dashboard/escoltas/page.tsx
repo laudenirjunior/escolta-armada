@@ -25,6 +25,7 @@ const STATUS_MAP: Record<string, { label: string; cls: string }> = {
   em_pre_inicio: { label: 'Pré-Início',   cls: 'badge-warning' },
   em_andamento:  { label: 'Em Andamento', cls: 'badge-info' },
   na_origem:     { label: 'Na Origem',    cls: 'badge-info' },
+  em_transito_destino: { label: 'Trânsito p/ Destino', cls: 'badge-info' },
   no_destino:    { label: 'No Destino',   cls: 'badge-success' },
   retornando:    { label: 'Retornando',   cls: 'badge-warning' },
   na_base:       { label: 'Na Base',      cls: 'badge-success' },
@@ -51,6 +52,9 @@ export default function EscoltasPage() {
   const [busca, setBusca] = useState('')
   const [filtroStatus, setFiltroStatus] = useState('todos')
   const [loading, setLoading] = useState(true)
+  // Operador: alternador "Minha Escolta ⇄ Todas"
+  const [filtroMinha, setFiltroMinha] = useState(true)
+  const [minhasEscoltaIds, setMinhasEscoltaIds] = useState<string[]>([])
   const { user } = useAuth()
   const router = useRouter()
   const perfil = (user?.perfil?.codigo ?? '') as any
@@ -73,11 +77,20 @@ export default function EscoltasPage() {
     const { data } = await q
     let rows = (data ?? []) as EscoltaRow[]
 
-    // Filtragem de Visibilidade (Supervisor e Operador)
+    // Filtragem de Visibilidade (Operador vê apenas escoltas ativas)
     if (perfil === 'operador') {
       rows = rows.filter((e) =>
-        ['rascunho', 'agendada', 'em_pre_inicio', 'em_andamento', 'na_origem', 'no_destino', 'retornando', 'na_base'].includes(e.status)
+        ['rascunho', 'agendada', 'em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando', 'na_base'].includes(e.status)
       )
+
+      // Resolve as escoltas em que este operador está escalado (via vigilante)
+      const { data: vig } = await sb.from('vigilantes').select('id').eq('usuario_id', user?.id).maybeSingle()
+      let escoltaIds: string[] = []
+      if (vig) {
+        const { data: efet } = await sb.from('escolta_efetivo').select('escolta_id').eq('vigilante_id', vig.id)
+        escoltaIds = Array.from(new Set((efet ?? []).map((e: any) => e.escolta_id).filter(Boolean)))
+      }
+      setMinhasEscoltaIds(escoltaIds)
     }
 
     setEscoltas(rows)
@@ -86,7 +99,11 @@ export default function EscoltasPage() {
 
   useEffect(() => { carregar() }, [carregar])
 
+  const ehOperador = perfil === 'operador'
+
   const escoltasFiltradas = escoltas.filter((e) => {
+    // Operador com filtro "Minha Escolta" ativo: só as escoltas em que está escalado
+    if (ehOperador && filtroMinha && !minhasEscoltaIds.includes(e.id)) return false
     if (!busca) return true
     const termo = busca.toLowerCase()
     return (
@@ -100,12 +117,12 @@ export default function EscoltasPage() {
   // Cálculos dos Cards
   const countNaoIniciadas = escoltas.filter(e => ['rascunho', 'agendada', 'em_pre_inicio'].includes(e.status)).length
   const countEmAndamento = escoltas.filter(e => e.status === 'em_andamento').length
-  const countOrigemDestino = escoltas.filter(e => ['na_origem', 'no_destino'].includes(e.status)).length
+  const countOrigemDestino = escoltas.filter(e => ['na_origem', 'em_transito_destino', 'no_destino'].includes(e.status)).length
   const countRetornoBase = escoltas.filter(e => ['retornando', 'na_base'].includes(e.status)).length
 
   // Segmentação por tabelas
   const naoIniciadas = escoltasFiltradas.filter(e => ['rascunho', 'agendada', 'em_pre_inicio'].includes(e.status))
-  const ativas = escoltasFiltradas.filter(e => ['em_andamento', 'na_origem', 'no_destino', 'retornando', 'na_base'].includes(e.status))
+  const ativas = escoltasFiltradas.filter(e => ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando', 'na_base'].includes(e.status))
   const concluidas = escoltasFiltradas.filter(e => ['finalizada', 'cancelada'].includes(e.status))
 
   const renderTabelaEscoltas = (lista: EscoltaRow[], tituloVazio: string) => {
@@ -328,6 +345,28 @@ export default function EscoltasPage() {
         )}
       </div>
 
+      {/* ── Alternador Minha Escolta ⇄ Todas (operador) ── */}
+      {ehOperador && (
+        <div className="inline-flex p-1 rounded-lg" style={{ backgroundColor: '#EEF0F5', border: '1px solid #E2E8EC' }}>
+          {[
+            { val: true,  label: `Minha Escolta${minhasEscoltaIds.length > 1 ? 's' : ''}` },
+            { val: false, label: 'Todas as Ativas' },
+          ].map(opt => (
+            <button
+              key={String(opt.val)}
+              onClick={() => setFiltroMinha(opt.val)}
+              className="px-4 py-2 rounded-md text-xs font-bold transition-all"
+              style={{
+                backgroundColor: filtroMinha === opt.val ? '#1A294A' : 'transparent',
+                color: filtroMinha === opt.val ? '#fff' : '#5A6A80',
+              }}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* ── Stat Cards ── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {([
@@ -541,7 +580,7 @@ export default function EscoltasPage() {
           ) : null}
 
           {/* Seção 2: Ativas */}
-          {filtroStatus === 'todos' || ['em_andamento', 'na_origem', 'no_destino', 'retornando', 'na_base'].includes(filtroStatus) ? (
+          {filtroStatus === 'todos' || ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando', 'na_base'].includes(filtroStatus) ? (
             <div className="space-y-0">
               <div className="cc-panel-header">
                 <div style={{ width: '6px', height: '6px', borderRadius: '1px', backgroundColor: '#53648A', flexShrink: 0 }} />

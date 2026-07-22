@@ -32,29 +32,29 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { label: 'Painel',        href: '/dashboard',               icon: <LayoutDashboard size={16} />, perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
       { label: 'Escoltas',      href: '/dashboard/escoltas',       icon: <Shield size={16} />,          perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
       { label: 'Campo',         href: '/dashboard/campo',          icon: <Radio size={16} />,           perfis: ['operador'] as Perfil[] },
-      { label: 'Mapa',          href: '/dashboard/mapa',           icon: <Map size={16} />,             perfis: ['administrador','gestor','supervisor','central'] as Perfil[] },
+      { label: 'Mapa',          href: '/dashboard/mapa',           icon: <Map size={16} />,             perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
       { label: 'Notificações',  href: '/dashboard/notificacoes',   icon: <Bell size={16} />,            perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
     ],
   },
   {
     section: 'Gestão',
     items: [
-      { label: 'Cadastros',   href: '/dashboard/cadastros',   icon: <Database size={16} />,     perfis: ['administrador','gestor','supervisor'] as Perfil[] },
-      { label: 'Armamentos',  href: '/dashboard/armamentos',  icon: <Crosshair size={16} />,    perfis: ['administrador','gestor','supervisor'] as Perfil[] },
-      { label: 'Checklists',  href: '/dashboard/checklists',  icon: <ClipboardList size={16} />, perfis: ['administrador','gestor','supervisor'] as Perfil[] },
+      { label: 'Cadastros',   href: '/dashboard/cadastros',   icon: <Database size={16} />,     perfis: ['administrador','gestor','supervisor','central'] as Perfil[] },
+      { label: 'Armamentos',  href: '/dashboard/armamentos',  icon: <Crosshair size={16} />,    perfis: ['administrador','gestor','supervisor','central'] as Perfil[] },
+      { label: 'Checklists',  href: '/dashboard/checklists',  icon: <ClipboardList size={16} />, perfis: ['administrador','gestor','supervisor','central'] as Perfil[] },
     ],
   },
   {
     section: 'Análise',
     items: [
-      { label: 'Indicadores', href: '/dashboard/indicadores', icon: <BarChart2 size={16} />, perfis: ['administrador','gestor','supervisor'] as Perfil[] },
-      { label: 'Relatórios',  href: '/dashboard/relatorios',  icon: <FileText size={16} />,  perfis: ['administrador','gestor','supervisor'] as Perfil[] },
+      { label: 'Indicadores', href: '/dashboard/indicadores', icon: <BarChart2 size={16} />, perfis: ['administrador','gestor','supervisor','central'] as Perfil[] },
+      { label: 'Relatórios',  href: '/dashboard/relatorios',  icon: <FileText size={16} />,  perfis: ['administrador','gestor','supervisor','central'] as Perfil[] },
     ],
   },
   {
     section: 'Sistema',
     items: [
-      { label: 'Usuários',      href: '/dashboard/usuarios',           icon: <Users size={16} />,       perfis: ['administrador','gestor'] as Perfil[] },
+      { label: 'Usuários',      href: '/dashboard/usuarios',           icon: <Users size={16} />,       perfis: ['administrador','gestor','supervisor'] as Perfil[] },
       { label: 'Telegram',      href: '/dashboard/sistema/telegram',   icon: <Send size={16} />,        perfis: ['administrador','gestor'] as Perfil[] },
       { label: 'Configurações', href: '/dashboard/configuracoes',      icon: <Settings size={16} />,    perfis: ['administrador'] as Perfil[] },
       { label: 'Auditoria',     href: '/dashboard/auditoria',          icon: <AlertTriangle size={16} />, perfis: ['administrador'] as Perfil[] },
@@ -68,7 +68,7 @@ const BOTTOM_NAV_ITEMS: { label: string; href: string; icon: React.ReactNode; pe
   { label: 'Escoltas',   href: '/dashboard/escoltas',    icon: <Shield size={20} />,          perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
   { label: 'Campo',      href: '/dashboard/campo',       icon: <Radio size={20} />,           perfis: ['operador'] as Perfil[] },
   { label: 'Avisos',     href: '/dashboard/notificacoes', icon: <Bell size={20} />,           perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
-  { label: 'Mapa',       href: '/dashboard/mapa',        icon: <Map size={20} />,             perfis: ['administrador','gestor','supervisor','central'] as Perfil[] },
+  { label: 'Mapa',       href: '/dashboard/mapa',        icon: <Map size={20} />,             perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
 ]
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {

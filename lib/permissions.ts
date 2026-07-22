@@ -26,16 +26,22 @@ export const PODE_AVANCAR_ESCOLTA: CodigoPerfil[] = ['administrador', 'gestor', 
 export const PODE_FINALIZAR_ESCOLTA: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor']
 
 /** Pode editar registros de cadastro (clientes, vigilantes, veículos) */
-export const PODE_EDITAR_CADASTROS: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor']
+export const PODE_EDITAR_CADASTROS: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor', 'central']
 
-/** Pode gerenciar usuários (criar, editar, alterar perfil/status) */
+/** Pode gerenciar usuários de forma plena (qualquer perfil) */
 export const PODE_GERENCIAR_USUARIOS: CodigoPerfil[] = ['administrador', 'gestor']
 
+/** Pode acessar a página de Usuários (governança). Supervisor entra com escopo restrito a operadores. */
+export const PODE_ACESSAR_USUARIOS: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor']
+
+/** Pode cadastrar/editar operadores (vigilantes). Supervisor só mexe neste perfil. */
+export const PODE_GERENCIAR_OPERADORES: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor']
+
 /** Pode ver dados financeiros das escoltas */
-export const PODE_VER_FINANCEIRO: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor']
+export const PODE_VER_FINANCEIRO: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor', 'central']
 
 /** Pode ver relatórios e indicadores */
-export const PODE_VER_RELATORIOS: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor']
+export const PODE_VER_RELATORIOS: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor', 'central']
 
 /** Pode configurar Telegram e integrações */
 export const PODE_CONFIGURAR_INTEGRACOES: CodigoPerfil[] = ['administrador', 'gestor']

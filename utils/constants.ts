@@ -16,6 +16,7 @@ export const STATUS_ESCOLTA = {
   EM_PRE_INICIO: 'em_pre_inicio',
   EM_ANDAMENTO: 'em_andamento',
   NA_ORIGEM: 'na_origem',
+  EM_TRANSITO_DESTINO: 'em_transito_destino',
   NO_DESTINO: 'no_destino',
   RETORNANDO: 'retornando',
   NA_BASE: 'na_base',

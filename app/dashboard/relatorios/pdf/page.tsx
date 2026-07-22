@@ -45,7 +45,7 @@ interface VeiculoPDF {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const STATUS_LABEL: Record<string, string> = {
   rascunho: 'Rascunho', agendada: 'Agendada', em_pre_inicio: 'Pré-Início',
-  em_andamento: 'Em Andamento', na_origem: 'Na Origem', no_destino: 'No Destino',
+  em_andamento: 'Em Andamento', na_origem: 'Na Origem', em_transito_destino: 'Trânsito p/ Destino', no_destino: 'No Destino',
   retornando: 'Retornando', na_base: 'Na Base', finalizada: 'Finalizada', cancelada: 'Cancelada',
 }
 function fmt(iso: string) {
@@ -129,7 +129,7 @@ function SecaoResumo({ escoltas }: { escoltas: EscoltaPDF[] }) {
   const total = escoltas.length
   const concluidas = escoltas.filter(e => e.status === 'finalizada').length
   const canceladas = escoltas.filter(e => e.status === 'cancelada').length
-  const ativas = escoltas.filter(e => ['em_andamento','na_origem','no_destino','retornando','na_base'].includes(e.status)).length
+  const ativas = escoltas.filter(e => ['em_andamento','na_origem','em_transito_destino','no_destino','retornando','na_base'].includes(e.status)).length
   const kmTotal = escoltas.reduce((s, e) => s + calcKm(e.veiculos), 0)
   const txConc = (concluidas + canceladas) > 0 ? Math.round((concluidas / (concluidas + canceladas)) * 100) : 0
   const duracaoMedia = concluidas > 0 ? Math.round(escoltas.filter(e => e.status === 'finalizada').reduce((s, e) => s + calcDurMin(e), 0) / concluidas) : 0
@@ -682,7 +682,7 @@ export default function RelatoriosPDFPage() {
         .status-badge { display: inline-block; padding: 2px 7px; border-radius: 2px; font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; }
         .status-finalizada { background: #E6F4ED; color: #1E7C52; }
         .status-cancelada { background: #FAEAE9; color: #B83832; }
-        .status-em_andamento, .status-na_origem, .status-no_destino, .status-retornando { background: #E6EAF2; color: #1A294A; }
+        .status-em_andamento, .status-na_origem, .status-em_transito_destino, .status-no_destino, .status-retornando { background: #E6EAF2; color: #1A294A; }
         .status-agendada, .status-rascunho, .status-em_pre_inicio, .status-na_base { background: #FBF3DE; color: #8B6914; }
         .rodape { position: fixed; bottom: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; padding: 10px 60px; font-size: 9px; font-weight: 600; color: #ABB5C9; border-top: 1px solid #EBF0F8; background: #fff; letter-spacing: 0.06em; text-transform: uppercase; }
         @media print {

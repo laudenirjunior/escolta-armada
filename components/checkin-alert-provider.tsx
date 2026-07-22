@@ -23,7 +23,7 @@ export function CheckinAlertProvider() {
         .from('escoltas')
         .select('id, codigo_escolta, periodicidade_checkin_min, cliente:clientes(nome_cliente), status')
         .not('periodicidade_checkin_min', 'is', null)
-        .in('status', ['em_andamento', 'na_origem', 'no_destino', 'retornando'])
+        .in('status', ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando'])
 
       if (!escoltas?.length) return
 
@@ -84,6 +84,7 @@ export function CheckinAlertProvider() {
 
         const statusLabel: Record<string, string> = {
           em_andamento: 'Em Rota', na_origem: 'Na Origem',
+          em_transito_destino: 'Trânsito p/ Destino',
           no_destino: 'No Destino', retornando: 'Em Retorno',
         }
         fetch('/api/telegram', {
