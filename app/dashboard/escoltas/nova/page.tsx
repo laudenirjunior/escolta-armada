@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   ArrowLeft, ArrowRight, Plus, Trash2, CheckCircle,
-  MapPin, Flag, FileText, Briefcase, Radio,
+  MapPin, Flag, FileText, Briefcase, Radio, Building2,
   Car, Shield, UserCheck, AlertTriangle, DollarSign
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
@@ -42,9 +42,11 @@ interface DadosBasicos  {
   hora_prevista_h: string
   hora_prevista_m: string
   origem_endereco: string
+  origem_complemento: string
   origem_lat: number
   origem_lng: number
   destino_endereco: string
+  destino_complemento: string
   destino_lat: number
   destino_lng: number
   observacoes: string
@@ -89,6 +91,12 @@ const inputCls = "bg-transparent border-0 outline-none w-full text-sm font-mediu
 const inputStyle = { color: P.text }
 
 const OBS_PADRAO = `Verificar na saída: (1) documentação do veículo e carga, (2) comunicação operacional ativa, (3) armamento e munição do efetivo, (4) rota principal e alternativa confirmadas. Reportar ao supervisor: saída da base, chegada na origem, saída para o destino e chegada ao destino.`
+
+// O complemento é texto livre e nunca entra na busca da Mapbox nem na validação de
+// coordenada: ele só se junta ao endereço na hora de gravar, para a equipe achar o
+// apartamento, o portão ou a doca sem descobrir o resto por rádio.
+const enderecoComComplemento = (endereco: string, complemento: string) =>
+  [endereco.trim(), complemento.trim()].filter(Boolean).join(', ')
 
 // ─── Autocomplete de Endereço (Mapbox Geocoding) ──────────────────────────────
 interface MapboxFeature {
@@ -307,8 +315,8 @@ export default function NovaEscoltaPage() {
   const [dados, setDados] = useState<DadosBasicos>({
     cliente_id: '', data_prevista: '',
     hora_prevista_h: '08', hora_prevista_m: '00',
-    origem_endereco: '', origem_lat: 0, origem_lng: 0,
-    destino_endereco: '', destino_lat: 0, destino_lng: 0,
+    origem_endereco: '', origem_complemento: '', origem_lat: 0, origem_lng: 0,
+    destino_endereco: '', destino_complemento: '', destino_lat: 0, destino_lng: 0,
     observacoes: OBS_PADRAO,
   })
   const [viaturas,    setViaturas]    = useState<ViaturaForm[]>([novaViatura()])
@@ -387,10 +395,10 @@ export default function NovaEscoltaPage() {
           data_hora_prevista:  new Date(dtStr).toISOString(),
           data_solicitacao:    new Date().toISOString(),
           status:              'agendada',
-          origem_endereco:     dados.origem_endereco.trim(),
+          origem_endereco:     enderecoComComplemento(dados.origem_endereco, dados.origem_complemento),
           origem_lat:          dados.origem_lat,
           origem_lng:          dados.origem_lng,
-          destino_endereco:    dados.destino_endereco.trim(),
+          destino_endereco:    enderecoComComplemento(dados.destino_endereco, dados.destino_complemento),
           destino_lat:         dados.destino_lat,
           destino_lng:         dados.destino_lng,
           metadados:           dados.observacoes.trim() ? { observacoes: dados.observacoes.trim() } : null,
@@ -624,6 +632,26 @@ export default function NovaEscoltaPage() {
               />
             </div>
 
+            {/* Complemento da origem: campo separado de propósito, para que digitar aqui
+                nunca invalide a coordenada já fixada pela lista de sugestões. */}
+            <div>
+              <FieldLabel>Complemento da Origem (opcional)</FieldLabel>
+              <FieldWrap icon={<Building2 size={15} />}>
+                <input
+                  type="text"
+                  maxLength={80}
+                  value={dados.origem_complemento}
+                  onChange={e => setDados(d => ({ ...d, origem_complemento: e.target.value }))}
+                  placeholder="Apto, bloco, portão, doca, galpão..."
+                  className={inputCls}
+                  style={inputStyle}
+                />
+              </FieldWrap>
+              <p style={{ fontSize: '10px', color: P.sub, marginTop: '4px' }}>
+                Entra junto do endereço no cadastro. Não altera a coordenada escolhida na lista.
+              </p>
+            </div>
+
             {/* Destino */}
             <div>
               <FieldLabel required>Endereço de Destino</FieldLabel>
@@ -639,6 +667,25 @@ export default function NovaEscoltaPage() {
                 placeholder="Rua, número, bairro, cidade..."
                 icon={<Flag size={15} />}
               />
+            </div>
+
+            {/* Complemento do destino: mesma regra da origem. */}
+            <div>
+              <FieldLabel>Complemento do Destino (opcional)</FieldLabel>
+              <FieldWrap icon={<Building2 size={15} />}>
+                <input
+                  type="text"
+                  maxLength={80}
+                  value={dados.destino_complemento}
+                  onChange={e => setDados(d => ({ ...d, destino_complemento: e.target.value }))}
+                  placeholder="Apto, bloco, portão, doca, galpão..."
+                  className={inputCls}
+                  style={inputStyle}
+                />
+              </FieldWrap>
+              <p style={{ fontSize: '10px', color: P.sub, marginTop: '4px' }}>
+                Entra junto do endereço no cadastro. Não altera a coordenada escolhida na lista.
+              </p>
             </div>
 
             {/* Observações */}
@@ -925,8 +972,9 @@ export default function NovaEscoltaPage() {
                 )}
                 {[
                   { label: 'Partida Prevista', value: dtLabel },
-                  { label: 'Origem', value: dados.origem_endereco },
-                  { label: 'Destino', value: dados.destino_endereco },
+                  // Mostra o texto exatamente como será gravado, com o complemento já junto.
+                  { label: 'Origem', value: enderecoComComplemento(dados.origem_endereco, dados.origem_complemento) },
+                  { label: 'Destino', value: enderecoComComplemento(dados.destino_endereco, dados.destino_complemento) },
                 ].map(r => (
                   <div key={r.label} className="py-2.5" style={{ borderBottom: `1px solid ${P.border}` }}>
                     <p className="text-[9px] font-black uppercase tracking-widest mb-0.5" style={{ color: P.sub }}>{r.label}</p>

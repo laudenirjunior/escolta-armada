@@ -62,6 +62,12 @@ const STATUS_TO_TIPO_PONTO: Record<string, string> = {
 const SEM_PONTO_DE_CONTROLE = ['em_pre_inicio']
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+interface ViaturaEscolta {
+  id: string
+  placa: string | null
+  modelo: string | null
+}
+
 interface EscoltaAtiva {
   id: string
   codigo_escolta: string | null
@@ -74,6 +80,9 @@ interface EscoltaAtiva {
   veiculo_placa?: string
   veiculo_modelo?: string
   papel?: string
+  // So o ramo administrativo preenche esta lista. O vigilante ja chega vinculado a uma
+  // viatura pelo efetivo, e para ele nao existe escolha a fazer.
+  viaturas?: ViaturaEscolta[]
 }
 
 interface ChecklistItem {
@@ -113,24 +122,26 @@ const COR_AVANCO: Record<string, string> = {
   na_base:             '#1E7C52',
 }
 
-// Duas diferencas em relacao a fonte unica, ambas deliberadas:
+// Duas etapas da jornada NAO acontecem por esta tela, por decisao de Pecanha em
+// 2026-08-19. As duas exigem registro que so existe nos dialogos da tela de detalhe,
+// e o banco aceita as duas transicoes sem pre-condicao, entao a barreira precisa
+// estar aqui.
 //
-// 1. `em_pre_inicio` e null la porque a tela de detalhe atravessa essa etapa pelo
-//    wizard. Aqui nao ha wizard, entao a etapa e tratada localmente; sem isso o
-//    operador em pre-inicio fica sem botao nenhum.
+// 1. `em_pre_inicio` ja e null na fonte unica, porque a tela de detalhe atravessa
+//    essa etapa pelo wizard. Antes esta tela reintroduzia a etapa localmente, o que
+//    permitia sair da base com uma foto e uma observacao, sem conferencia de
+//    material, sem conferencia de viatura, sem as 5 fotos de angulo e sem o KM de
+//    saida. A escolta comecava sem registro nenhum do estado da viatura.
 //
-// 2. `na_base` sai: a finalizacao NAO acontece por esta tela. Ela exige checklist de
-//    entrega, relatorio final e as 5 fotos de angulo da viatura, que so existem no
-//    dialogo da tela de detalhe. Deixar o botao aqui encerrava a escolta sem prova
-//    nenhuma e sem gravar data_finalizacao, e o banco aceita essa transicao porque
-//    nenhuma trigger a barra.
+// 2. `na_base` sai pelo mesmo motivo: a finalizacao exige checklist de entrega,
+//    relatorio final e as 5 fotos de angulo. Deixar o botao aqui encerrava a escolta
+//    sem prova e sem gravar data_finalizacao.
 const PROXIMO_STATUS: Record<string, string> = {
   ...Object.fromEntries(
     Object.entries(PROXIMO_STATUS_FLUXO)
       .filter(([k, v]) => v !== null && k !== STATUS.NA_BASE)
       .map(([k, v]) => [k, (v as { status: string }).status])
   ),
-  em_pre_inicio: 'em_andamento',
 }
 
 // Derivado, e nao escrito a mao: o mapa manual omitia em_transito_retorno e travava a
@@ -138,7 +149,7 @@ const PROXIMO_STATUS: Record<string, string> = {
 // sozinha, sem ninguem lembrar de editar esta tela.
 const BOTAO_AVANCO: Record<string, { label: string; cor: string }> = Object.fromEntries(
   Object.keys(PROXIMO_STATUS).map(k => [k, {
-    label: PROXIMO_STATUS_FLUXO[k]?.label ?? 'Confirmar Saída da Base',
+    label: PROXIMO_STATUS_FLUXO[k]?.label ?? rotuloStatus(PROXIMO_STATUS[k]),
     cor: COR_AVANCO[k] ?? '#1A294A',
   }])
 )
@@ -305,6 +316,10 @@ export default function CampoPage() {
   // é de FOTOS_POR_PONTO.min a FOTOS_POR_PONTO.max por ponto de controle.
   const [fotosCheckpoint, setFotosCheckpoint] = useState<FotoCaptura[]>([])
   const [obsAvanco, setObsAvanco] = useState('')
+  // Viatura que recebe o ponto de controle. Nasce nula de proposito: com mais de uma
+  // viatura na escolta, deixar uma pre-selecionada faria o registro sair para a viatura
+  // errada sem que ninguem percebesse.
+  const [viaturaAlvoId, setViaturaAlvoId] = useState<string | null>(null)
   // A captura de GPS tenta alta precisao e so depois baixa, o que pode levar dezenas
   // de segundos. Sem este estado o operador acha que falhou e toca de novo.
   const [capturandoFoto, setCapturandoFoto] = useState(false)
@@ -324,6 +339,32 @@ export default function CampoPage() {
   const [emergConfirm, setEmergConfirm] = useState(false)
 
   const isAdmin = ['administrador', 'gestor', 'supervisor', 'central'].includes((user?.perfil?.codigo ?? '') as any)
+
+  // ── Qual viatura recebe o ponto de controle ───────────────────────────────
+  // Decisao de Pecanha em 2026-08-19: cada viatura tem o proprio ponto de controle,
+  // com foto e localizacao proprias.
+  //
+  // Escolhido o seletor, e nao a gravacao de um ponto por viatura com as mesmas fotos:
+  // quem esta no dashboard nao esta na estrada e nao tem foto propria de cada viatura,
+  // entao repetir a mesma foto nas duas criaria prova falsa de que ambas foram vistas.
+  // Com o seletor, o ponto diz a verdade sobre o que foi observado, e a outra viatura
+  // recebe o dela quando alguem de fato a observar.
+  //
+  // Para o vigilante nada disso vale: ele ja vem vinculado a uma viatura pelo efetivo, e
+  // `viaturas` nem e preenchida no ramo dele.
+  const viaturasDaEscolta = escoltaAtiva?.viaturas ?? []
+  const precisaEscolherViatura = isAdmin && viaturasDaEscolta.length > 1
+  const viaturaAlvo = precisaEscolherViatura
+    ? viaturasDaEscolta.find(v => v.id === viaturaAlvoId) ?? null
+    : null
+  // Com uma viatura so, ou no caminho do vigilante, segue valendo o vinculo que ja veio
+  // na consulta. Com mais de uma, nada e assumido enquanto a escolha nao for feita.
+  const escoltaVeiculoIdAlvo = precisaEscolherViatura
+    ? viaturaAlvo?.id ?? null
+    : escoltaAtiva?.escolta_veiculo_id ?? null
+  const placaAlvo = precisaEscolherViatura
+    ? viaturaAlvo?.placa ?? null
+    : escoltaAtiva?.veiculo_placa ?? null
 
   const showToast = (tipo: 'ok' | 'erro', texto: string) => {
     setToast({ tipo, texto })
@@ -349,15 +390,25 @@ export default function CampoPage() {
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const lista: EscoltaAtiva[] = ((esc ?? []) as any[]).map((e: any) => {
-        // PENDENTE COM PECANHA: quando a escolta tem mais de uma viatura e quem avanca
-        // e perfil administrativo, para qual viatura vai o ponto de controle. Ate a
-        // decisao, vai para a primeira. Nao inventar a regra aqui.
-        const primeiraViatura = (e.escolta_veiculos ?? [])[0]
+        // Decisao de Pecanha em 2026-08-19: cada viatura tem o proprio ponto de
+        // controle, com foto e localizacao proprias. Por isso a tela carrega TODAS as
+        // viaturas da escolta, e nao mais so a primeira. Quem e perfil administrativo
+        // escolhe no painel de checkpoint qual viatura recebe o registro.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const viaturas: ViaturaEscolta[] = ((e.escolta_veiculos ?? []) as any[]).map((v: any) => ({
+          id: v.id,
+          placa: v.veiculo?.placa ?? null,
+          modelo: v.veiculo?.modelo ?? null,
+        }))
+        const primeiraViatura = viaturas[0]
         return {
           ...e,
+          viaturas,
+          // Continua existindo para a escolta de viatura unica, onde nao ha escolha a
+          // fazer e nenhum seletor aparece.
           escolta_veiculo_id: primeiraViatura?.id,
-          veiculo_placa: primeiraViatura?.veiculo?.placa,
-          veiculo_modelo: primeiraViatura?.veiculo?.modelo,
+          veiculo_placa: primeiraViatura?.placa ?? undefined,
+          veiculo_modelo: primeiraViatura?.modelo ?? undefined,
         } as EscoltaAtiva
       })
       setTodasEscoltas(lista)
@@ -424,6 +475,10 @@ export default function CampoPage() {
     const destino = PROXIMO_STATUS[escoltaAtiva?.status ?? '']
     setObsAvanco(destino ? (TEXTO_PADRAO_ETAPA[destino] ?? '') : '')
   }, [painelAberto, escoltaAtiva?.status])
+
+  // Trocar de escolta zera a viatura escolhida. Sem isto, o id de uma viatura da escolta
+  // anterior continuaria selecionado e o proximo registro sairia para a escolta errada.
+  useEffect(() => { setViaturaAlvoId(null) }, [escoltaAtiva?.id])
 
   // ── Helper: capturar foto com GPS + timestamp ─────────────────────────────
   const capturarFoto = async (file: File): Promise<FotoCaptura> => {
@@ -581,7 +636,13 @@ export default function CampoPage() {
       showToast('erro', `Registre ao menos ${FOTOS_POR_PONTO.min} foto para o checkpoint.`)
       return
     }
-    if (!escoltaAtiva.escolta_veiculo_id) {
+    // Com mais de uma viatura na escolta, o ponto so sai depois que quem registra disser
+    // qual viatura observou. Nao ha escolha padrao: cada viatura tem o proprio ponto.
+    if (precisaEscolherViatura && !viaturaAlvo) {
+      showToast('erro', 'Escolha a viatura que recebe este ponto de controle.')
+      return
+    }
+    if (!escoltaVeiculoIdAlvo) {
       showToast('erro', 'Escolta sem viatura vinculada. Vincule a viatura antes de registrar o ponto.')
       return
     }
@@ -659,7 +720,7 @@ export default function CampoPage() {
       // prova nao se desfaz.
       if (exigePonto && tipoPontoId) {
         const { error: pontoErr } = await sb.from('pontos_controle').insert({
-          escolta_veiculo_id: escoltaAtiva.escolta_veiculo_id,
+          escolta_veiculo_id: escoltaVeiculoIdAlvo,
           tipo_ponto_id: tipoPontoId,
           data_hora: fotosCheckpoint[0]?.timestamp ?? new Date().toISOString(),
           latitude: gps?.lat ?? null,
@@ -675,6 +736,42 @@ export default function CampoPage() {
         if (pontoErr) {
           showToast('erro', pontoErr.message ?? 'Não foi possível registrar o ponto de controle.')
           setExecutando(false)
+          return
+        }
+      }
+
+      // O status so avanca quando TODAS as viaturas da escolta tiverem ponto nesta
+      // etapa. Sem isso a decisao de "um registro por viatura" nao se sustentaria aqui:
+      // o primeiro registro avancaria a etapa, o botao sumiria, e a segunda viatura
+      // ficaria para sempre sem o ponto daquela etapa.
+      //
+      // Com uma viatura so, que e quase toda escolta, a primeira ja e a ultima e nada
+      // muda em relacao ao comportamento anterior.
+      if (exigePonto && tipoPontoId && viaturasDaEscolta.length > 1) {
+        const { data: pontosDaEtapa, error: contagemErr } = await sb
+          .from('pontos_controle')
+          .select('escolta_veiculo_id')
+          .eq('tipo_ponto_id', tipoPontoId)
+          .in('escolta_veiculo_id', viaturasDaEscolta.map(v => v.id))
+        if (contagemErr) {
+          showToast('erro', contagemErr.message ?? 'Não foi possível conferir os registros das viaturas.')
+          setExecutando(false)
+          return
+        }
+        const comPonto = new Set((pontosDaEtapa ?? []).map((p: { escolta_veiculo_id: string }) => p.escolta_veiculo_id))
+        const faltando = viaturasDaEscolta.filter(v => !comPonto.has(v.id))
+        if (faltando.length > 0) {
+          const placas = faltando.map(v => v.placa ?? 'sem placa').join(', ')
+          showToast(
+            'ok',
+            `Ponto registrado. A etapa avança quando as demais viaturas registrarem: ${placas}.`
+          )
+          limparFotosCheckpoint()
+          setObsAvanco('')
+          setViaturaAlvoId(null)
+          setPainelAberto(null)
+          setExecutando(false)
+          await carregar()
           return
         }
       }
@@ -792,7 +889,9 @@ export default function CampoPage() {
           cliente: escoltaAtiva.cliente?.nome_cliente,
           status_atual: STATUS_TG_LABEL[proximo] ?? rotuloStatus(proximo),
           efetivos,
-          veiculo: escoltaAtiva.veiculo_placa,
+          // A placa da mensagem e a da viatura que recebeu o ponto, nao a primeira da
+          // lista: com duas viaturas, avisar a placa errada e desmentir o proprio registro.
+          veiculo: placaAlvo ?? undefined,
           foto_url: fotoTgUrl,
           data_hora: dataHoraFmt,
         }),
@@ -803,6 +902,9 @@ export default function CampoPage() {
 
       limparFotosCheckpoint()
       setObsAvanco('')
+      // Cada ponto de controle exige escolha propria de viatura: a escolha da etapa
+      // anterior nao pode valer como padrao silencioso da seguinte.
+      setViaturaAlvoId(null)
       setPainelAberto(null)
 
       const msgs: Record<string, string> = {
@@ -1159,12 +1261,22 @@ export default function CampoPage() {
                   <Clock size={12} style={{ color: '#A8B8C2' }} />
                   <span>Previsto: {new Date(escoltaAtiva.data_hora_prevista).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
                 </div>
-                {escoltaAtiva.veiculo_placa && (
+                {/* Com mais de uma viatura, o card mostra todas. Mostrar so a primeira
+                    dava a entender que a escolta tinha uma viatura, e quem registrasse o
+                    ponto acharia que ele valia pela escolta inteira. */}
+                {viaturasDaEscolta.length > 1 ? (
+                  <div className="flex items-start gap-1.5">
+                    <Shield size={12} className="mt-0.5 shrink-0" style={{ color: '#A8B8C2' }} />
+                    <span className="leading-relaxed">
+                      {viaturasDaEscolta.length} viaturas: {viaturasDaEscolta.map(v => v.placa ?? 'Sem placa').join(', ')}
+                    </span>
+                  </div>
+                ) : escoltaAtiva.veiculo_placa ? (
                   <div className="flex items-center gap-1.5">
                     <Shield size={12} style={{ color: '#A8B8C2' }} />
-                    <span>{escoltaAtiva.veiculo_placa}{escoltaAtiva.veiculo_modelo ? ` — ${escoltaAtiva.veiculo_modelo}` : ''}</span>
+                    <span>{escoltaAtiva.veiculo_placa}{escoltaAtiva.veiculo_modelo ? ` · ${escoltaAtiva.veiculo_modelo}` : ''}</span>
                   </div>
-                )}
+                ) : null}
               </div>
             </div>
           </div>
@@ -1217,6 +1329,28 @@ export default function CampoPage() {
           ═══════════════════════════════════════════════════════════════════ */}
           <div className="space-y-2">
 
+            {/* ── [0] PRE-INICIO: a saida da base nao acontece nesta tela ──
+                O pre-inicio exige conferencia de material, conferencia de viatura, as
+                5 fotos de angulo e o KM de saida, que so existem no wizard da tela de
+                detalhe. Decisao de Pecanha em 2026-08-19. */}
+            {status === STATUS.EM_PRE_INICIO && (
+              <div className="card-light p-4" style={{ border: '1.5px solid rgba(212,160,23,0.35)', backgroundColor: '#FFFBEB' }}>
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded flex items-center justify-center shrink-0" style={{ backgroundColor: '#FEF3C7', border: '1px solid #FDE68A' }}>
+                    <Home size={18} style={{ color: '#B45309' }} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold" style={{ color: '#1E2D35' }}>Aguardando liberação da base</p>
+                    <p className="text-xs mt-1 leading-relaxed" style={{ color: '#6B7E8A' }}>
+                      A saída da base é liberada pelo supervisor, na tela de detalhe, com a
+                      conferência do material, a conferência da viatura e as fotos dos cinco
+                      ângulos. Assim que ele confirmar, o registro dos pontos aparece aqui.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* ── [0] NA BASE: a finalizacao nao acontece nesta tela ──
                 O botao de finalizar foi retirado daqui porque encerrava a escolta sem
                 checklist de entrega, sem relatorio final e sem as 5 fotos de angulo da
@@ -1257,9 +1391,13 @@ export default function CampoPage() {
                       <p className="text-xs" style={{ color: '#6B7E8A' }}>
                         {!exigeFotoCheckpoint
                           ? 'Esta etapa não gera ponto de controle: foto não é exigida.'
-                          : fotosCheckpoint.length >= FOTOS_POR_PONTO.min
-                            ? `✓ ${fotosCheckpoint.length} de ${FOTOS_POR_PONTO.max} registradas, pronto para confirmar`
-                            : `Foto obrigatória (mínimo ${FOTOS_POR_PONTO.min}, até ${FOTOS_POR_PONTO.max})`}
+                          : fotosCheckpoint.length < FOTOS_POR_PONTO.min
+                            ? `Foto obrigatória (mínimo ${FOTOS_POR_PONTO.min}, até ${FOTOS_POR_PONTO.max})`
+                            // Sem a viatura escolhida o registro nao esta pronto, e dizer que
+                            // esta faria o operador tocar num botao desabilitado sem entender.
+                            : precisaEscolherViatura && !viaturaAlvo
+                              ? `${fotosCheckpoint.length} foto(s) registrada(s). Falta escolher a viatura.`
+                              : `✓ ${fotosCheckpoint.length} de ${FOTOS_POR_PONTO.max} registradas, pronto para confirmar${viaturaAlvo?.placa ? ` (${viaturaAlvo.placa})` : ''}`}
                       </p>
                     </div>
                   </div>
@@ -1271,6 +1409,38 @@ export default function CampoPage() {
                     {/* Input oculto */}
                     <input ref={fotoCheckpointRef} type="file" accept="image/*" capture="environment"
                       className="hidden" onChange={handleFotoCheckpoint} />
+
+                    {/* Seletor de viatura. So aparece quando ha mais de uma viatura na
+                        escolta e quem registra e perfil administrativo: com uma viatura
+                        so, e no caminho do vigilante, nao ha escolha a fazer. */}
+                    {precisaEscolherViatura && (
+                      <div className="space-y-2">
+                        <label className="block text-[11px] font-black uppercase tracking-widest" style={{ color: '#6B7E8A' }}>
+                          Viatura deste registro
+                        </label>
+                        <div className="flex flex-wrap gap-2">
+                          {viaturasDaEscolta.map(v => (
+                            <button
+                              key={v.id}
+                              onClick={() => setViaturaAlvoId(v.id)}
+                              className="px-3 py-2 rounded text-xs font-semibold border transition-all"
+                              style={
+                                viaturaAlvoId === v.id
+                                  ? { backgroundColor: '#2166A8', color: '#fff', borderColor: '#2166A8' }
+                                  : { backgroundColor: '#fff', color: '#5C6B73', borderColor: '#E2E8EC' }
+                              }
+                            >
+                              {v.placa ?? 'Sem placa'}{v.modelo ? ` · ${v.modelo}` : ''}
+                            </button>
+                          ))}
+                        </div>
+                        <p className="text-xs leading-relaxed" style={{ color: viaturaAlvo ? '#6B7E8A' : '#B45309' }}>
+                          {viaturaAlvo
+                            ? 'O ponto de controle, as fotos e a posição vão só para esta viatura. As demais recebem o registro delas quando forem observadas.'
+                            : 'Escolha a viatura antes de confirmar. Cada viatura tem o próprio ponto de controle, com foto e posição próprias.'}
+                        </p>
+                      </div>
+                    )}
 
                     {/* Sem ponto de controle nao ha quem referencie a foto, e o
                         avanco nem chega a envia-la: entao a captura nem aparece,
@@ -1339,7 +1509,7 @@ export default function CampoPage() {
 
                     <button
                       onClick={avancarStatus}
-                      disabled={executando || capturandoFoto || (exigeFotoCheckpoint && fotosCheckpoint.length < FOTOS_POR_PONTO.min)}
+                      disabled={executando || capturandoFoto || (exigeFotoCheckpoint && fotosCheckpoint.length < FOTOS_POR_PONTO.min) || (precisaEscolherViatura && !viaturaAlvo)}
                       className="w-full rounded text-white font-black text-sm uppercase tracking-wider flex items-center justify-center gap-2 transition-all active:scale-[0.98] disabled:opacity-50"
                       style={{ backgroundColor: botaoAvanco.cor, minHeight: '56px', padding: '0 16px' }}
                     >

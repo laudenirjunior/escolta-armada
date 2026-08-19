@@ -106,6 +106,66 @@ Três rodadas de agentes em paralelo, uma por arquivo para não haver conflito d
 
 A revisão adversarial se pagou: das cinco frentes implementadas, **as cinco voltaram com defeito**, sendo cinco regressões que o `tsc` não pegaria. As duas mais caras seriam invisíveis até o cliente reclamar: a impressão sem fotos e o endereço do ponto sumindo do mapa.
 
+### As três decisões de Pecanha
+
+Tomadas em 2026-08-19, depois de eu apresentar as opções com o custo de cada uma.
+
+#### 1. Pré-início não acontece pela tela de campo
+
+Ao derivar o mapa de etapas da fonte única, a tela de campo tinha ganhado um caminho de `em_pre_inicio -> em_andamento` que antes não existia: o operador saía da base com uma foto e uma observação, sem conferência de material, sem conferência de viatura, sem as 5 fotos de ângulo e sem o KM de saída. A escolta começava sem registro nenhum do estado da viatura.
+
+Pecanha escolheu exigir o questionário completo. O caminho saiu, e no lugar entrou um aviso dizendo que a saída é liberada pelo supervisor e que o registro dos pontos aparece assim que ele confirmar.
+
+#### 2. Campo separado de complemento de endereço
+
+O comportamento que zera a coordenada ao redigitar existe para a escolta não nascer com o endereço de um lugar e a coordenada de outro, e continua de pé. O efeito colateral era não haver como registrar "apto 302", "portão dos fundos", "doca 2", que é informação operacional real: sem ela a equipe chega no número e descobre o resto por rádio.
+
+Agora há um campo próprio de complemento para origem e para destino. Ele não passa pela busca do Mapbox, não dispara requisição e não toca em coordenada nenhuma. Na gravação, entra concatenado ao endereço escolhido, e aparece já concatenado no passo de revisão, para o usuário ver o que será gravado.
+
+#### 3. Um ponto de controle por viatura
+
+**A decisão mais cara das três, e Pecanha escolheu sabendo.** Antes, `viaturas[0]` aparecia 20 vezes na tela de detalhe: todo ponto era gravado para a primeira viatura e a segunda não aparecia em lugar nenhum. Se ela se separasse do comboio ou atrasasse, nada registrava, e o sistema declarava a escolta conforme.
+
+Agora cada viatura tem o próprio ponto, com fotos e KM próprios, e a placa entra no rótulo para o relatório distinguir os dois pontos da mesma etapa. A validação diz **qual** viatura está faltando foto, pela placa: mensagem genérica ali deixaria o supervisor adivinhando.
+
+**O caso de uma viatura não piorou**, e isso foi requisito explícito: sem cabeçalho extra, sem moldura, sem passo a mais, e o texto "por viatura" só aparece quando há comboio.
+
+**A regra que dá sentido à decisão, na tela de campo:** o status só avança quando **todas** as viaturas tiverem ponto naquela etapa. Sem isso a decisão não se sustentaria ali: o primeiro registro avançaria a etapa, o botão sumiria, e a segunda viatura ficaria para sempre sem o ponto. Cada equipe registra a sua, e a última destrava a jornada. Com uma viatura, a primeira já é a última e nada muda.
+
+Para perfil administrativo com comboio, a tela pede a escolha explícita da viatura, com a placa. A alternativa seria gravar a mesma foto para as duas, o que criaria prova falsa de que ambas foram vistas: quem está no dashboard não está na estrada.
+
+#### O que a revisão pegou nesta rodada
+
+**Insert em lote, não um por viatura.** Um insert por viatura em sequência criava uma janela nova de graça: se o da primeira passasse e o da segunda falhasse, o status não seria tocado, o operador repetiria a etapa e a primeira ficaria com o ponto **duplicado** no relatório do cliente, sem ninguém conseguir apagar, porque `pontos_controle` não tem policy de DELETE. O PostgREST aceita array, e insert com várias linhas é um statement só, portanto atômico.
+
+**Escolta sem viatura vinculada abria um diálogo mudo.** O componente novo iterava sobre uma lista vazia: nenhum botão de câmera, nenhuma explicação, e o confirmar desabilitado para sempre. Antes o operador ao menos clicava e recebia a mensagem. Agora a explicação aparece no lugar da lista.
+
+**Prefixo por placa que não chegava a lugar nenhum.** O componente compunha um nome de arquivo com a placa, mas o caminho no storage é montado em outro lugar, com prefixo único. Prometer no código o que não acontece confunde quem for depurar depois.
+
+Um achado do revisor **não se confirmou**: ele previu que a chave computada de union no update de KM quebraria a compilação, com argumento técnico detalhado sobre como o `postgrest-js` tipa o update. O `tsc` passou limpo. Registrado porque a análise era plausível e mesmo assim errada, o que é exatamente o motivo de verificar antes de aceitar.
+
+#### Prova no banco
+
+Escolta de teste com duas viaturas, criada e apagada:
+
+| Passo | Resultado |
+|---|---|
+| Só a viatura A registrou | 1 viatura faltando, etapa **não** avança |
+| A viatura B também registrou | 0 faltando, etapa **destrava** |
+| Lote com uma linha violando o CHECK de GPS | recusado **inteiro** |
+| Pontos após o lote recusado | 2, nenhuma linha parcial entrou |
+| Base após a limpeza | 0 escoltas, 0 pontos, 0 vínculos |
+
+`tsc` zero erros, `build` verde, `lint` zero erros.
+
+#### Pendências abertas por esta decisão, declaradas
+
+1. **Checklist de entrega da finalização** continua cobrindo apenas a primeira viatura: com comboio, a segunda é entregue sem registro de estado. Há aviso no diálogo dizendo qual placa está sendo registrada.
+2. **Checklists de partida do wizard** (materiais e viatura, com as 5 fotos de ângulo) idem. O que o wizard já faz por viatura é o ponto de saída e o KM.
+3. **Parada e check-in periódico** continuam num ponto só. O argumento escrito no código: a parada é do comboio inteiro e quem registra está dentro de uma viatura, no acostamento; exigir foto das duas obrigaria o operador a caminhar até a outra viatura no meio da estrada. **Precisa da confirmação de Pecanha.**
+4. **Ocorrência, emergência e checklist** continuam atribuídos à primeira viatura quando quem usa é perfil administrativo em escolta com comboio. Não estendi por conta própria: a decisão foi sobre ponto de controle, e o seletor vive no painel de checkpoint.
+5. A corrida entre duas pessoas registrando a mesma etapa para viaturas diferentes ficou **mais provável**, porque agora duas pessoas têm motivo legítimo para isso. O tratamento existente responde certo (mensagem de etapa já avançada, com o ponto salvo), mas fechar de vez continua dependendo da RPC transacional.
+
 ### Revisão final: o que quase foi para produção
 
 A revisão adversarial do conjunto fechado encontrou quatro coisas que o `tsc` e o `build` não pegariam, sendo uma delas a mais grave do dia inteiro.
