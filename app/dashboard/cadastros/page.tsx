@@ -160,17 +160,25 @@ export default function CadastrosPage() {
   /* ── Save helpers ── */
   const saveCliente = async () => {
     setSaving(true)
-    if (editCliente) {
-      await sb.from('clientes').update({ ...formCliente, atualizado_por: user?.id }).eq('id', editCliente)
-    } else {
-      await sb.from('clientes').insert({ ...formCliente, criado_por: user?.id })
+    const r = editCliente
+      ? await sb.from('clientes').update({ ...formCliente, atualizado_por: user?.id })
+          .eq('id', editCliente).select('id')
+      : await sb.from('clientes').insert({ ...formCliente, criado_por: user?.id }).select('id')
+    setSaving(false)
+    if (r.error || !r.data?.length) {
+      alert(r.error?.message ?? 'Você não tem permissão para alterar clientes.')
+      return
     }
-    setSaving(false); setDialogCliente(false); loadClientes()
+    setDialogCliente(false); loadClientes()
   }
 
   const deleteCliente = async (id: string) => {
     if (!confirm('Excluir cliente?')) return
-    await sb.from('clientes').delete().eq('id', id)
+    const { data, error } = await sb.from('clientes').delete().eq('id', id).select('id')
+    if (error || !data?.length) {
+      alert(error?.message ?? 'Você não tem permissão para excluir clientes.')
+      return
+    }
     loadClientes()
   }
 

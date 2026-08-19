@@ -2,6 +2,9 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Regras de impressao, validas para todas as paginas. */
+@import "./print.css";
+
 :root {
   /* ── Paleta Navy ──────────────────────────────── */
   --background:       #EEF0F5;

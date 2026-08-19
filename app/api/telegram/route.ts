@@ -1,4 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { createClient } from '@/lib/supabase/server'
+import { exigirSessao, dentroDoLimite, escaparHtml } from '@/lib/api-auth'
+
+// Antes esta rota nao exigia nada. Qualquer um podia mandar mensagem em nome
+// do bot para qualquer chat, e o GET ?action=updates despejava as conversas
+// recentes dele para chamador anonimo.
+const LIMITE_ENVIOS_POR_MINUTO = 30
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
 const BASE_URL = `https://api.telegram.org/bot${BOT_TOKEN}`
@@ -37,6 +44,14 @@ export async function POST(req: NextRequest) {
   if (!BOT_TOKEN) {
     return NextResponse.json({ error: 'TELEGRAM_BOT_TOKEN não configurado' }, { status: 500 })
   }
+  const auth = await exigirSessao()
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.erro }, { status: auth.status })
+  }
+  if (!dentroDoLimite('tg:' + auth.sessao.usuarioId, LIMITE_ENVIOS_POR_MINUTO, 60_000)) {
+    return NextResponse.json({ error: 'Muitas mensagens. Aguarde um minuto.' }, { status: 429 })
+  }
+
   try {
     const body = await req.json()
     const {
@@ -55,9 +70,26 @@ export async function POST(req: NextRequest) {
       chat_id,
     } = body
 
-    const destChatId: string | undefined = chat_id ?? process.env.TELEGRAM_CHAT_ID
+    // O chat_id vinha do cliente: qualquer um usava o bot para mandar mensagem
+    // a qualquer destino. Agora e resolvido no servidor a partir da escolta.
+    let destChatId: string | undefined
+    if (escolta_id) {
+      const sb = createClient()
+      const { data } = await sb
+        .from('escoltas')
+        .select('cliente:clientes(telegram_chat_id)')
+        .eq('id', escolta_id)
+        .maybeSingle()
+      const cli = (data as unknown as { cliente: { telegram_chat_id: string | null } | null } | null)?.cliente
+      destChatId = cli?.telegram_chat_id ?? undefined
+    }
+    // Um chat_id explicito so e aceito de quem administra as integracoes.
+    if (!destChatId && chat_id && ['administrador', 'gestor'].includes(auth.sessao.perfil)) {
+      destChatId = chat_id
+    }
+    destChatId = destChatId ?? process.env.TELEGRAM_CHAT_ID
     if (!destChatId) {
-      return NextResponse.json({ error: 'chat_id não informado e TELEGRAM_CHAT_ID não configurado' }, { status: 400 })
+      return NextResponse.json({ error: 'Destino não configurado para este cliente.' }, { status: 400 })
     }
 
     let texto: string
@@ -70,16 +102,16 @@ export async function POST(req: NextRequest) {
       const agora = data_hora ?? new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
       const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
 
-      texto = `${emoji} <b>${titulo}</b>\n\n`
-      texto += `📅 <b>Data e Hora:</b> ${agora}\n`
-      if (escolta_codigo) texto += `🔖 <b>Escolta:</b> <code>${escolta_codigo}</code>\n`
-      if (cliente)        texto += `🏢 <b>Cliente:</b> ${cliente}\n`
-      if (status_atual)   texto += `🔄 <b>Status:</b> ${status_atual}\n`
-      if (veiculo)        texto += `🚗 <b>Viatura:</b> <code>${veiculo}</code>\n`
+      texto = `${emoji} <b>${escaparHtml(String(titulo ?? ""))}</b>\n\n`
+      texto += `📅 <b>Data e Hora:</b> ${escaparHtml(String(agora))}\n`
+      if (escolta_codigo) texto += `🔖 <b>Escolta:</b> <code>${escaparHtml(String(escolta_codigo))}</code>\n`
+      if (cliente)        texto += `🏢 <b>Cliente:</b> ${escaparHtml(String(cliente))}\n`
+      if (status_atual)   texto += `🔄 <b>Status:</b> ${escaparHtml(String(status_atual))}\n`
+      if (veiculo)        texto += `🚗 <b>Viatura:</b> <code>${escaparHtml(String(veiculo))}</code>\n`
 
       if (Array.isArray(efetivos) && efetivos.length > 0) {
         texto += `\n👥 <b>Efetivos:</b>\n`
-        for (const nome of efetivos) texto += `  • ${nome}\n`
+        for (const nome of efetivos) texto += `  • ${escaparHtml(String(nome))}\n`
       }
 
       if (descricao?.trim()) texto += `\n📝 <i>${descricao.trim()}</i>\n`
@@ -138,6 +170,14 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   if (!BOT_TOKEN) {
     return NextResponse.json({ error: 'TELEGRAM_BOT_TOKEN não configurado no .env.local' }, { status: 500 })
+  }
+
+  const auth = await exigirSessao()
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.erro }, { status: auth.status })
+  }
+  if (!['administrador', 'gestor'].includes(auth.sessao.perfil)) {
+    return NextResponse.json({ error: 'Permissão negada.' }, { status: 403 })
   }
 
   const action = req.nextUrl.searchParams.get('action') ?? 'verify'

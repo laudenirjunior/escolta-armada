@@ -36,26 +36,25 @@ export function validarCPF(cpf: string): boolean {
   return true
 }
 
+/** Comprimento minimo da senha. Decidido com Pecanha: 6, sem exigencia de complexidade. */
+export const SENHA_MINIMO = 6
+
+/** Senha provisoria padrao de todo cadastro novo. Trocada no primeiro acesso. */
+export const SENHA_PROVISORIA = '123456'
+
 export function validarSenha(senha: string): {
   valida: boolean
   erros: string[]
 } {
   const erros: string[] = []
 
-  if (senha.length < 8) {
-    erros.push('Mínimo 8 caracteres')
+  if (senha.length < SENHA_MINIMO) {
+    erros.push(`Mínimo ${SENHA_MINIMO} caracteres`)
   }
 
-  if (!/[A-Z]/.test(senha)) {
-    erros.push('Deve conter letra maiúscula')
-  }
-
-  if (!/[a-z]/.test(senha)) {
-    erros.push('Deve conter letra minúscula')
-  }
-
-  if (!/[0-9]/.test(senha)) {
-    erros.push('Deve conter números')
+  // Nao adianta "trocar" a provisoria por ela mesma.
+  if (senha === SENHA_PROVISORIA) {
+    erros.push('A nova senha não pode ser igual à senha provisória')
   }
 
   return {

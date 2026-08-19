@@ -34,7 +34,7 @@ const P = {
 // ─── Parâmetro SLA ────────────────────────────────────────────────────────────
 const SLA_HORAS_LIMITE = 10   // alerta quando escolta ativa ultrapassa 10h do horário previsto
 
-const STATUSES_ATIVOS    = ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando', 'na_base']
+const STATUSES_ATIVOS    = ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando', 'na_base']
 const STATUSES_CONCLUIDOS = ['finalizada']
 
 const STATUS_LABEL: Record<string, string> = {
@@ -341,7 +341,7 @@ export default function IndicadoresPage() {
       q = (q as any).eq('cliente_id', clienteFiltroId)
     }
 
-    let ocQ = sb.from('ocorrencias').select('id', { count: 'exact', head: true })
+    const ocQ = sb.from('ocorrencias').select('id', { count: 'exact', head: true })
       .gte('data_hora', from).lte('data_hora', to)
 
     const [{ data: escData }, { count: ocCount }] = await Promise.all([q, ocQ])
@@ -571,7 +571,9 @@ export default function IndicadoresPage() {
   const concluidas    = escoltas.filter(e => STATUSES_CONCLUIDOS.includes(e.status))
   const canceladas    = escoltas.filter(e => e.status === 'cancelada')
   const taxaConclusao = totalMes > 0 ? Math.round((concluidas.length / totalMes) * 100) : 0
-  const txSla         = ativas.length > 0 ? Math.round(((ativas.length - alertasSLA.length) / ativas.length) * 100) : 100
+  // Sem escolta ativa nao existe taxa a apurar. Antes mostrava 100%, que
+  // sugeria desempenho perfeito onde nao havia nada medido.
+  const txSla         = ativas.length > 0 ? Math.round(((ativas.length - alertasSLA.length) / ativas.length) * 100) : null
   const txCanc        = totalMes > 0 ? Math.round((canceladas.length / totalMes) * 100) : 0
 
   const alertasVisiveis = alertasSLA.filter(a => !alertasFechados.has(a.id))
@@ -643,10 +645,10 @@ export default function IndicadoresPage() {
   const KPI_CARDS = [
     { label: 'Escoltas no Período', valor: loading ? '—' : totalMes,      sub: nomeCliente ?? `filtro: ${tipoPeriodo}`,           tendencia: 'neutro',                                   icon: Shield,       cor: P.navy,      corBg: P.navyBg,  dark: false },
     { label: 'Em Andamento',        valor: loading ? '—' : ativas.length, sub: `${alertasVisiveis.length} alerta(s) SLA`,         tendencia: alertasVisiveis.length > 0 ? 'alerta' : 'neutro', icon: Truck, cor: P.navy,      corBg: P.navyBg,  dark: true  },
-    { label: 'Concluídas',          valor: loading ? '—' : concluidas.length, sub: `${taxaConclusao}% de conclusão`,              tendencia: taxaConclusao >= 80 ? 'up' : 'down',        icon: CheckCircle2, cor: P.steel,     corBg: P.steelBg, dark: false },
-    { label: 'Ocorrências',         valor: loading ? '—' : totalOcorrencias, sub: 'registradas no período',                       tendencia: totalOcorrencias > 5 ? 'down' : 'up',       icon: AlertTriangle,cor: P.errorText, corBg: P.errorBg, dark: false },
-    { label: 'Canceladas',          valor: loading ? '—' : canceladas.length, sub: `${txCanc}% do total`,                         tendencia: canceladas.length > 3 ? 'down' : 'neutro',  icon: Zap,          cor: P.steel,     corBg: P.steelBg, dark: false },
-    { label: 'Taxa SLA',            valor: loading ? '—' : `${txSla}%`,  sub: `${SLA_HORAS_LIMITE}h = limite operacional`,       tendencia: alertasVisiveis.length === 0 ? 'up' : 'down',icon: TrendingUp,   cor: P.navy,      corBg: P.navyBg,  dark: false },
+    { label: 'Concluídas',          valor: loading ? '—' : concluidas.length, sub: `${taxaConclusao}% de conclusão`,              tendencia: 'neutro',        icon: CheckCircle2, cor: P.steel,     corBg: P.steelBg, dark: false },
+    { label: 'Ocorrências',         valor: loading ? '—' : totalOcorrencias, sub: 'registradas no período',                       tendencia: 'neutro',       icon: AlertTriangle,cor: P.errorText, corBg: P.errorBg, dark: false },
+    { label: 'Canceladas',          valor: loading ? '—' : canceladas.length, sub: `${txCanc}% do total`,                         tendencia: 'neutro',  icon: Zap,          cor: P.steel,     corBg: P.steelBg, dark: false },
+    { label: 'Taxa SLA',            valor: loading ? '—' : (txSla === null ? '—' : `${txSla}%`),  sub: txSla === null ? 'nenhuma escolta ativa agora' : `${SLA_HORAS_LIMITE}h = limite operacional`,       tendencia: 'neutro',icon: TrendingUp,   cor: P.navy,      corBg: P.navyBg,  dark: false },
   ]
 
   return (
@@ -866,7 +868,7 @@ export default function IndicadoresPage() {
                 </div>
                 <div className="flex items-center gap-1.5">
                   {k.dark && (
-                    <span style={{ backgroundColor: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '2px', fontSize: '9px', fontWeight: 900, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.5)', padding: '2px 6px' }}>LIVE</span>
+                    <span style={{ backgroundColor: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '2px', fontSize: '9px', fontWeight: 900, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'rgba(255,255,255,0.5)', padding: '2px 6px' }}>PERÍODO</span>
                   )}
                   {k.tendencia === 'up'    && <ArrowUpRight    size={13} style={{ color: k.dark ? 'rgba(255,255,255,0.5)' : P.steel }} />}
                   {k.tendencia === 'down'  && <ArrowDownRight  size={13} style={{ color: k.dark ? 'rgba(255,255,255,0.5)' : P.errorText }} />}
@@ -937,7 +939,8 @@ export default function IndicadoresPage() {
             {volumeMensal.map((m, idx) => {
               const pctTotal = maxVolumeMensal > 0 ? (m.total / maxVolumeMensal) * 100 : 0
               const pctFin   = m.total > 0 ? (m.finalizadas / m.total) * 100 : 0
-              const barH     = Math.max(pctTotal * 1.2, m.total > 0 ? 6 : 0)
+              // Sem fator de correcao: com 1.2 o mes de pico passava de 100% e vazava o trilho.
+              const barH     = Math.max(pctTotal, m.total > 0 ? 6 : 0)
               return (
                 <div key={m.label} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', minWidth: 0 }}>
                   <span style={{ fontSize: '9px', fontWeight: 900, color: m.total > 0 ? P.text : P.light, lineHeight: 1 }}>{m.total > 0 ? m.total : ''}</span>
@@ -1081,9 +1084,9 @@ export default function IndicadoresPage() {
             <div>
               <div className="flex justify-between mb-1.5">
                 <span className="text-xs font-semibold" style={{ color: P.text }}>Conformidade SLA (ativas)</span>
-                <span className="text-xs font-black" style={{ color: txSla >= 80 ? P.navy : P.errorText }}>{txSla}%</span>
+                <span className="text-xs font-black" style={{ color: (txSla ?? 100) >= 80 ? P.navy : P.errorText }}>{txSla === null ? '—' : `${txSla}%`}</span>
               </div>
-              <MiniBar pct={txSla} dim={txSla < 80} />
+              <MiniBar pct={txSla ?? 0} dim={(txSla ?? 100) < 80} />
             </div>
             <div>
               <div className="flex justify-between mb-1.5">

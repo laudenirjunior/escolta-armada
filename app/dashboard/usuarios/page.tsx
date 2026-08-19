@@ -10,6 +10,8 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
 import { PODE_GERENCIAR_USUARIOS } from '@/lib/permissions'
+import { validarCPF, SENHA_PROVISORIA } from '@/utils/validators'
+import { mascaraCPF, mascaraTelefone, gerarLoginOperador } from '@/utils/formatters'
 
 const supabase = createClient()
 const sb = supabase as any
@@ -97,6 +99,8 @@ export default function UsuariosPage() {
   const [saving, setSaving] = useState(false)
   const [erro, setErro] = useState('')
   const [senhaTemporaria, setSenhaTemporaria] = useState('')
+  // Preview do login que a RPC vai gerar, para o admin ver antes de salvar.
+  const loginPrevisto = gerarLoginOperador(form.nome_completo)
 
   // Modal de credenciais criadas
   const [usuarioCriado, setUsuarioCriado] = useState<{ email: string; senha: string } | null>(null)
@@ -168,15 +172,21 @@ export default function UsuariosPage() {
 
   const salvar = async () => {
     if (!form.nome_completo.trim()) { setErro('Informe o nome completo.'); return }
-    if (!form.email.trim()) { setErro('Informe o e-mail.'); return }
-    if (!form.perfil_id) { setErro('Selecione um perfil.'); return }
+    if (!form.perfil_id) { setErro('Selecione o perfil de acesso.'); return }
+
+    // CPF passa a ser obrigatorio e validado. O validador ja existia em
+    // utils/validators.ts com os dois digitos verificadores e nunca era usado.
+    const cpfNumeros = form.cpf.replace(/\D/g, '')
+    if (!cpfNumeros) { setErro('Informe o CPF.'); return }
+    if (!validarCPF(form.cpf)) { setErro('CPF inválido. Confira os dígitos.'); return }
+
     setSaving(true); setErro('')
 
     if (editando) {
       const { error } = await sb.from('usuarios').update({
         nome_completo: form.nome_completo.trim(),
-        cpf: form.cpf || null,
-        telefone: form.telefone || null,
+        cpf: cpfNumeros || null,
+        telefone: form.telefone.replace(/\D/g, '') || null,
         perfil_id: form.perfil_id,
         status: form.status,
         atualizado_em: new Date().toISOString(),
@@ -184,17 +194,19 @@ export default function UsuariosPage() {
       if (error) { setErro(error.message ?? 'Erro ao atualizar.') }
       else { fechar(); await carregar() }
     } else {
-      const { error } = await sb.rpc('criar_usuario_completo', {
-        p_email: form.email.trim().toLowerCase(),
-        p_senha_temporaria: senhaTemporaria,
+      // A RPC gera o login primeiro_ultimo, cria a conta com a linha em
+      // auth.identities e as colunas de texto que o GoTrue exige, e devolve
+      // as credenciais. Sem a identity a conta nasce sem conseguir entrar,
+      // que foi o que aconteceu com os dois usuarios anteriores.
+      const { data, error } = await sb.rpc('criar_usuario_por_login', {
         p_nome: form.nome_completo.trim(),
+        p_cpf: cpfNumeros,
+        p_telefone: form.telefone.replace(/\D/g, '') || null,
         p_perfil_id: form.perfil_id,
-        p_telefone: form.telefone || null,
-        p_cpf: form.cpf || null,
       })
       if (error) { setErro(error.message ?? 'Erro ao criar usuário.') }
       else {
-        setUsuarioCriado({ email: form.email.trim().toLowerCase(), senha: senhaTemporaria })
+        setUsuarioCriado({ email: data?.login ?? '', senha: data?.senha ?? SENHA_PROVISORIA })
         fechar(); await carregar()
       }
     }
@@ -214,7 +226,13 @@ export default function UsuariosPage() {
 
   const toggleStatus = async (u: UsuarioRow) => {
     const novoStatus = u.status === 'ativo' ? 'bloqueado' : 'ativo'
-    await sb.from('usuarios').update({ status: novoStatus }).eq('id', u.id)
+    const { data, error } = await sb.from('usuarios')
+      .update({ status: novoStatus, atualizado_em: new Date().toISOString() })
+      .eq('id', u.id).select('id')
+    if (error || !data?.length) {
+      setErro(error?.message ?? 'Você não tem permissão para alterar este usuário.')
+      return
+    }
     await carregar()
   }
 
@@ -480,7 +498,7 @@ export default function UsuariosPage() {
                   <div className="flex items-center justify-end gap-1">
                     {/* Reset senha */}
                     <button
-                      onClick={() => { setResetando(u); setNovaSenhaReset(gerarSenhaTemporaria()) }}
+                      onClick={() => { setResetando(u); setNovaSenhaReset(SENHA_PROVISORIA) }}
                       title="Redefinir senha"
                       className="w-7 h-7 rounded-lg flex items-center justify-center transition-all"
                       style={{ color: '#6B7E8A' }}
@@ -611,7 +629,7 @@ export default function UsuariosPage() {
                   {podeGerenciar && (
                     <div className="flex gap-2 pt-3 border-t border-gray-100">
                       <button
-                        onClick={() => { setResetando(u); setNovaSenhaReset(gerarSenhaTemporaria()) }}
+                        onClick={() => { setResetando(u); setNovaSenhaReset(SENHA_PROVISORIA) }}
                         className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-lg text-xs font-semibold"
                         style={{ backgroundColor: '#F4EDFC', color: '#7B3FA0' }}
                         title="Redefinir senha"
@@ -727,7 +745,7 @@ export default function UsuariosPage() {
                   className="input-light flex-1 font-mono text-sm min-h-[48px] md:min-h-0"
                   placeholder="Nova senha"
                 />
-                <button onClick={() => setNovaSenhaReset(gerarSenhaTemporaria())}
+                <button onClick={() => setNovaSenhaReset(SENHA_PROVISORIA)}
                   className="p-2 rounded-lg transition-all" style={{ backgroundColor: '#F0F2F4', color: '#4A5568' }}
                   title="Gerar nova">
                   <RefreshCw size={14} />
@@ -793,66 +811,61 @@ export default function UsuariosPage() {
             </div>
 
             <div className="px-6 py-5 space-y-4 max-h-[65vh] overflow-y-auto">
-              {/* Senha temp */}
+              {/* Credenciais que serao geradas */}
               {!editando && (
                 <div className="rounded-xl overflow-hidden" style={{ border: '1px solid #C8DCF0' }}>
                   <div className="flex items-center gap-2 px-3 py-2" style={{ backgroundColor: '#EBF3FC' }}>
                     <Key size={12} style={{ color: '#2166A8' }} />
-                    <p className="text-xs font-bold" style={{ color: '#2166A8' }}>Senha temporária gerada</p>
+                    <p className="text-xs font-bold" style={{ color: '#2166A8' }}>Credenciais geradas automaticamente</p>
                   </div>
-                  <div className="flex items-center justify-between gap-2 px-3 py-2.5" style={{ backgroundColor: '#F7FAFC' }}>
-                    <code className="text-sm font-mono font-black tracking-widest" style={{ color: '#1A2F4A' }}>
-                      {senhaTemporaria}
-                    </code>
-                    <button type="button" onClick={() => setSenhaTemporaria(gerarSenhaTemporaria())}
-                      title="Gerar nova"
-                      className="p-1.5 rounded transition-all" style={{ color: '#6B7E8A' }}
-                      onMouseEnter={e => (e.currentTarget as HTMLElement).style.backgroundColor = '#E2EAF4'}
-                      onMouseLeave={e => (e.currentTarget as HTMLElement).style.backgroundColor = ''}>
-                      <RefreshCw size={12} />
-                    </button>
+                  <div className="px-3 py-2.5 space-y-1" style={{ backgroundColor: '#F7FAFC' }}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Login</span>
+                      <code className="text-sm font-mono font-black" style={{ color: '#1A2F4A' }}>
+                        {loginPrevisto || 'primeiro_ultimo'}
+                      </code>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>Senha provisória</span>
+                      <code className="text-sm font-mono font-black tracking-widest" style={{ color: '#1A2F4A' }}>
+                        {SENHA_PROVISORIA}
+                      </code>
+                    </div>
+                    <p className="text-[10px] pt-1" style={{ color: '#6B7E8A' }}>
+                      O usuário troca a senha no primeiro acesso. Mínimo de 6 caracteres.
+                    </p>
                   </div>
                 </div>
               )}
 
               {/* Nome */}
               <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest mb-1.5" style={{ color: '#7A8FA0' }}>
+                <label htmlFor="f-nome" className="block text-[10px] font-black uppercase tracking-widest mb-1.5" style={{ color: '#7A8FA0' }}>
                   Nome Completo *
                 </label>
-                <input type="text" placeholder="Nome completo do operador"
+                <input id="f-nome" type="text" placeholder="Nome completo"
                   value={form.nome_completo}
                   onChange={e => setForm({ ...form, nome_completo: e.target.value })}
                   className="input-light min-h-[48px] md:min-h-0" />
               </div>
 
-              {/* Email */}
-              <div>
-                <label className="block text-[10px] font-black uppercase tracking-widest mb-1.5" style={{ color: '#7A8FA0' }}>
-                  E-mail (Login) *
-                </label>
-                <input type="email" placeholder="email@empresa.com"
-                  value={form.email}
-                  onChange={e => setForm({ ...form, email: e.target.value })}
-                  className="input-light min-h-[48px] md:min-h-0"
-                  readOnly={!!editando}
-                  style={editando ? { backgroundColor: '#F4F4F9', cursor: 'not-allowed' } : {}} />
-              </div>
-
               {/* CPF + Telefone */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[10px] font-black uppercase tracking-widest mb-1.5" style={{ color: '#7A8FA0' }}>CPF</label>
-                  <input type="text" placeholder="000.000.000-00"
+                  <label htmlFor="f-cpf" className="block text-[10px] font-black uppercase tracking-widest mb-1.5" style={{ color: '#7A8FA0' }}>CPF *</label>
+                  <input id="f-cpf" type="text" inputMode="numeric" placeholder="000.000.000-00"
                     value={form.cpf}
-                    onChange={e => setForm({ ...form, cpf: e.target.value })}
+                    onChange={e => setForm({ ...form, cpf: mascaraCPF(e.target.value) })}
                     className="input-light min-h-[48px] md:min-h-0" />
+                  {form.cpf.replace(/\D/g, '').length === 11 && !validarCPF(form.cpf) && (
+                    <p className="text-[10px] mt-1" style={{ color: '#B83832' }}>CPF inválido</p>
+                  )}
                 </div>
                 <div>
-                  <label className="block text-[10px] font-black uppercase tracking-widest mb-1.5" style={{ color: '#7A8FA0' }}>Telefone</label>
-                  <input type="text" placeholder="(00) 00000-0000"
+                  <label htmlFor="f-tel" className="block text-[10px] font-black uppercase tracking-widest mb-1.5" style={{ color: '#7A8FA0' }}>Telefone</label>
+                  <input id="f-tel" type="text" inputMode="numeric" placeholder="(00) 00000-0000"
                     value={form.telefone}
-                    onChange={e => setForm({ ...form, telefone: e.target.value })}
+                    onChange={e => setForm({ ...form, telefone: mascaraTelefone(e.target.value) })}
                     className="input-light min-h-[48px] md:min-h-0" />
                 </div>
               </div>

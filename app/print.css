@@ -1,0 +1,195 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   Regras de impressao do sistema.
+
+   Antes desta folha existiam apenas dois blocos `@media print`, inline nas duas
+   paginas dedicadas. Qualquer outra tela impressa saia com sidebar, topbar e
+   bottom nav. Esta folha e importada pelo globals.css, entao vale para TODAS as
+   paginas, e as duas dedicadas continuam com seus ajustes proprios por cima.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+@media print {
+  /* A4 retrato. A margem inferior maior reserva espaco para o rodape fixo:
+     sem ela o rodape sobrepoe as ultimas linhas das tabelas longas. */
+  @page {
+    size: A4 portrait;
+    margin: 14mm 12mm 18mm;
+  }
+
+  /* Variante para tabela larga. Aplicar a classe no container da secao. */
+  @page landscape {
+    size: A4 landscape;
+    margin: 12mm 10mm 16mm;
+  }
+  .print-landscape {
+    page: landscape;
+  }
+
+  /* Preservar cor de fundo de badge, cabecalho de tabela e barra de progresso.
+     Aplicado em `*`, nao so em body: descendente com background proprio nao
+     herda a diretiva. */
+  *,
+  *::before,
+  *::after {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  html,
+  body {
+    width: auto !important;
+    height: auto !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+    font-size: 10pt;
+  }
+
+  /* Esconder toda a navegacao e os controles. E isto que faltava para
+     imprimir qualquer tela do dashboard. */
+  aside,
+  nav,
+  [role='navigation'],
+  .no-print,
+  .sidebar,
+  .topbar,
+  .bottom-nav,
+  button:not(.print-keep),
+  input[type='button'],
+  input[type='submit'] {
+    display: none !important;
+  }
+
+  main,
+  .content-scroll {
+    overflow: visible !important;
+    max-height: none !important;
+    height: auto !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* Qualquer container com rolagem propria precisa abrir na impressao,
+     senao so a primeira tela do conteudo sai no papel. */
+  .overflow-y-auto,
+  .overflow-x-auto,
+  .overflow-auto {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  /* Tabelas: cabecalho repetido em toda pagina, linha nao partida ao meio. */
+  table {
+    width: 100% !important;
+    page-break-inside: auto;
+    border-collapse: collapse;
+  }
+  thead {
+    display: table-header-group;
+  }
+  tfoot {
+    display: table-footer-group;
+  }
+  tr,
+  img,
+  figure,
+  .foto-grid,
+  .kpi-card,
+  .card-light,
+  .card-kpi {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Titulo nao pode ficar orfao no pe da pagina, separado do seu conteudo. */
+  h1, h2, h3, h4,
+  .page-title,
+  .secao-header,
+  .section-title {
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+
+  /* Nunca deixar uma ou duas linhas soltas de um paragrafo. */
+  p, li, td {
+    orphans: 3;
+    widows: 3;
+  }
+
+  .section-block,
+  .ocorrencia-block,
+  .secao {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  /* Link perde o destino no papel, entao o endereco vai junto.
+     Interno e ancora nao interessam. */
+  a[href^='http']::after {
+    content: ' (' attr(href) ')';
+    font-size: 8pt;
+    color: #5a6a80;
+    word-break: break-all;
+  }
+  a[href^='#']::after,
+  a[href^='/']::after {
+    content: '';
+  }
+
+  /* Animacao nao faz sentido no papel e atrapalha a renderizacao. */
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+
+  /* Sombra vira mancha cinza na impressao. */
+  * {
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  /* Numeracao de pagina e cabecalho corrido.
+     Use .print-rodape / .print-cabecalho em elemento fixo; o contador e
+     preenchido pelo counter(page), que o navegador resolve por pagina. */
+  .print-rodape,
+  .print-cabecalho {
+    position: fixed;
+    left: 0;
+    right: 0;
+    font-size: 8pt;
+    color: #5a6a80;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .print-cabecalho {
+    top: 0;
+    border-bottom: 1px solid #d6dae5;
+    padding-bottom: 2mm;
+  }
+  .print-rodape {
+    bottom: 0;
+    border-top: 1px solid #d6dae5;
+    padding-top: 2mm;
+  }
+  .print-pagina::after {
+    content: counter(page);
+  }
+  .print-total::after {
+    content: counter(pages);
+  }
+
+  /* Conteudo que so existe no papel. */
+  .print-only {
+    display: block !important;
+  }
+}
+
+/* Fora da impressao, o que e exclusivo do papel fica escondido. */
+@media screen {
+  .print-only {
+    display: none;
+  }
+}

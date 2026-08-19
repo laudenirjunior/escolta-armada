@@ -1,5 +1,7 @@
 'use client'
 
+import Link from 'next/link'
+
 import { useEffect, useState } from 'react'
 import {
   Shield, AlertTriangle, CheckCircle, Clock,
@@ -48,7 +50,7 @@ const STATUS_MAP: Record<string, { label: string; cls: string }> = {
   cancelada:     { label: 'Cancelada',    cls: 'badge-danger' },
 }
 
-const STATUS_ATIVOS = ['em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando', 'na_base']
+const STATUS_ATIVOS = ['em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando', 'na_base']
 
 const supabase = createClient()
 const sb = supabase as any
@@ -148,11 +150,11 @@ export default function DashboardPage() {
             })}
           </p>
         </div>
-        <a href="/dashboard/escoltas/nova" className="btn-gradient shrink-0 text-xs md:text-sm px-3 md:px-4 py-2 md:py-2.5">
+        <Link href="/dashboard/escoltas/nova" className="btn-gradient shrink-0 text-xs md:text-sm px-3 md:px-4 py-2 md:py-2.5">
           <Shield size={14} />
           <span className="hidden sm:inline">Nova Escolta</span>
           <span className="sm:hidden">Nova</span>
-        </a>
+        </Link>
       </div>
 
       {/* ── KPI cards ── */}
@@ -166,7 +168,7 @@ export default function DashboardPage() {
               <Shield size={18} style={{ color: '#53648A' }} />
             </div>
             <span className="flex items-center gap-1 text-[11px] font-bold" style={{ color: '#4ade80' }}>
-              <ArrowUpRight size={12} />LIVE
+              <ArrowUpRight size={12} />AGORA
             </span>
           </div>
           <p className="text-3xl font-black text-white leading-none tabular-nums tracking-tight">
@@ -328,14 +330,14 @@ export default function DashboardPage() {
               <p className="text-[11px]" style={{ color: '#5A6A80' }}>Escoltas ativas no momento</p>
             </div>
           </div>
-          <a href="/dashboard/escoltas"
+          <Link href="/dashboard/escoltas"
             className="flex items-center gap-1 text-xs font-medium transition-colors shrink-0"
             style={{ color: '#53648A' }}
             onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.color = '#3A5464'}
             onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.color = '#53648A'}
           >
             Ver todas <ArrowRight size={13} />
-          </a>
+          </Link>
         </div>
 
         {loading ? (

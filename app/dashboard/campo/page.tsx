@@ -8,6 +8,7 @@ import {
   Clock, User, Crosshair
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { PROXIMO_STATUS as PROXIMO_STATUS_FLUXO, STATUS_ATIVOS } from '@/lib/fluxo-escolta'
 import { useAuth } from '@/hooks/useAuth'
 import { AiTextButton } from '@/components/ui/ai-text-button'
 
@@ -28,6 +29,8 @@ const TIPO_PONTO = {
   ORIGEM:           'e1aec874-4d4e-4aa2-bae2-de4e711a9f9f',
   TRANSITO_DESTINO: '86935442-a8d5-4a06-8664-ad51bf7d1e5c',
   DESTINO:          'e4623e3e-a210-4c17-942a-80f01cc28f2d',
+  TRANSITO_RETORNO: 'fb0dfca6-5495-4009-aff8-4fb279c4b7fc',
+  RETORNO:          '4316fb15-8abe-4cfb-a605-753134178225',
   BASE_RETORNO:     'c9bc3e19-d55d-4174-8acb-12fe1e2b50b7',
 }
 
@@ -37,6 +40,8 @@ const STATUS_TO_TIPO_PONTO: Record<string, string> = {
   na_origem:           TIPO_PONTO.ORIGEM,
   em_transito_destino: TIPO_PONTO.TRANSITO_DESTINO,
   no_destino:          TIPO_PONTO.DESTINO,
+  em_transito_retorno: TIPO_PONTO.TRANSITO_RETORNO,
+  retornando:          TIPO_PONTO.RETORNO,
   na_base:             TIPO_PONTO.BASE_RETORNO,
 }
 
@@ -76,7 +81,17 @@ interface FotoCaptura {
 interface TipoOcorrencia { id: string; nome: string }
 
 // ─── Status flow ──────────────────────────────────────────────────────────────
-const PROXIMO_STATUS: Record<string, string> = {
+// Derivado de lib/fluxo-escolta.ts. Antes esta tela tinha o proprio mapa, que
+// omitia a etapa de transito de retorno: a escolta travava aqui e, pior, o
+// codigo nao lia o erro do update e gravava historico de uma transicao que
+// o banco tinha recusado.
+const PROXIMO_STATUS: Record<string, string> = Object.fromEntries(
+  Object.entries(PROXIMO_STATUS_FLUXO)
+    .filter(([, v]) => v !== null)
+    .map(([k, v]) => [k, (v as { status: string }).status])
+)
+
+const PROXIMO_STATUS_LEGADO: Record<string, string> = {
   em_pre_inicio:       'em_andamento',
   em_andamento:        'na_origem',
   na_origem:           'em_transito_destino',
@@ -102,18 +117,21 @@ const JORNADA = [
   { status: 'na_origem',           label: 'Na\nOrigem',    icon: <Package size={13}/> },
   { status: 'em_transito_destino', label: 'Rumo ao\nDestino', icon: <Navigation size={13}/> },
   { status: 'no_destino',          label: 'No\nDestino',   icon: <Flag size={13}/> },
+  { status: 'em_transito_retorno', label: 'Rumo à' + String.fromCharCode(10) + 'Base', icon: <Navigation size={13}/> },
   { status: 'retornando',          label: 'Retornando',    icon: <RotateCcw size={13}/> },
   { status: 'na_base',             label: 'Base\nChegada', icon: <Home size={13}/> },
 ]
 
 const STATUS_IDX: Record<string, number> = {
   em_pre_inicio: 0, em_andamento: 1, na_origem: 2,
-  em_transito_destino: 3, no_destino: 4, retornando: 5, na_base: 6, finalizada: 7,
+  em_transito_destino: 3, no_destino: 4, em_transito_retorno: 5,
+  retornando: 6, na_base: 7, finalizada: 8,
 }
 
 const STATUS_LABELS: Record<string, string> = {
   em_pre_inicio: 'Pré-Início', em_andamento: 'Em Andamento',
   na_origem: 'Na Origem', em_transito_destino: 'Trânsito p/ Destino', no_destino: 'No Destino',
+  em_transito_retorno: 'Trânsito p/ Retorno',
   retornando: 'Retornando', na_base: 'Na Base', finalizada: 'Finalizada',
 }
 
@@ -254,7 +272,7 @@ export default function CampoPage() {
     if (!user) return
     setLoading(true)
 
-    const ATIVOS = ['em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando', 'na_base']
+    const ATIVOS = ['em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando', 'na_base']
 
     if (isAdmin) {
       const { data: esc } = await sb
@@ -337,7 +355,9 @@ export default function CampoPage() {
     const path = `campo/${escoltaAtiva?.id ?? 'geral'}/${tipoFotoId}_${Date.now()}.${ext}`
 
     const { error: upErr } = await supabase.storage.from('fotos').upload(path, captura.file)
-    if (upErr) { console.error('Upload erro:', upErr.message); return null }
+    // Antes retornava null em silencio e o status avancava sem foto. Em estrada
+    // com rede ruim esse era o caminho mais provavel.
+    if (upErr) throw new Error('Falha ao enviar a foto: ' + upErr.message)
 
     const { data: fotoRow } = await sb.from('fotos').insert({
       caminho_arquivo: path,
@@ -427,8 +447,20 @@ export default function CampoPage() {
         fotoId = await uploadFoto(fotoCheckpoint, TIPO_FOTO.PONTO_CONTROLE)
       }
 
-      // Atualiza status da escolta
-      await sb.from('escoltas').update({ status: proximo }).eq('id', escoltaAtiva.id)
+      // Atualiza status da escolta.
+      // Ler o erro aqui nao e detalhe: a trigger do banco recusa transicao
+      // invalida, e sem esta checagem o codigo seguia gravando ponto de
+      // controle e historico de uma transicao que nunca aconteceu.
+      const { error: statusErr } = await sb
+        .from('escoltas')
+        .update({ status: proximo })
+        .eq('id', escoltaAtiva.id)
+        .eq('status', statusAtual)
+      if (statusErr) {
+        showToast('erro', statusErr.message ?? 'Nao foi possivel avancar o status.')
+        setExecutando(false)
+        return
+      }
 
       // Histórico de status
       await sb.from('escolta_status_historico').insert({
@@ -742,7 +774,7 @@ export default function CampoPage() {
   const botaoAvanco = BOTAO_AVANCO[status]
   const podeAvancar = !!PROXIMO_STATUS[status]
   const mostrarChecklist = ['em_pre_inicio', 'na_base'].includes(status)
-  const mostrarOcorrencia = ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando'].includes(status)
+  const mostrarOcorrencia = ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando'].includes(status)
   const checklistRespondidos = checklistItems.filter(i => i.resposta !== null).length
 
   return (

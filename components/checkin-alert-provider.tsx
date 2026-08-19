@@ -23,7 +23,7 @@ export function CheckinAlertProvider() {
         .from('escoltas')
         .select('id, codigo_escolta, periodicidade_checkin_min, cliente:clientes(nome_cliente), status')
         .not('periodicidade_checkin_min', 'is', null)
-        .in('status', ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando'])
+        .in('status', ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando'])
 
       if (!escoltas?.length) return
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
@@ -21,7 +21,7 @@ interface EscoltaPDF {
   outros_custos: number | null
   cliente: { id: string; nome_cliente: string; cor_destaque: string | null } | null
   veiculos: { quilometragem_saida: number; quilometragem_retorno: number | null; abastecimento_valor: number | null; abastecimento_litros: number | null }[]
-  efetivo: { valor_pago_vigilante: number | null; papel: string | null; confirmado: boolean; vigilante: { nome_completo: string } | null }[]
+  efetivo: { valor_pago_vigilante: number | null; papel_na_escolta: string | null; confirmado: boolean; vigilante: { nome_completo: string } | null }[]
 }
 interface OcorrenciaPDF {
   id: string; descricao: string; data_hora: string
@@ -129,7 +129,7 @@ function SecaoResumo({ escoltas }: { escoltas: EscoltaPDF[] }) {
   const total = escoltas.length
   const concluidas = escoltas.filter(e => e.status === 'finalizada').length
   const canceladas = escoltas.filter(e => e.status === 'cancelada').length
-  const ativas = escoltas.filter(e => ['em_andamento','na_origem','em_transito_destino','no_destino','retornando','na_base'].includes(e.status)).length
+  const ativas = escoltas.filter(e => ['em_andamento','na_origem','em_transito_destino','no_destino','em_transito_retorno','retornando','na_base'].includes(e.status)).length
   const kmTotal = escoltas.reduce((s, e) => s + calcKm(e.veiculos), 0)
   const txConc = (concluidas + canceladas) > 0 ? Math.round((concluidas / (concluidas + canceladas)) * 100) : 0
   const duracaoMedia = concluidas > 0 ? Math.round(escoltas.filter(e => e.status === 'finalizada').reduce((s, e) => s + calcDurMin(e), 0) / concluidas) : 0
@@ -338,7 +338,7 @@ function SecaoEfetivo({ escoltas }: { escoltas: EscoltaPDF[] }) {
   for (const e of escoltas) {
     for (const ef of e.efetivo) {
       const nome = ef.vigilante?.nome_completo ?? 'Desconhecido'
-      if (!map[nome]) map[nome] = { nome, funcao: ef.papel, escalacoes: 0, confirmacoes: 0, valor_total: 0 }
+      if (!map[nome]) map[nome] = { nome, funcao: ef.papel_na_escolta, escalacoes: 0, confirmacoes: 0, valor_total: 0 }
       map[nome].escalacoes++
       if (ef.confirmado) map[nome].confirmacoes++
       map[nome].valor_total += ef.valor_pago_vigilante ?? 0
@@ -539,7 +539,10 @@ function Rodape({ paginaAtual, totalPaginas }: { paginaAtual?: number; totalPagi
 }
 
 // ─── Página Principal ────────────────────────────────────────────────────────
-export default function RelatoriosPDFPage() {
+// useSearchParams exige limite de Suspense; sem ele, `next build` falha na
+// pre-renderizacao desta rota. O conteudo fica num componente interno e o
+// export default apenas o envolve.
+function RelatoriosPDFConteudo() {
   const searchParams = useSearchParams()
   const secoesParam = searchParams?.get('secoes') ?? 'resumo,escoltas'
   const from = searchParams?.get('from') ?? ''
@@ -568,11 +571,13 @@ export default function RelatoriosPDFPage() {
         origem_endereco, destino_endereco, valor_cobrado, outros_custos,
         cliente:clientes(id, nome_cliente, cor_destaque),
         veiculos:escolta_veiculos(
+          id, veiculo_id,
           quilometragem_saida, quilometragem_retorno,
-          abastecimento_valor, abastecimento_litros
+          abastecimento_valor, abastecimento_litros,
+          veiculo:veiculos(placa, modelo)
         ),
         efetivo:escolta_efetivo(
-          valor_pago_vigilante, papel, confirmado,
+          valor_pago_vigilante, papel_na_escolta, confirmado,
           vigilante:vigilantes(nome_completo)
         )
       `)
@@ -603,10 +608,15 @@ export default function RelatoriosPDFPage() {
             if (v.id) escVeicIds.push(v.id)
           }
         }
-        let cQ = sb.from('checklists').select(`id, tipo, concluido, data_inicio, data_conclusao, checklist_respostas(conforme, descricao_item)`)
-        if (escVeicIds.length > 0) cQ = cQ.in('escolta_veiculo_id', escVeicIds)
-        else if (escIds.length > 0) cQ = cQ.in('escolta_id', escIds)
-        promises.push(cQ)
+        // Defeito 4: faltava o alias, e SecaoChecklists le c.respostas.
+        const cQ = sb.from('checklists').select(`id, tipo, concluido, data_inicio, data_conclusao, respostas:checklist_respostas(conforme, descricao_item)`)
+        if (escVeicIds.length > 0) {
+          promises.push(cQ.in('escolta_veiculo_id', escVeicIds))
+        } else {
+          // checklists nao tem escolta_id. Sem viatura nao ha checklist a mostrar,
+          // e filtrar por escolta_id daria erro 400 e esvaziaria o relatorio inteiro.
+          promises.push(Promise.resolve({ data: [] }))
+        }
       } else promises.push(Promise.resolve({ data: [] }))
 
       if (clienteId) {
@@ -686,9 +696,10 @@ export default function RelatoriosPDFPage() {
         .status-agendada, .status-rascunho, .status-em_pre_inicio, .status-na_base { background: #FBF3DE; color: #8B6914; }
         .rodape { position: fixed; bottom: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: center; padding: 10px 60px; font-size: 9px; font-weight: 600; color: #ABB5C9; border-top: 1px solid #EBF0F8; background: #fff; letter-spacing: 0.06em; text-transform: uppercase; }
         @media print {
-          @page { margin: 0; size: A4; }
-          body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-          .secao { page-break-after: always; }
+          @page { size: A4 portrait; margin: 12mm 10mm 18mm; }
+          *, *::before, *::after { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+          .secao { page-break-inside: avoid; }
+          .secao + .secao { page-break-before: always; }
           .secao:last-of-type { page-break-after: avoid; }
           .tabela tr { page-break-inside: avoid; }
           thead { display: table-header-group; }
@@ -733,5 +744,13 @@ export default function RelatoriosPDFPage() {
 
       <Rodape />
     </>
+  )
+}
+
+export default function RelatoriosPDFPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 40, fontFamily: 'system-ui', color: '#5A6A80' }}>Carregando relatorio...</div>}>
+      <RelatoriosPDFConteudo />
+    </Suspense>
   )
 }

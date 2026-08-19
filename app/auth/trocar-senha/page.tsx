@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useAuth } from '@/hooks/useAuth'
+import { validarSenha, SENHA_MINIMO } from '@/utils/validators'
 
 export default function TrocarSenhaPage() {
   const [novaSenha, setNovaSenha] = useState('')
@@ -20,8 +21,9 @@ export default function TrocarSenhaPage() {
     e.preventDefault()
     setLocalError('')
 
-    if (novaSenha.length < 8) {
-      setLocalError('A senha deve ter pelo menos 8 caracteres.')
+    const { valida, erros } = validarSenha(novaSenha)
+    if (!valida) {
+      setLocalError(erros.join('. ') + '.')
       return
     }
     if (novaSenha !== confirmar) {
@@ -65,7 +67,7 @@ export default function TrocarSenhaPage() {
                 type="password"
                 value={novaSenha}
                 onChange={(e) => setNovaSenha(e.target.value)}
-                placeholder="Mínimo 8 caracteres"
+                placeholder={`Mínimo ${SENHA_MINIMO} caracteres`}
                 required
                 disabled={submitting}
               />

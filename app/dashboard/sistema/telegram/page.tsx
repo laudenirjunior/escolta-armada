@@ -239,7 +239,7 @@ export default function TelegramPage() {
                         <span style={{ fontSize: '11px', fontFamily: 'monospace', color: P.sub }}>{c.id}</span>
                       </div>
                       {c.ultimaMensagem && (
-                        <p style={{ fontSize: '10px', color: P.muted, marginTop: '2px', fontStyle: 'italic' }}>"{c.ultimaMensagem.slice(0, 60)}{c.ultimaMensagem.length > 60 ? '…' : ''}"</p>
+                        <p style={{ fontSize: '10px', color: P.muted, marginTop: '2px', fontStyle: 'italic' }}>&quot;{c.ultimaMensagem.slice(0, 60)}{c.ultimaMensagem.length > 60 ? '…' : ''}&quot;</p>
                       )}
                     </div>
                     <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>

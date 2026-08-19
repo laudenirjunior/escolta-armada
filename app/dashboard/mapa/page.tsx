@@ -59,7 +59,7 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
   na_base:       { label: 'Na Base',      color: '#1E7C52' },
 }
 
-const STATUS_ATIVOS = ['em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando', 'na_base']
+const STATUS_ATIVOS = ['em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando', 'na_base']
 
 // ── Helpers -----------------------------------------------------------------
 
@@ -233,7 +233,7 @@ export default function MapaPage() {
         (e.veiculos ?? []).map((v: any) => v.id)
       )
 
-      let ultimosPontos: Record<string, any> = {}
+      const ultimosPontos: Record<string, any> = {}
       if (viaturaIds.length > 0) {
         const { data: pontos } = await sb
           .from('pontos_controle')
@@ -549,7 +549,7 @@ export default function MapaPage() {
   }, [selecionada, historico, mapReady])
 
   const comGPS = escoltas.filter(e => e.ultimo_ponto || (e.origem_lat && e.origem_lng))
-  const emTransito = escoltas.filter(e => ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando'].includes(e.status))
+  const emTransito = escoltas.filter(e => ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando'].includes(e.status))
 
   return (
     <div className="space-y-4">

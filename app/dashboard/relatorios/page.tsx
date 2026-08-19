@@ -58,7 +58,7 @@ const STATUS_BADGE: Record<string, string> = {
   rascunho:     'badge-neutral',
   em_pre_inicio:'badge-warning',
 }
-const STATUSES_ATIVOS     = ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando', 'na_base']
+const STATUSES_ATIVOS     = ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando', 'na_base']
 const STATUSES_CONCLUIDOS = ['finalizada']
 const STATUSES_CANCELADOS = ['cancelada']
 
@@ -419,7 +419,7 @@ export default function RelatoriosPage() {
     setLoadingOcorr(true)
     const { from, to } = computeRange(tipoPeriodo, dataInicio, dataFim)
 
-    let q = sb.from('ocorrencias').select(`
+    const q = sb.from('ocorrencias').select(`
       id, descricao, data_hora,
       tipo:dom_tipos_ocorrencia(nome),
       autor:usuarios!registrado_por(nome_completo),

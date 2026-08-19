@@ -1,11 +1,29 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { exigirSessao, dentroDoLimite } from '@/lib/api-auth'
+
+// Sem sessao, qualquer um na internet podia gastar a cota da OpenAI.
+const LIMITE_POR_MINUTO = 20
+const TAMANHO_MAXIMO = 8000
 
 export async function POST(req: NextRequest) {
   try {
+    const auth = await exigirSessao()
+    if (!auth.ok) {
+      return NextResponse.json({ error: auth.erro }, { status: auth.status })
+    }
+
+    if (!dentroDoLimite('ia:' + auth.sessao.usuarioId, LIMITE_POR_MINUTO, 60_000)) {
+      return NextResponse.json({ error: 'Muitas solicitações. Aguarde um minuto.' }, { status: 429 })
+    }
+
     const { texto, contexto } = await req.json()
 
     if (!texto?.trim()) {
       return NextResponse.json({ error: 'Texto vazio' }, { status: 400 })
+    }
+
+    if (texto.length > TAMANHO_MAXIMO) {
+      return NextResponse.json({ error: 'Texto longo demais.' }, { status: 413 })
     }
 
     const apiKey = process.env.OPENAI_API_KEY
@@ -41,7 +59,8 @@ Retorne APENAS o texto melhorado, sem explicações, sem aspas, sem prefixos.`
 
     if (!resp.ok) {
       const err = await resp.text()
-      return NextResponse.json({ error: err }, { status: resp.status })
+      console.error('[melhorar-texto] OpenAI:', err)
+      return NextResponse.json({ error: 'Falha ao processar o texto.' }, { status: 502 })
     }
 
     const data = await resp.json()
@@ -50,6 +69,6 @@ Retorne APENAS o texto melhorado, sem explicações, sem aspas, sem prefixos.`
     return NextResponse.json({ melhorado })
   } catch (err: any) {
     console.error('[melhorar-texto]', err)
-    return NextResponse.json({ error: err.message ?? 'Erro interno' }, { status: 500 })
+    return NextResponse.json({ error: 'Erro interno.' }, { status: 500 })
   }
 }

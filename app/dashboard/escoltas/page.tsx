@@ -80,7 +80,7 @@ export default function EscoltasPage() {
     // Filtragem de Visibilidade (Operador vê apenas escoltas ativas)
     if (perfil === 'operador') {
       rows = rows.filter((e) =>
-        ['rascunho', 'agendada', 'em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando', 'na_base'].includes(e.status)
+        ['rascunho', 'agendada', 'em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando', 'na_base'].includes(e.status)
       )
 
       // Resolve as escoltas em que este operador está escalado (via vigilante)
@@ -122,7 +122,7 @@ export default function EscoltasPage() {
 
   // Segmentação por tabelas
   const naoIniciadas = escoltasFiltradas.filter(e => ['rascunho', 'agendada', 'em_pre_inicio'].includes(e.status))
-  const ativas = escoltasFiltradas.filter(e => ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando', 'na_base'].includes(e.status))
+  const ativas = escoltasFiltradas.filter(e => ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando', 'na_base'].includes(e.status))
   const concluidas = escoltasFiltradas.filter(e => ['finalizada', 'cancelada'].includes(e.status))
 
   const renderTabelaEscoltas = (lista: EscoltaRow[], tituloVazio: string) => {
@@ -580,7 +580,7 @@ export default function EscoltasPage() {
           ) : null}
 
           {/* Seção 2: Ativas */}
-          {filtroStatus === 'todos' || ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'retornando', 'na_base'].includes(filtroStatus) ? (
+          {filtroStatus === 'todos' || ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando', 'na_base'].includes(filtroStatus) ? (
             <div className="space-y-0">
               <div className="cc-panel-header">
                 <div style={{ width: '6px', height: '6px', borderRadius: '1px', backgroundColor: '#53648A', flexShrink: 0 }} />
