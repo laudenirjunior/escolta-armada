@@ -47,6 +47,23 @@ O sistema gera:
 
 O usuário entra digitando **o login**, não um e-mail. A tela completa o domínio interno sozinha.
 
+## Alteração de perfil de acesso
+
+A trigger `impedir_autopromocao()` em `usuarios` governa isto, e não a política de RLS sozinha. Regras em vigor desde a migration 172:
+
+| Operação | Resultado |
+|---|---|
+| Alterar o próprio `perfil_id` ou o próprio `status` | Recusado para todos, **inclusive administrador** |
+| Alterar `auth_user_id` pela API | Recusado sempre |
+| Gestor concedendo ou removendo `administrador` | Recusado |
+| Gestor alterando perfil de terceiro entre os demais perfis | Permitido |
+| Administrador alterando perfil de terceiro | Permitido |
+| SQL direto ou service role (sem `auth.uid()`) | Passa, por ser a via de reparo |
+
+**Consequência prática:** um administrador não consegue se rebaixar nem se inativar sozinho, e precisa do outro administrador. Com dois administradores no sistema, isso é aceitável; com um só, seria um impasse. Manter sempre pelo menos dois.
+
+Para promover alguém a administrador é preciso estar logado como administrador. Gestor não consegue, nem para si nem para terceiros, e essa é a barreira que impede que a senha provisória `123456` vire caminho de escalada.
+
 ## Recuperação de senha
 
 **Não existe recuperação automática.** As contas usam e-mail interno `@operador.local`, que não tem caixa postal.
@@ -87,6 +104,10 @@ select * from vw_historico_divergente;
 ```
 
 Se voltar linhas, alguém alterou o status por fora do sistema.
+
+A view **não é alcançável pela API**: ela tem `security_invoker = on` e nenhum grant para `authenticated` ou `anon`, então `GET /rest/v1/vw_historico_divergente` devolve 403. A consulta se faz por SQL direto ou com a service role. Isso é intencional: view em `public` nasce SECURITY DEFINER no PostgreSQL e, com grant para `authenticated`, entregaria todas as escoltas a qualquer usuário logado, por cima da RLS.
+
+**Regra para toda view nova em `public`:** ou `ALTER VIEW ... SET (security_invoker = on)` no ato da criação, ou `REVOKE ALL FROM authenticated, anon, PUBLIC` se ela não for consumida pelo aplicativo. Ligar RLS nas tabelas de origem não basta.
 
 ## Rotas de API
 

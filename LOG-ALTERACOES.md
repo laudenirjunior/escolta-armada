@@ -10,6 +10,82 @@ Branch de trabalho: `fase0-seguranca`
 
 ## 2026-08-19 - Limpeza da base operacional para testes
 
+### Migration 172 - `corrige_escalada_por_update_direto`
+
+**O quê:** reescrita completa de `impedir_autopromocao()`, a trigger de `usuarios`.
+
+**Por quê:** furo de escalada de privilégio, **comprovado ao vivo com JWT real**. O gestor Bruno fez um único `PATCH /rest/v1/usuarios?id=eq.<o proprio id>` com `perfil_id` de administrador, recebeu **HTTP 200**, e o perfil dele passou a `administrador` de fato. O perfil foi restaurado para `gestor` em seguida.
+
+A causa é a primeira linha da trigger que eu mesmo escrevi:
+
+```sql
+SELECT public.get_meu_perfil() INTO v_perfil;
+IF v_perfil IN ('administrador','gestor') THEN
+  RETURN NEW;                 -- libera antes de olhar DE QUEM e a linha
+END IF;
+```
+
+Ela conferia o perfil do **chamador** e nunca conferia se a linha alterada era a dele. O nome da função prometia impedir autopromoção e era exatamente a autopromoção que passava.
+
+O mesmo defeito tinha um segundo efeito, invertido: com `auth.uid()` nulo (SQL direto, migration, service role), `get_meu_perfil()` devolve NULL, NULL não está na lista, e a função caía no ramo de bloqueio. Ou seja, **liberava o gestor e barrava a via de reparo administrativo**. Foi por isso que o `UPDATE` de restauração do perfil do Bruno falhou na primeira tentativa.
+
+É a terceira ocorrência da mesma classe de defeito neste banco, depois de `criar_usuario_completo` (§1.0 do plano) e `criar_usuario_por_login` (migration 151). A lição não é sobre `NULL NOT IN` desta vez, é sobre **conferir o sujeito e o objeto da operação, não só o sujeito**.
+
+**Regras agora aplicadas:**
+
+| Situação | Comportamento |
+|---|---|
+| Alterar o próprio `perfil_id` | Recusado para **todos**, inclusive administrador |
+| Alterar o próprio `status` | Recusado para todos |
+| Alterar `auth_user_id` pela API | Recusado sempre. Trocar o vínculo é sequestro de conta, não edição de cadastro |
+| Gestor alterando perfil de terceiro | Permitido, **exceto** conceder ou remover `administrador` |
+| Administrador alterando perfil de terceiro | Permitido |
+| Perfil não gestor alterando perfil de terceiro | Recusado |
+| Sessão sem `auth.uid()` | Passa, declaradamente. É a via de reparo do banco, controlada pela reconciliação detectiva |
+
+A checagem usa `OLD.auth_user_id = v_eu OR NEW.auth_user_id = v_eu`, para o caso de a linha ser reapontada na mesma instrução.
+
+**Verificação, toda com JWT real:**
+
+| # | Ataque ou operação | Antes | Depois |
+|---|---|---|---|
+| 1 | Gestor se promove a administrador | **200, promovido** | 400 `Voce nao pode alterar o proprio perfil de acesso` |
+| 2 | Gestor rebaixa um administrador | 200 | 400 `Somente um administrador concede ou remove o perfil administrador` |
+| 3 | Gestor promove terceiro a administrador | 200 | 400, mesma mensagem |
+| 4 | Gestor troca o próprio `auth_user_id` | 200 | 400 `O vinculo de autenticacao nao pode ser alterado` |
+| 5 | Gestor se inativa | 200 | 400 `Voce nao pode alterar o proprio status` |
+| 6 | Administrador altera o próprio perfil | 200 | 400 |
+| 7 | Administrador se inativa | 200 | 400 |
+| 8 | Gestor edita o próprio telefone | 204 | **204**, continua funcionando |
+| 9 | Gestor promove supervisor a central | 204 | **204**, continua funcionando |
+| 10 | Administrador promove terceiro a administrador | 204 | **204**, continua funcionando |
+
+O usuário `ALVO TESTE ESCALADA`, criado só para os casos 3, 9 e 10, foi apagado. Estado final conferido: Douglas administrador, Laudenir administrador, Bruno gestor, os três ativos.
+
+**Como o furo foi encontrado:** não foi por advisor nem por leitura de código. Apareceu ao rodar o script `database/testes/02_rls_por_perfil.sql`, cuja verificação 3 acusou `usuarios.usuarios_select` com predicado `true`. Ao conferir se aquilo era mesmo a exceção documentada, olhei o conjunto completo de políticas de `usuarios`, vi que o `UPDATE` dependia de uma trigger, e testei a trigger com um JWT real em vez de acreditar no nome dela.
+
+### Migration 171 - `view_reconciliacao_security_invoker`
+
+**O quê:** `security_invoker = on` em `vw_historico_divergente` e `REVOKE ALL FROM authenticated, anon, PUBLIC`.
+
+**Por quê:** o advisor apontou ERROR de `security_definer_view`. **View no PostgreSQL nasce SECURITY DEFINER por padrão**: ela aplica a RLS de quem a criou, não a de quem consulta. Como a view foi criada com privilégio de `postgres` e `authenticated` tinha grant, qualquer usuário logado enxergava por ela **todas as escoltas do sistema**, contornando exatamente a RLS que as migrations 130 a 136 ligaram. Furo criado por mim ao criar a view de reconciliação nas migrations 162 e 163.
+
+Nenhum código do app consome a view: `grep` em `.ts` e `.tsx` não devolveu nada. Ela é ferramenta de auditoria consultada por SQL direto, então a correção certa é tirá-la da API, não ajustar predicado.
+
+**Verificação:**
+
+| Prova | Antes | Depois |
+|---|---|---|
+| `reloptions` da view | nulo | `{security_invoker=on}` |
+| ACL | inclui `authenticated=arwdDxtm` | só `postgres` e `service_role` |
+| `GET /rest/v1/vw_historico_divergente` com JWT de administrador | 200 com dados | **403** `permission denied for view` |
+| Mesma chamada sem autenticação | - | **401** |
+| `get_advisors` de segurança | 1 ERROR | **0 ERROR**, 11 WARN esperados |
+
+Os 11 WARN restantes são permanentes e conhecidos: 10 funções `SECURITY DEFINER` executáveis por `authenticated`, porque as próprias políticas de RLS chamam os resolvedores de identidade, e 1 de proteção de senha vazada, desligada por decisão, já que a senha provisória é `123456`.
+
+**Lição para o runbook:** toda view nova em `public` precisa de `security_invoker = on` no ato da criação, ou de `REVOKE` se não for para ser consumida pela API. Não basta a RLS estar ligada nas tabelas de origem.
+
 ### Migration 170 - `backup_pre_limpeza`
 
 **O quê:** schema `backup_20260819` com cópia integral de 15 tabelas operacionais mais os metadados dos objetos do bucket `fotos`.
