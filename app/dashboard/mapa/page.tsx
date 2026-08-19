@@ -5,6 +5,7 @@ import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { MapPin, ArrowRight, RefreshCw, ExternalLink, ChevronLeft } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { lerObservacao } from '@/lib/pontos-controle'
 import { useAuth } from '@/hooks/useAuth'
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? ''
@@ -257,7 +258,7 @@ export default function MapaPage() {
         let ultimoPonto: UltimoPonto | null = null
         if (ulPt?.latitude && ulPt?.longitude) {
           let endereco: string | null = null
-          try { endereco = JSON.parse(ulPt.observacoes ?? '{}').endereco ?? null } catch {}
+          endereco = lerObservacao(ulPt.observacoes).endereco
           ultimoPonto = {
             lat: ulPt.latitude,
             lng: ulPt.longitude,
@@ -329,7 +330,7 @@ export default function MapaPage() {
             .from('escolta_veiculos').select('escolta_id').eq('id', pt.escolta_veiculo_id).maybeSingle()
           if (!vt) return
           let endereco: string | null = null
-          try { endereco = JSON.parse(pt.observacoes ?? '{}').endereco ?? null } catch {}
+          endereco = lerObservacao(pt.observacoes).endereco
           const novoPonto: UltimoPonto = { lat: pt.latitude, lng: pt.longitude, data_hora: pt.data_hora, tipo: 'Reporte', endereco }
           setEscoltas(prev => prev.map(e => e.id === vt.escolta_id ? { ...e, ultimo_ponto: novoPonto } : e))
           setSelecionada(prev => (prev?.id === vt.escolta_id && prev) ? ({ ...prev, ultimo_ponto: novoPonto } as EscoltaAtiva) : prev)
@@ -404,8 +405,10 @@ export default function MapaPage() {
 
     escoltas.forEach(e => {
       const s = STATUS_MAP[e.status] ?? { color: '#53648A', label: e.status }
-      const posLat = e.ultimo_ponto?.lat ?? e.origem_lat
-      const posLng = e.ultimo_ponto?.lng ?? e.origem_lng
+      // Coordenada de origem zerada é ausência de coordenada, não o golfo da Guiné.
+      // O resto do arquivo já trata assim (418, 438, 517, 529, 551).
+      const posLat = e.ultimo_ponto?.lat ?? (e.origem_lat || null)
+      const posLng = e.ultimo_ponto?.lng ?? (e.origem_lng || null)
       if (posLat == null || posLng == null) return
 
       const existing = markersRef.current.get(e.id)
@@ -453,8 +456,9 @@ export default function MapaPage() {
     if (!fittedRef.current && !selecionada && escoltas.length > 0) {
       const coords: [number, number][] = []
       escoltas.forEach(e => {
-        const lat = e.ultimo_ponto?.lat ?? e.origem_lat
-        const lng = e.ultimo_ponto?.lng ?? e.origem_lng
+        // Zero aqui arrastaria o fitBounds até 0,0 e tiraria o mapa da operação.
+        const lat = e.ultimo_ponto?.lat ?? (e.origem_lat || null)
+        const lng = e.ultimo_ponto?.lng ?? (e.origem_lng || null)
         if (lat != null && lng != null) coords.push([lng, lat])
         if (e.destino_lat && e.destino_lng) coords.push([e.destino_lng, e.destino_lat])
       })
@@ -480,8 +484,9 @@ export default function MapaPage() {
       breadSrc?.setData({ type: 'FeatureCollection', features: [] })
       const coords: [number, number][] = []
       escoltas.forEach(e => {
-        const lat = e.ultimo_ponto?.lat ?? e.origem_lat
-        const lng = e.ultimo_ponto?.lng ?? e.origem_lng
+        // Zero aqui arrastaria o fitBounds até 0,0 e tiraria o mapa da operação.
+        const lat = e.ultimo_ponto?.lat ?? (e.origem_lat || null)
+        const lng = e.ultimo_ponto?.lng ?? (e.origem_lng || null)
         if (lat != null && lng != null) coords.push([lng, lat])
         if (e.destino_lat && e.destino_lng) coords.push([e.destino_lng, e.destino_lat])
       })
@@ -494,8 +499,9 @@ export default function MapaPage() {
     }
 
     const s = STATUS_MAP[selecionada.status] ?? { color: '#53648A' }
-    const posLat = selecionada.ultimo_ponto?.lat ?? selecionada.origem_lat
-    const posLng = selecionada.ultimo_ponto?.lng ?? selecionada.origem_lng
+    // Sem coordenada real a câmera não voa: o flyTo de 0,0 esconderia a escolta.
+    const posLat = selecionada.ultimo_ponto?.lat ?? (selecionada.origem_lat || null)
+    const posLng = selecionada.ultimo_ponto?.lng ?? (selecionada.origem_lng || null)
 
     // Breadcrumb (rastro histórico)
     if (breadSrc) {

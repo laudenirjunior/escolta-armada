@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react'
 import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { lerObservacao, fotoIdsDoPonto } from '@/lib/pontos-controle'
+import { STATUS, LABELS_STATUS, TIPO_PONTO_POR_STATUS } from '@/lib/fluxo-escolta'
 
 const sb = createClient() as any
 
@@ -31,23 +33,78 @@ interface PrintData {
     efetivo: Array<{ nome: string; papel: string; confirmado: boolean }>
   }>
   historico: Array<{ status_novo: string; data_hora: string; observacao: string | null; autor: string }>
-  pontos: Array<{ tipo: string; data_hora: string; autor: string; fotoUrl: string | null; justificativa: string }>
+  pontos: Array<{
+    tipo: string
+    data_hora: string
+    autor: string
+    /** Fotos do ponto que este perfil conseguiu abrir, na ordem de captura. */
+    fotoUrls: string[]
+    /**
+     * Quantas fotos o ponto declara ter. Nao e o mesmo que `fotoUrls.length`: a
+     * policy de leitura de `fotos` so da acesso amplo a administrador, gestor,
+     * supervisor e central. Para os demais perfis ela libera a foto por autoria
+     * propria ou pelo casamento com a coluna escalar `pontos_controle.foto_id`, que
+     * e so a primeira; os ids das fotos 2 a 5 vivem no JSON de observacoes e ficam
+     * fora do alcance dela. Guardar o total pedido e o que permite ao impresso
+     * declarar a lacuna em vez de anunciar fotos que nao estao ali.
+     */
+    fotosPedidas: number
+    /** Codigo cru do tipo, para saber quais etapas ja tem ponto e nao repetir no feed. */
+    codigoTipo: string | null
+    observacao: string
+    latitude: number | null
+    longitude: number | null
+    sem_sinal_gps: boolean
+  }>
   ocorrencias: Array<{ tipo: string; descricao: string; data_hora: string; autor: string; fotoUrl: string | null }>
   checklists: Array<{ tipo: string; data_conclusao: string; autor: string; conformes: number; total: number }>
 }
 
+// Rotulo do cabecalho e do badge. Parte de LABELS_STATUS para que um status novo do
+// fluxo ja nasca com nome no impresso; so as duas frases proprias do relatorio do
+// cliente sao sobrescritas.
 const STATUS_LABEL: Record<string, string> = {
-  rascunho: 'Rascunho', agendada: 'Agendada', em_pre_inicio: 'Pré-Início',
-  em_andamento: 'Em Rota', na_origem: 'Na Origem', em_transito_destino: 'Trânsito p/ Destino', no_destino: 'No Destino',
-  retornando: 'Em Retorno', na_base: 'Na Base', finalizada: 'Finalizada', cancelada: 'Cancelada',
+  ...LABELS_STATUS,
+  [STATUS.EM_ANDAMENTO]: 'Em Rota',
+  [STATUS.RETORNANDO]: 'Em Retorno',
 }
 
+// Rotulo do evento na linha do tempo, mais descritivo que o rotulo de badge. Quem
+// nao estiver aqui cai em STATUS_LABEL, entao a lista nao precisa ser exaustiva.
 const TL_LABEL: Record<string, string> = {
-  em_andamento: 'Saída da Base', na_origem: 'Chegada na Origem',
-  em_transito_destino: 'Trânsito ao Destino Iniciado',
-  no_destino: 'Chegada no Destino', retornando: 'Retorno Iniciado',
-  na_base: 'Chegada na Base', finalizada: 'Escolta Finalizada',
-  rascunho: 'Rascunho', agendada: 'Agendada', em_pre_inicio: 'Pré-Início',
+  [STATUS.EM_ANDAMENTO]: 'Saída da Base',
+  [STATUS.NA_ORIGEM]: 'Chegada na Origem',
+  [STATUS.EM_TRANSITO_DESTINO]: 'Trânsito ao Destino Iniciado',
+  [STATUS.NO_DESTINO]: 'Chegada no Destino',
+  [STATUS.EM_TRANSITO_RETORNO]: 'Trânsito de Retorno Iniciado',
+  [STATUS.RETORNANDO]: 'Retorno Iniciado',
+  [STATUS.NA_BASE]: 'Chegada na Base',
+  [STATUS.FINALIZADA]: 'Escolta Finalizada',
+  [STATUS.EM_PRE_INICIO]: 'Pré-Início',
+}
+
+/**
+ * Status que nao entram na linha do tempo pela via do historico.
+ *
+ * Todo status que produz ponto de controle ja tem a sua linha vinda do proprio
+ * ponto, com foto e GPS: manter tambem a linha do historico repetia a etapa no
+ * documento do cliente. A lista sai de TIPO_PONTO_POR_STATUS em vez de ser escrita a
+ * mao, porque a versao escrita a mao esqueceu `em_transito_retorno` quando a etapa
+ * foi criada, e a proxima etapa acrescentada ao fluxo repetiria o esquecimento.
+ */
+
+
+/**
+ * Compara duas observacoes ignorando caixa e espaco excedente.
+ *
+ * Com a unificacao do JSON de observacoes o mesmo texto do operador passou a existir
+ * em mais de uma tabela. No impresso ele so pode aparecer uma vez, no lugar canonico
+ * daquela informacao.
+ */
+function mesmoTexto(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false
+  const norm = (t: string) => t.trim().replace(/\s+/g, ' ').toLowerCase()
+  return norm(a) === norm(b)
 }
 
 function fmt(iso: string) {
@@ -56,6 +113,16 @@ function fmt(iso: string) {
     day: '2-digit', month: '2-digit', year: 'numeric',
     hour: '2-digit', minute: '2-digit',
   })
+}
+
+/**
+ * Coordenada do ponto. Desde a migration 180 latitude e longitude aceitam nulo, e
+ * `sem_sinal_gps` diz que foi assim de proposito. Campo vazio esconderia o fato, e
+ * 0,0 seria mentira: o relatorio precisa dizer que nao houve sinal.
+ */
+function fmtGps(p: { latitude: number | null; longitude: number | null; sem_sinal_gps: boolean }) {
+  if (p.sem_sinal_gps || p.latitude == null || p.longitude == null) return 'Sem sinal de GPS'
+  return `${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}`
 }
 
 function fmtPlaca(p: string) {
@@ -134,29 +201,49 @@ export default function EscoltaPrintPage() {
         // Pontos de controle
         const { data: pts } = viatIds.length > 0
           ? await sb.from('pontos_controle')
-              .select('data_hora, observacoes, tipo:dom_tipos_ponto(nome_exibicao), foto:fotos(caminho_arquivo), autor:usuarios!lancado_por(nome_completo)')
+              .select('data_hora, foto_id, observacoes, latitude, longitude, sem_sinal_gps, tipo:dom_tipos_ponto(codigo, nome_exibicao), autor:usuarios!lancado_por(nome_completo)')
               .in('escolta_veiculo_id', viatIds)
               .order('data_hora', { ascending: true })
           : { data: [] }
 
-        const pontos = await Promise.all((pts ?? []).map(async (p: any) => {
-          let tipoLabel = p.tipo?.nome_exibicao ?? 'Ponto de Controle'
-          let justificativa = ''
-          try {
-            const parsed = JSON.parse(p.observacoes ?? '{}')
-            if (parsed.tipoLabel) tipoLabel = parsed.tipoLabel
-            if (parsed.justificativa) justificativa = parsed.justificativa
-          } catch { justificativa = p.observacoes ?? '' }
+        // `pontos_controle.foto_id` e escalar e so aponta a primeira foto. As demais
+        // vivem em `observacoes.foto_ids`, entao a busca precisa ser em lote, por id.
+        const idsFotoPorPonto: string[][] = (pts ?? []).map((p: any) => fotoIdsDoPonto(p))
+        const idsFoto = Array.from(new Set(idsFotoPorPonto.flat()))
 
-          let fotoUrl: string | null = null
-          if (p.foto?.caminho_arquivo) {
-            const path = p.foto.caminho_arquivo as string
-            fotoUrl = path.startsWith('http') ? path
-              : sb.storage.from('fotos').getPublicUrl(path).data?.publicUrl ?? null
+        const { data: fotosData } = idsFoto.length > 0
+          ? await sb.from('fotos').select('id, caminho_arquivo').in('id', idsFoto)
+          : { data: [] }
+
+        const urlPorFotoId = new Map<string, string>()
+        for (const f of (fotosData ?? []) as Array<{ id: string; caminho_arquivo: string }>) {
+          const path = f.caminho_arquivo
+          if (!path) continue
+          const url = path.startsWith('http')
+            ? path
+            : sb.storage.from('fotos').getPublicUrl(path).data?.publicUrl ?? null
+          if (url) urlPorFotoId.set(f.id, url)
+        }
+
+        const pontos = (pts ?? []).map((p: any, i: number) => {
+          const lido = lerObservacao(p.observacoes)
+          return {
+            tipo: lido.tipoLabel ?? p.tipo?.nome_exibicao ?? 'Ponto de Controle',
+            // Codigo cru do tipo, usado para saber quais etapas ja estao representadas
+            // por um ponto e nao precisam repetir a linha vinda do historico.
+            codigoTipo: (p.tipo?.codigo ?? null) as string | null,
+            data_hora: p.data_hora,
+            autor: p.autor?.nome_completo ?? '—',
+            fotoUrls: idsFotoPorPonto[i]
+              .map(fid => urlPorFotoId.get(fid))
+              .filter((u): u is string => Boolean(u)),
+            fotosPedidas: idsFotoPorPonto[i].length,
+            observacao: lido.observacao ?? '',
+            latitude: p.latitude ?? null,
+            longitude: p.longitude ?? null,
+            sem_sinal_gps: p.sem_sinal_gps ?? false,
           }
-
-          return { tipo: tipoLabel, data_hora: p.data_hora, autor: p.autor?.nome_completo ?? '—', fotoUrl, justificativa }
-        }))
+        })
 
         // Ocorrências
         const { data: ocorrs } = await sb
@@ -212,12 +299,60 @@ export default function EscoltaPrintPage() {
     carregar()
   }, [id])
 
-  // Auto-print quando carregado dentro de iframe (detector: window !== top)
+  // Auto-print quando carregado dentro de iframe (detector: window !== top).
+  //
+  // O disparo era por relogio, 600 ms depois de os dados chegarem. Isso bastava
+  // quando havia no maximo uma foto por ocorrencia; com ate 5 fotos por ponto de
+  // controle, baixadas do storage em resolucao integral, uma escolta de 8 pontos
+  // pede dezenas de megabytes. Quem imprime pelo celular recebia um PDF com as
+  // molduras vazias e nenhum erro na tela: o relatorio saia sem a prova, que e
+  // justamente o que ele existe para carregar.
+  //
+  // Agora espera as imagens decodificarem de verdade, com teto de 15 segundos para
+  // uma foto travada nao impedir a impressao do resto.
   useEffect(() => {
-    if (!loading && dados && window !== window.top) {
-      const t = setTimeout(() => window.print(), 600)
-      return () => clearTimeout(t)
+    if (loading || !dados || window === window.top) return
+
+    let cancelado = false
+    const TETO_MS = 15000
+
+    const imprimir = () => {
+      if (cancelado) return
+      // Avisa utils/print.ts que as imagens ja decodificaram. Sem este sinal ele
+      // dispararia a impressao por conta propria e apareceriam dois dialogos.
+      try { window.parent?.postMessage({ tipo: 'escolta-print-pronto' }, window.location.origin) } catch {}
+      window.print()
     }
+
+    const esperarImagens = async () => {
+      // Um quadro para o React terminar de montar as <img> no DOM.
+      await new Promise((r) => requestAnimationFrame(() => r(null)))
+      if (cancelado) return
+
+      const imgs = Array.from(document.images)
+      const pendentes = imgs.map((img) =>
+        img.complete && img.naturalWidth > 0
+          ? Promise.resolve()
+          : img.decode().catch(
+              () =>
+                new Promise<void>((r) => {
+                  // Foto que falhar nao pode segurar o documento inteiro: a lacuna
+                  // aparece impressa, que e informacao operacional legitima.
+                  img.addEventListener('load', () => r(), { once: true })
+                  img.addEventListener('error', () => r(), { once: true })
+                })
+            )
+      )
+
+      await Promise.race([
+        Promise.all(pendentes),
+        new Promise((r) => setTimeout(r, TETO_MS)),
+      ])
+      imprimir()
+    }
+
+    void esperarImagens()
+    return () => { cancelado = true }
   }, [loading, dados])
 
   if (loading) {
@@ -238,16 +373,40 @@ export default function EscoltaPrintPage() {
 
   const { escolta, viaturas, historico, pontos, ocorrencias, checklists } = dados
   const statusLabel = STATUS_LABEL[escolta.status] ?? escolta.status
-  const isFinalizada = escolta.status === 'finalizada'
+  const isFinalizada = escolta.status === STATUS.FINALIZADA
+  // Texto que a secao Relatorio Final de fato imprime. Fora dessa condicao o
+  // fechamento nao aparece em lugar nenhum, e suprimi-lo da linha do tempo perderia
+  // informacao em vez de evitar repeticao.
+  const fechamentoImpresso = isFinalizada ? escolta.observacao_fechamento : null
 
-  // Timeline unificada (status + pontos), ordenada por data
+  // Timeline unificada (status + checklists + pontos + ocorrencias), ordenada por data.
+  //
+  // Cada texto do operador tem UM lugar canonico neste documento: o texto do ponto de
+  // controle vive no bloco de registro fotografico, junto da foto, do autor e do GPS
+  // que o comprovam; o texto de fechamento vive no Relatorio Final; o que sobra do
+  // historico vive aqui. Sem essa divisao a mesma frase saia tres vezes por etapa.
+  // Codigos de tipo de ponto que esta escolta de fato tem. Escolta antiga, criada
+  // antes de o registro de ponto ser obrigatorio, nao tem todos.
+  const codigosComPonto = new Set(
+    pontos.map(p => p.codigoTipo).filter((c): c is string => Boolean(c))
+  )
+
   const tlEventos: Array<{ data_hora: string; label: string; obs?: string; tipo: string }> = [
     ...historico
-      .filter(h => !['rascunho', 'agendada'].includes(h.status_novo))
+      .filter(h => {
+        if (h.status_novo === STATUS.RASCUNHO || h.status_novo === STATUS.AGENDADA) return false
+        const codigo = TIPO_PONTO_POR_STATUS[h.status_novo]
+        // Etapa que nao produz ponto nenhum sempre aparece pelo historico.
+        if (!codigo) return true
+        // Etapa que produz ponto so e suprimida se o ponto existir de verdade.
+        return !codigosComPonto.has(codigo)
+      })
       .map(h => ({
         data_hora: h.data_hora,
         label: TL_LABEL[h.status_novo] ?? STATUS_LABEL[h.status_novo] ?? h.status_novo,
-        obs: h.observacao ?? undefined,
+        obs: mesmoTexto(h.observacao, fechamentoImpresso)
+          ? undefined
+          : h.observacao ?? undefined,
         tipo: 'status',
       })),
     ...checklists.map(c => ({
@@ -259,7 +418,9 @@ export default function EscoltaPrintPage() {
     ...pontos.map(p => ({
       data_hora: p.data_hora,
       label: p.tipo,
-      obs: p.justificativa || undefined,
+      // O texto vem por extenso no bloco de registro fotografico, que e o lugar
+      // canonico dele. Aqui fica so o ponteiro, para a linha do tempo nao repetir.
+      obs: p.observacao ? 'Relato no registro fotográfico' : undefined,
       tipo: 'ponto',
     })),
     ...ocorrencias.map(o => ({
@@ -271,7 +432,7 @@ export default function EscoltaPrintPage() {
   ].sort((a, b) => new Date(a.data_hora).getTime() - new Date(b.data_hora).getTime())
 
   // Duração
-  const inicioHist = historico.find(h => h.status_novo === 'em_andamento')
+  const inicioHist = historico.find(h => h.status_novo === STATUS.EM_ANDAMENTO)
   const fimHist = escolta.data_finalizacao ?? historico.slice(-1)[0]?.data_hora
   let duracao = '—'
   if (inicioHist && fimHist) {
@@ -368,6 +529,20 @@ export default function EscoltaPrintPage() {
             break-inside: avoid;
           }
           .ocorrencia-block {
+            page-break-inside: avoid;
+            break-inside: avoid;
+          }
+          /* Grade de fotos do ponto nao pode partir entre duas paginas: o relatorio
+             e prova para o cliente e meia grade nao prova nada. */
+          .ponto-foto-block {
+            page-break-inside: avoid;
+            break-inside: avoid;
+          }
+          .ponto-foto-grid {
+            page-break-inside: avoid;
+            break-inside: avoid;
+          }
+          .ponto-foto-grid img {
             page-break-inside: avoid;
             break-inside: avoid;
           }
@@ -556,6 +731,113 @@ export default function EscoltaPrintPage() {
                 ))}
               </tbody>
             </table>
+          </>
+        )}
+
+        {/* ── Registro Fotográfico dos Pontos de Controle ── */}
+        {pontos.length > 0 && (
+          <>
+            <div style={sectionTitle('iii')}>Registro Fotográfico dos Pontos de Controle</div>
+            {pontos.map((p, i) => (
+              <div key={i} className="ponto-foto-block" style={{
+                marginBottom: '14px', padding: '10px 12px', background: '#FCFDFE',
+                border: '1px solid #D5E0E6', borderLeft: '3px solid #1A2F4A', borderRadius: '3px',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '12px' }}>
+                  <span style={{ fontWeight: 700, fontSize: '11px', color: '#1A2F4A' }}>{p.tipo}</span>
+                  <span style={{ fontSize: '10px', color: '#6B7E8A', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
+                    {fmt(p.data_hora)}
+                  </span>
+                </div>
+
+                <div style={{ fontSize: '10px', color: '#7A8FA0', marginTop: '3px' }}>
+                  Registrado por: {p.autor} · Localização:{' '}
+                  <span style={{
+                    fontFamily: 'monospace',
+                    fontWeight: 700,
+                    color: p.sem_sinal_gps || p.latitude == null || p.longitude == null ? '#B83832' : '#4A6B7A',
+                  }}>
+                    {fmtGps(p)}
+                  </span>
+                </div>
+
+                {p.observacao && (
+                  <div style={{ fontSize: '11px', color: '#1A2535', marginTop: '6px', whiteSpace: 'pre-wrap' }}>
+                    {p.observacao}
+                  </div>
+                )}
+
+                {p.fotoUrls.length > 0 ? (
+                  <>
+                    <div className="ponto-foto-grid" style={{
+                      display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginTop: '8px',
+                    }}>
+                      {p.fotoUrls.map((url, j) => (
+                        <div key={j} style={{ position: 'relative' }}>
+                          <img
+                            src={url}
+                            alt={`Foto ${j + 1} de ${p.tipo}`}
+                            style={{
+                              display: 'block', width: '100%', height: '110px', objectFit: 'cover',
+                              borderRadius: '3px', border: '1px solid #D5E0E6',
+                            }}
+                          />
+                          <span style={{
+                            position: 'absolute', bottom: '3px', right: '3px',
+                            background: 'rgba(26,47,74,0.85)', color: '#fff',
+                            fontSize: '8px', fontWeight: 700, padding: '1px 4px', borderRadius: '2px',
+                          }}>
+                            {j + 1}/{p.fotoUrls.length}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    {/* O contador so pode afirmar o que esta impresso. Quando o
+                        perfil de acesso nao alcanca todas as fotos do ponto, o
+                        documento declara a lacuna em vez de anunciar um total que
+                        nao esta na pagina. */}
+                    <div style={{ fontSize: '9px', color: '#9AAAB8', marginTop: '4px' }}>
+                      {p.fotosPedidas > p.fotoUrls.length
+                        ? `${p.fotoUrls.length} de ${p.fotosPedidas} fotos deste ponto exibidas`
+                        : p.fotoUrls.length === 1 ? '1 foto registrada' : `${p.fotoUrls.length} fotos registradas`}
+                    </div>
+                    {p.fotosPedidas > p.fotoUrls.length && (
+                      <div style={{
+                        marginTop: '4px', padding: '5px 8px', background: '#FFF8E8',
+                        border: '1px dashed #E0C87A', borderRadius: '3px',
+                        fontSize: '9px', color: '#8A6410', fontWeight: 700,
+                      }}>
+                        {p.fotosPedidas - p.fotoUrls.length === 1
+                          ? '1 foto registrada neste ponto não está disponível para o perfil de acesso que gerou este relatório.'
+                          : `${p.fotosPedidas - p.fotoUrls.length} fotos registradas neste ponto não estão disponíveis para o perfil de acesso que gerou este relatório.`}
+                        {' '}Peça o documento a um supervisor, gestor ou à central para incluí-las.
+                      </div>
+                    )}
+                  </>
+                ) : p.fotosPedidas > 0 ? (
+                  // Ponto com foto registrada e nenhuma legivel por este perfil. Dizer
+                  // "sem registro fotografico" aqui seria acusar falsamente o operador.
+                  <div style={{
+                    marginTop: '8px', padding: '6px 8px', background: '#FFF8E8',
+                    border: '1px dashed #E0C87A', borderRadius: '3px',
+                    fontSize: '10px', color: '#8A6410', fontWeight: 700,
+                  }}>
+                    {p.fotosPedidas === 1
+                      ? '1 foto foi registrada neste ponto e não está disponível para o perfil de acesso que gerou este relatório.'
+                      : `${p.fotosPedidas} fotos foram registradas neste ponto e não estão disponíveis para o perfil de acesso que gerou este relatório.`}
+                    {' '}Peça o documento a um supervisor, gestor ou à central para incluí-las.
+                  </div>
+                ) : (
+                  <div style={{
+                    marginTop: '8px', padding: '6px 8px', background: '#FDF3F2',
+                    border: '1px dashed #E3B4B0', borderRadius: '3px',
+                    fontSize: '10px', color: '#B83832', fontWeight: 700,
+                  }}>
+                    Sem registro fotográfico neste ponto de controle.
+                  </div>
+                )}
+              </div>
+            ))}
           </>
         )}
 

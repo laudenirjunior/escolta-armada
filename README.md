@@ -1,6 +1,6 @@
 # Escolta Armada - Plataforma de Controle Operacional
 
-Aplicação web responsiva (PWA) para gerenciamento completo de escoltas armadas, com funcionamento offline, georreferenciamento, checklists e timeline de eventos.
+Aplicação web responsiva para gerenciamento completo de escoltas armadas, com georreferenciamento, checklists e timeline de eventos. Instalável na tela de início do celular (PWA), **sem funcionamento offline**: o aplicativo exige conexão.
 
 ## 📋 Características
 
@@ -8,7 +8,7 @@ Aplicação web responsiva (PWA) para gerenciamento completo de escoltas armadas
 - 📍 Georreferenciamento com 4 pontos de controle
 - 📸 Fotos com carimbo de data, hora e localização
 - ✓ Checklists de material e viatura por modelo versionado
-- 📱 Funcionamento offline com sincronização idempotente
+- 📱 Instalável na tela de início do celular, Android e iPhone
 - 🔔 Notificações em tempo real pelo Telegram
 - 📊 Indicadores, relatórios e PDF de fechamento
 - 🗺️ Mapa interativo com rastreamento
@@ -205,7 +205,7 @@ Cancelada                    Na Origem
 2. **Implementar autenticação** (login, logout, mudança de senha)
 3. **Criar páginas de operador** (telas de campo)
 4. **Integração com Telegram** para notificações
-5. **Testes offline** e sincronização
+5. **Fila offline** e sincronização, ainda não implementadas
 6. **Deployment** em produção
 
 ## 📚 Documentação Técnica

@@ -116,6 +116,23 @@ function AddressAutocomplete({
   const debounceRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
   const wrapRef      = useRef<HTMLDivElement>(null)
   const proximidade  = useRef('-43.1729,-22.9068') // lon,lat — RJ default, atualiza via GPS
+  // Escolher uma sugestão troca o texto do input, e isso reentra no efeito de busca.
+  // Sem esta marca a busca dispararia de novo e reabriria a lista já fechada.
+  const puloRef      = useRef(false)
+  // Sequência do ciclo de busca: resposta de ciclo antigo é descartada em vez de
+  // sobrescrever o resultado do ciclo atual.
+  const seqRef       = useRef(0)
+
+  // Encerra o ciclo de busca em voo. Toda escrita de estado do ciclo passa antes pela
+  // comparação de sequência, então basta avançar a sequência para que a resposta
+  // atrasada não repovoe as sugestões nem reabra a lista. Cancela também o debounce,
+  // porque uma busca que ainda nem saiu não deve sair, e desliga o spinner, já que o
+  // finally daquele ciclo não vai mais rodar.
+  const invalidarBusca = useCallback(() => {
+    if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null }
+    seqRef.current++
+    setCarregando(false)
+  }, [])
 
   useEffect(() => {
     if (typeof navigator === 'undefined' || !navigator.geolocation) return
@@ -129,8 +146,21 @@ function AddressAutocomplete({
   useEffect(() => { setQuery(value) }, [value])
 
   useEffect(() => {
+    if (puloRef.current) { puloRef.current = false; return }
+
     if (debounceRef.current) clearTimeout(debounceRef.current)
-    if (query.trim().length < 3) { setSuggestions([]); setAberto(false); setErroApi(null); return }
+    if (query.trim().length < 3) {
+      // Invalidar antes de fechar: a resposta de uma busca já a caminho poderia chegar
+      // depois e reabrir a lista de um campo que o usuário acabou de esvaziar.
+      invalidarBusca()
+      setSuggestions([])
+      setAberto(false)
+      setErroApi(null)
+      return
+    }
+
+    const seq = ++seqRef.current
+    const controller = new AbortController()
 
     debounceRef.current = setTimeout(async () => {
       setCarregando(true)
@@ -139,29 +169,59 @@ function AddressAutocomplete({
         const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN
         const q = encodeURIComponent(query.trim())
         const res = await fetch(
-          `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${token}&country=br&language=pt&autocomplete=true&proximity=${proximidade.current}&types=address,neighborhood,place,postcode,poi&limit=6`
+          `https://api.mapbox.com/geocoding/v5/mapbox.places/${q}.json?access_token=${token}&country=br&language=pt&autocomplete=true&proximity=${proximidade.current}&types=address,neighborhood,place,postcode,poi&limit=6`,
+          { signal: controller.signal }
         )
+        if (seq !== seqRef.current) return
         if (!res.ok) { setErroApi(`Erro ${res.status}`); return }
         const data = await res.json()
+        if (seq !== seqRef.current) return
         if (data.message) { setErroApi(data.message); return }
         const features: MapboxFeature[] = data.features ?? []
         setSuggestions(features)
         setAberto(features.length > 0)
       } catch (e) {
+        // Aborto é encerramento normal do ciclo, não falha de rede: não vira mensagem.
+        if ((e as { name?: string } | null)?.name === 'AbortError') return
+        if (seq !== seqRef.current) return
         setErroApi(e instanceof Error ? e.message : 'Erro de conexão')
       } finally {
-        setCarregando(false)
+        if (seq === seqRef.current) setCarregando(false)
       }
     }, 400)
-  }, [query])
+
+    return () => {
+      if (debounceRef.current) { clearTimeout(debounceRef.current); debounceRef.current = null }
+      controller.abort()
+    }
+  }, [query, invalidarBusca])
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setAberto(false)
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        // Fechar não basta: clicar fora não muda a query nem desmonta o campo, então o
+        // ciclo em voo continua válido e a resposta atrasada reabriria a lista por cima
+        // do resto do formulário. Invalidar junto com o fechamento, como na seleção.
+        invalidarBusca()
+        setAberto(false)
+      }
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
-  }, [])
+  }, [invalidarBusca])
+
+  // Ponto único de seleção. Invalida a busca em voo antes de fechar a lista, senão a
+  // resposta que ainda estava a caminho reabriria as sugestões depois do clique.
+  const selecionar = (f: MapboxFeature) => {
+    invalidarBusca()
+    puloRef.current = true
+    const [lon, lat] = f.center
+    setQuery(f.place_name)
+    onChange(f.place_name, lat, lon)
+    setSuggestions([])
+    setAberto(false)
+    setErroApi(null)
+  }
 
   return (
     <div ref={wrapRef} style={{ position: 'relative' }}>
@@ -173,7 +233,13 @@ function AddressAutocomplete({
         <input
           type="text"
           value={query}
-          onChange={e => { setQuery(e.target.value); onChange(e.target.value) }}
+          onChange={e => {
+            // Digitação sempre volta a valer, inclusive quando o endereço escolhido era
+            // idêntico ao texto já digitado e o efeito de busca não chegou a reentrar.
+            puloRef.current = false
+            setQuery(e.target.value)
+            onChange(e.target.value)
+          }}
           onFocus={() => suggestions.length > 0 && setAberto(true)}
           placeholder={placeholder}
           className={inputCls}
@@ -203,13 +269,9 @@ function AddressAutocomplete({
               <button
                 key={f.id}
                 type="button"
-                onMouseDown={() => {
-                  const [lon, lat] = f.center
-                  setQuery(f.place_name)
-                  onChange(f.place_name, lat, lon)
-                  setAberto(false)
-                  setSuggestions([])
-                }}
+                // preventDefault no mousedown impede o blur do input de competir com o clique
+                onMouseDown={e => e.preventDefault()}
+                onClick={() => selecionar(f)}
                 className="w-full text-left"
                 style={{
                   display: 'block', padding: '9px 12px',
@@ -278,7 +340,12 @@ export default function NovaEscoltaPage() {
     if (!dados.cliente_id)              e.push('Selecione o cliente contratante.')
     if (!dados.data_prevista)           e.push('Informe a data de partida.')
     if (!dados.origem_endereco.trim())  e.push('Informe o endereço de origem.')
+    // Coordenada zerada cai no golfo da Guiné e envenena mapa, rota e indicadores.
+    else if (!dados.origem_lat || !dados.origem_lng)
+      e.push('Origem sem coordenada. Selecione o endereço na lista de sugestões para fixar as coordenadas.')
     if (!dados.destino_endereco.trim()) e.push('Informe o endereço de destino.')
+    else if (!dados.destino_lat || !dados.destino_lng)
+      e.push('Destino sem coordenada. Selecione o endereço na lista de sugestões para fixar as coordenadas.')
     return e
   }
 
@@ -547,8 +614,10 @@ export default function NovaEscoltaPage() {
                 onChange={(addr, lat, lon) => setDados(d => ({
                   ...d,
                   origem_endereco: addr,
-                  origem_lat: lat ?? d.origem_lat,
-                  origem_lng: lon ?? d.origem_lng,
+                  // Digitar depois de escolher invalida a coordenada: sem isto a escolta
+                  // nasceria com o endereço de um lugar e a coordenada de outro.
+                  origem_lat: lat ?? 0,
+                  origem_lng: lon ?? 0,
                 }))}
                 placeholder="Rua, número, bairro, cidade..."
                 icon={<MapPin size={15} />}
@@ -563,8 +632,9 @@ export default function NovaEscoltaPage() {
                 onChange={(addr, lat, lon) => setDados(d => ({
                   ...d,
                   destino_endereco: addr,
-                  destino_lat: lat ?? d.destino_lat,
-                  destino_lng: lon ?? d.destino_lng,
+                  // Mesma regra da origem: texto editado à mão perde a coordenada antiga.
+                  destino_lat: lat ?? 0,
+                  destino_lng: lon ?? 0,
                 }))}
                 placeholder="Rua, número, bairro, cidade..."
                 icon={<Flag size={15} />}

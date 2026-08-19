@@ -7,8 +7,16 @@
  * oferecia a transicao `na_origem -> em_transito_destino` e o banco recusava.
  *
  * Tudo que precise conhecer status, rotulo, cor, etapa ou tipo de ponto importa
- * daqui. A trigger `validar_transicao_status_escolta` no banco espelha
- * TRANSICOES_VALIDAS e e quem de fato garante a regra.
+ * daqui. Quem de fato garante a regra sao TRES triggers BEFORE UPDATE OF status:
+ * validar_transicao_status_escolta, exigir_ponto_transito_retorno e
+ * verificar_checklist_pendente.
+ *
+ * Atencao: TRANSICOES_VALIDAS nao e copia exata da trigger. O banco ainda aceita
+ * arestas legadas para escoltas com fluxo_versao = 1, que este arquivo nao lista,
+ * e a pre-condicao de existir um ponto transito_retorno antes de sair de
+ * `retornando` vive so no banco. Este mapa serve para desenhar a tela; discordancia
+ * entre os dois aparece como erro 400 vindo do PostgREST, nunca como tela travada
+ * em silencio.
  */
 
 export const STATUS = {
@@ -100,11 +108,11 @@ export const PROXIMO_STATUS: Record<string, { status: string; label: string } | 
   [STATUS.AGENDADA]: { status: STATUS.EM_PRE_INICIO, label: 'Iniciar Pré-Início' },
   [STATUS.EM_PRE_INICIO]: null, // passa pelo wizard, nao pelo botao generico
   [STATUS.EM_ANDAMENTO]: { status: STATUS.NA_ORIGEM, label: 'Confirmar na Origem' },
-  [STATUS.NA_ORIGEM]: { status: STATUS.EM_TRANSITO_DESTINO, label: 'Iniciar Trânsito ao Destino' },
-  [STATUS.EM_TRANSITO_DESTINO]: { status: STATUS.NO_DESTINO, label: 'Confirmar no Destino' },
+  [STATUS.NA_ORIGEM]: { status: STATUS.EM_TRANSITO_DESTINO, label: 'Trânsito ao Destino' },
+  [STATUS.EM_TRANSITO_DESTINO]: { status: STATUS.NO_DESTINO, label: 'Chegada no Destino' },
   [STATUS.NO_DESTINO]: { status: STATUS.EM_TRANSITO_RETORNO, label: 'Iniciar Trânsito de Retorno' },
   [STATUS.EM_TRANSITO_RETORNO]: { status: STATUS.RETORNANDO, label: 'Confirmar Retorno' },
-  [STATUS.RETORNANDO]: { status: STATUS.NA_BASE, label: 'Confirmar na Base' },
+  [STATUS.RETORNANDO]: { status: STATUS.NA_BASE, label: 'Chegada na Base' },
   [STATUS.NA_BASE]: { status: STATUS.FINALIZADA, label: 'Finalizar Escolta' },
   [STATUS.FINALIZADA]: null,
   [STATUS.CANCELADA]: null,
@@ -171,4 +179,19 @@ export function indiceEtapa(status: string): number {
 
 export function rotuloStatus(status: string): string {
   return LABELS_STATUS[status] ?? status
+}
+
+/**
+ * Etapas que so podem ser atingidas por dialogo dedicado, com foto e localizacao.
+ *
+ * O botao verde generico do cabecalho da tela de detalhe mudava o status sem foto,
+ * sem GPS e sem ponto de controle, com rotulo quase identico ao do botao correto do
+ * Painel de Acoes. Foi por ele que a primeira escolta de teste chegou ao destino sem
+ * os pontos `transito_destino` e `destino`: o status andou, a prova nao existiu.
+ *
+ * Sobram para o botao generico apenas `rascunho -> agendada` e
+ * `agendada -> em_pre_inicio`, que nao produzem ponto de controle.
+ */
+export function exigeDialogoDedicado(statusDestino: string): boolean {
+  return statusDestino in TIPO_PONTO_POR_STATUS || statusDestino === STATUS.FINALIZADA
 }

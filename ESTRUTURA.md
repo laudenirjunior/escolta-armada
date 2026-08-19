@@ -60,7 +60,7 @@ escolta-armada/
 │   │   ├── useSincronizacao.ts
 │   │   ├── useGeolocation.ts
 │   │   ├── useCamera.ts
-│   │   └── useOffline.ts
+│   │   └── (useOffline.ts nunca existiu, ver README)
 │
 ├── 📁 utils/
 │   ├── formatters.ts                 # Data, moeda, CPF, placa, etc
@@ -250,7 +250,7 @@ npm start
 - ✅ **Frontend**: Next.js 15 + React 19 + TypeScript
 - ✅ **Estilo**: Tailwind CSS v4 + Design System
 - ✅ **Backend**: Supabase (PostgreSQL + Auth + Storage)
-- ⏳ **Offline**: IndexedDB + Service Workers
+- ⏳ **Offline**: não implementado. Há um service worker sem cache, só para tornar o app instalável
 - ⏳ **Notificações**: Telegram Bot API
 - ⏳ **LLM**: OpenAI API
 - ⏳ **PDF**: Puppeteer ou similar

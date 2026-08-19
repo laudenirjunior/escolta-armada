@@ -12,6 +12,7 @@ import { Sidebar, MobileDrawer, SidebarContent, SidebarSection, SidebarItem, Sid
 import { TopBar } from '@/components/layout/topbar'
 import { TelegramNotificacoesProvider } from '@/components/telegram-notificacoes-provider'
 import { CheckinAlertProvider } from '@/components/checkin-alert-provider'
+import { InstalarAppProvider } from '@/components/instalar-app-provider'
 import { useAuth } from '@/hooks/useAuth'
 import { createClient } from '@/lib/supabase/client'
 import type { Perfil } from '@/types'
@@ -141,7 +142,16 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const bottomNavItems = BOTTOM_NAV_ITEMS.filter(i => perfil && i.perfis.includes(perfil))
 
   return (
-    <div className="flex flex-col h-screen overflow-hidden" style={{ backgroundColor: '#EEF0F5' }}>
+    <div
+      className="flex flex-col h-screen overflow-hidden"
+      style={{
+        backgroundColor: '#EEF0F5',
+        // Contraparte horizontal do viewportFit 'cover' declarado em app/layout.tsx.
+        // Sem isto, o iPhone em paisagem desenha o conteudo sob o recorte lateral.
+        paddingLeft: 'env(safe-area-inset-left)',
+        paddingRight: 'env(safe-area-inset-right)',
+      }}
+    >
 
       <TopBar
         userInfo={{
@@ -170,10 +180,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         <TelegramNotificacoesProvider />
         <CheckinAlertProvider />
+        <InstalarAppProvider />
 
-        {/* Conteúdo principal — pb-20 no mobile para não ficar atrás da bottom nav */}
+        {/* Conteúdo principal: folga no mobile para não ficar atrás da bottom nav, mais a área segura do iPhone */}
         <main className="flex-1 overflow-y-auto content-scroll" style={{ backgroundColor: '#EEF0F5' }}>
-          <div className="p-4 md:p-6 pb-24 md:pb-6 max-w-[1400px] mx-auto">
+          <div className="p-4 md:p-6 pb-[calc(6rem_+_env(safe-area-inset-bottom))] md:pb-6 max-w-[1400px] mx-auto">
             {children}
           </div>
         </main>
@@ -186,7 +197,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           backgroundColor: '#0B1120',
           borderTop: '1px solid rgba(83,100,138,0.25)',
           boxShadow: '0 -4px 24px rgba(0,0,0,0.4)',
-          height: '64px',
+          // O calc soma o recorte aos 64px em vez de deixar o padding come-los por
+          // dentro: com 'box-sizing: border-box' global (globals.css:53), minHeight de
+          // 64px mais padding faria a area tocavel cair para cerca de 40px no iPhone,
+          // abaixo do minimo de 44px do iOS. No Android env() e zero e nada muda.
+          minHeight: 'calc(64px + env(safe-area-inset-bottom))',
+          paddingBottom: 'env(safe-area-inset-bottom)',
         }}
       >
         {bottomNavItems.map(item => {

@@ -126,6 +126,11 @@ export function MobileDrawer({
           transition: 'transform 0.3s cubic-bezier(0.4,0,0.2,1)',
           borderRight: '1px solid rgba(255,255,255,0.07)',
           boxShadow: open ? '20px 0 60px rgba(0,0,0,0.6)' : 'none',
+          // Com viewportFit 'cover' o drawer vai ate as bordas fisicas da tela.
+          // Sem estas duas folgas o topo fica sob a barra de status e o rodape
+          // sob o indicador de home do iPhone.
+          paddingTop: 'env(safe-area-inset-top)',
+          paddingBottom: 'env(safe-area-inset-bottom)',
         }}
       >
         {/* Header do drawer */}

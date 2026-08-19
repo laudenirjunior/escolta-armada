@@ -3,7 +3,7 @@
 ## 1. Visão Geral
 
 A plataforma é construída em 3 camadas:
-1. **Frontend**: PWA responsiva (web + celular)
+1. **Frontend**: aplicação web responsiva, instalável na tela de início (web e celular)
 2. **Backend**: Supabase (PostgreSQL + Auth + Storage + Real-time)
 3. **Integrações**: Telegram, LLM, PDF
 
@@ -16,7 +16,7 @@ A plataforma é construída em 3 camadas:
        ┌─────▼────────────────────────────▼─────┐
        │     FRONTEND - Next.js PWA              │
        │  Components, Pages, Hooks, Utils        │
-       │     Suporte offline + sync              │
+       │     Exige conexão (sem offline)         │
        └─────┬────────────────────────────┬─────┘
              │                            │
        ┌─────▼────────────────────────────▼─────┐
@@ -167,7 +167,7 @@ escolta_status_historico → Trilha de status
                                     ↓
                             [Visível no PNG]
                                     ↓
-                            [Prova offline-first]
+                            [Prova fotografica]
 ```
 
 ### 5.2 Replicação de Foto
@@ -179,17 +179,32 @@ escolta_status_historico → Trilha de status
 Timeline  Telegram    PDF      Relatórios
 ```
 
-## 6. Offline & Sync
+## 6. Offline e Sync
 
-### 6.1 Persistência Local
-- IndexedDB para estruturado
+> **Nada desta seção está implementado.** Ela descreve um desenho pretendido, não o
+> sistema atual. O aplicativo exige conexão: sem rede, a etapa não avança e a foto não
+> sobe. As colunas de controle de sincronização existem no banco e são gravadas com
+> valor fixo.
+>
+> O que existe hoje é `public/sw.js`, um service worker **sem cache algum**, cuja única
+> função é satisfazer o critério de instalabilidade do Chrome no Android. Ele não serve
+> conteúdo e por isso não tem como servir página velha.
+
+### 6.1 Persistência local, pretendida
+- IndexedDB para dados estruturados
 - Cache API para assets
-- Service Workers para PWA
+- Service Worker com estratégia network-first e versionamento de cache
 
-### 6.2 Idempotência
+### 6.2 Idempotência, pretendida
 - UUIDs gerados no cliente
-- Mesmo ID = não duplica no servidor
-- Resend seguro (reconhece mesmo item)
+- Mesmo ID não duplica no servidor
+- Reenvio seguro, que reconhece o mesmo item
+
+### 6.3 Por que não foi feito ainda
+Fila offline se escreve rápido e não se valida sem simular perda de rede num navegador
+real. Entregar isso sem teste num aplicativo de campo é pior do que não entregar: a
+falha aparece na estrada, com a escolta em andamento, e o operador não tem como saber
+se o registro foi salvo.
 
 ### 6.3 Estratégia de Conflito
 - Dados de inserção nunca conflitam
@@ -213,7 +228,7 @@ Timeline  Telegram    PDF      Relatórios
 ### 7.3 Rede
 - Compressão gzip
 - CDN do Supabase
-- Service Workers para offline
+- Service Worker sem cache, apenas para instalabilidade
 - Progressive Loading
 
 ## 8. Escalabilidade

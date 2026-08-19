@@ -36,6 +36,8 @@ const EMOJI: Record<string, string> = {
   status:          '🔄',
   presenca:        '✅',
   alerta_checkin:  '🔔',
+  // Emergencia cairia no default e chegaria a central com cara de aviso de rotina.
+  emergencia:      '🆘',
   default:         '📋',
 }
 

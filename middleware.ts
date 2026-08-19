@@ -71,7 +71,11 @@ export const config = {
     /*
      * Todas as rotas, menos arquivo estático, imagem otimizada, favicon e as
      * rotas de API, que fazem a própria checagem em lib/api-auth.ts.
+     *
+     * O manifesto e o service worker também ficam de fora: são buscados pelo
+     * navegador em toda visita e cada passagem por aqui custaria um
+     * supabase.auth.getUser(), que é chamada de rede.
      */
-    '/((?!_next/static|_next/image|favicon.ico|api/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)',
+    '/((?!_next/static|_next/image|favicon.ico|manifest.webmanifest|sw.js|api/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)',
   ],
 }

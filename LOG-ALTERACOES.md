@@ -8,6 +8,169 @@ Branch de trabalho: `fase0-seguranca`
 
 ---
 
+## 2026-08-19 - As cinco frentes relatadas por Pecanha
+
+### A causa do bloqueio: banco e código em versões diferentes
+
+**O quê:** produção servia `origin/master`, com o fluxo antigo de 8 etapas, enquanto o banco já estava no de 9. O botão em "No Destino" mandava `retornando` e o banco só aceitava `em_transito_retorno`, então o PATCH voltava 400 e a escolta não avançava.
+
+**Prova:** log do Postgres em 2026-08-19T14:17:32.494Z com `Transicao de status invalida: no_destino para retornando`, e no mesmo instante o log de borda com `PATCH /rest/v1/escoltas?id=eq.bc0f9212-...`, status 400, referer `https://escolta-armada.vercel.app/`. `git show origin/master:lib/fluxo-escolta.ts` responde que o caminho existe em disco mas não em `origin/master`.
+
+**Por quê aconteceu:** as migrations 100 a 172 foram aplicadas direto em produção ao longo do trabalho, e o código correspondente ficou na branch `fase0-seguranca`, que nunca foi publicada. A combinação "não fazer push sem ordem" mais "aplicar migration em produção" produz exatamente este resultado. **A ordem banco/deploy que o plano declarava por fase não foi seguida na prática, e isso travou a operação de Pecanha por horas.**
+
+**Regra que fica:** migration que muda contrato de fluxo só vai para produção na mesma janela do deploy do código. Se o deploy depende de autorização, a migration espera pela mesma autorização.
+
+### Decisões de Pecanha nesta rodada
+
+| Assunto | Decisão |
+|---|---|
+| Publicação | Testar no preview antes de publicar em produção |
+| GPS sem sinal em campo | **Deixar avançar e marcar o ponto como sem sinal**, em vez de bloquear |
+| ESC-2026-0001 | Apagar e começar limpa |
+
+### Migration 180 - `ponto_sem_sinal_gps`
+
+**O quê:** `pontos_controle.latitude` e `longitude` passam a aceitar nulo, nasce `sem_sinal_gps boolean NOT NULL DEFAULT false`, e um CHECK amarra os dois estados.
+
+**Por quê:** decisão de Pecanha. O operador em garagem, subsolo ou trecho sem cobertura precisa conseguir avançar, e a falta de sinal precisa ficar registrada em vez de virar coordenada inventada.
+
+**O CHECK não é zelo excessivo:** sem ele, a combinação "sem coordenada e sem marca" voltaria a existir e o relatório não teria como distinguir ponto sem GPS de ponto mal gravado. Coordenada sentinela 0,0 está proibida por escrito: é uma posição real no golfo da Guiné e sujaria mapa, `fitBounds` e indicador de precisão com dado falso.
+
+`GRANT` explícito para a coluna nova, porque `ALTER DEFAULT PRIVILEGES` cobre tabela nova, não coluna nova de tabela existente.
+
+### Três arquivos de fundação
+
+`lib/fluxo-escolta.ts` ganhou `exigeDialogoDedicado`, que separa as etapas que exigem prova das que não exigem. Os rótulos de `PROXIMO_STATUS` foram alinhados com os do Painel de Ações, porque existiam dois nomes para a mesma ação na mesma tela.
+
+`lib/textos-padrao.ts`, novo, com todas as frases padrão. A divisão em duas famílias é a parte que importa: **campo cuja única barreira é `if (!campo.trim())` recebe o texto como placeholder, nunca como valor**. Pôr frase de fábrica no valor desses campos anularia a validação e liberaria a jornada inteira sem uma linha digitada, justamente no wizard de pré-início, na parada, no cancelamento e no relatório final. Ocorrência, emergência, cancelamento e item de checklist não conforme não recebem sugestão nenhuma: existem para registrar o que fugiu do previsto, e texto pronto ali facilita registro falso.
+
+`lib/pontos-controle.ts`, novo, com a serialização única das observações. Ele já corrigiu um defeito silencioso: **a página de impressão procurava a chave `justificativa` e os pontos gravavam `observacao`**, então o texto do operador sumia do relatório que vai para o cliente. A leitura é tolerante e aceita as três formas encontradas em produção, incluindo texto puro legado.
+
+### Frente 1 - o fluxo travado
+
+- O botão verde do cabeçalho da tela de detalhe **deixa de avançar as sete etapas que produzem ponto de controle**, mais a finalização. Ele mudava o status sem foto, sem GPS e sem gerar ponto, com rótulo quase idêntico ao do botão certo do Painel de Ações. Foi por ele que a ESC-2026-0001 chegou ao destino sem os pontos `transito_destino` e `destino`. Sobram para ele apenas `rascunho -> agendada` e `agendada -> em_pre_inicio`, que não produzem ponto.
+- Ordem invertida em oito handlers: **ponto de controle antes do update de status**. O modo de falha muda de "status avançado sem prova, que trava para sempre" para "ponto sem transição, que se resolve conferindo a etapa".
+- Precondição `.eq('status', ...)` com `.select('id')` em todos os updates. Sem o `select`, o PostgREST devolve sucesso quando casa zero linhas, e a tela anunciava transição que não aconteceu.
+- Conferência da etapa imediatamente antes de gravar o ponto, nas duas telas. O upload das fotos leva segundos, e nesse intervalo outra pessoa pode avançar a escolta. Isso reduz a janela de segundos para milissegundos; **não a elimina**, e só uma RPC transacional fecharia de vez.
+- `handleWizardSubmit` recebeu o mesmo tratamento. Ele era o único caminho de avanço sem nenhuma dessas proteções, e ainda bloqueava o operador quando o GPS falhava.
+
+### Frente 2 - textos padrão
+
+Grupo com valor inicial, e o asterisco do rótulo sai junto porque a tela deixa de mentir sobre o que é obrigatório: saída da base, origem, trânsito ao destino, destino, trânsito de retorno, retorno, chegada na base, check-in e avanço genérico. O valor é reaplicado toda vez que o diálogo abre, senão o campo ficaria vazio a partir da segunda etapa.
+
+Grupo com placeholder apenas: os três campos do wizard, parada, cancelamento, reagendamento, relatório final e item de checklist não conforme.
+
+As sugestões por tipo de parada entram por clique, nunca como valor. Quatro tipos ficam sem sugestão nenhuma: manutenção, ocorrência, bloqueio e fiscalização, que são eventos de desvio com valor probatório.
+
+No Telegram, a observação só é enviada quando difere do texto padrão daquela etapa. Sem isso, toda etapa notificaria "sem alterações" ao cliente e a notificação viraria ruído.
+
+### Frente 3 - seletor de endereço
+
+Duas causas, não uma, para o mesmo sintoma que Pecanha descreveu como "por vezes continua aberto".
+
+A primeira: escolher a sugestão preenchia o campo, e o efeito de busca observava o valor do campo, então a escolha disparava uma busca nova que voltava depois e reabria a lista. Resolvido com marcação de pulo e contador de sequência, mais `AbortController` por ciclo.
+
+A segunda, encontrada só na revisão: clicar fora fechava a lista, mas a resposta em voo chegava depois e reabria por cima do formulário. Clicar fora não muda o texto nem desmonta o componente, então nada invalidava aquele ciclo.
+
+Uma terceira, introduzida pela correção e pega pela revisão: a guarda de sequência no `finally` deixava o indicador de carregamento girando para sempre se o usuário apagasse o texto enquanto uma busca estava em voo.
+
+### Frente 4 - instalação na tela do celular
+
+`app/manifest.ts`, `public/sw.js`, `components/instalar-app-provider.tsx` e cinco ícones PNG.
+
+**O service worker não tem cache nenhum, de propósito.** Cache-first é exatamente o que serve página velha depois de um deploy, e sobrevive à limpeza normal do navegador. Este projeto acabou de passar horas com bundle antigo em produção; criar uma segunda forma de isso acontecer, agora do lado do cliente, seria pior. O handler de fetch é vazio e existe apenas para satisfazer o critério de instalabilidade do Chrome no Android.
+
+Os ícones foram gerados por script próprio, com `zlib` puro, porque o projeto não tem `sharp`, `canvas` nem `jimp`. A arte é o mesmo escudo da tela de login. O `maskable` traz o escudo menor, dentro dos 80% centrais, com o fundo sangrando, para sobreviver ao recorte circular do Android. O `apple-icon` de 180x180 existe porque o iOS ignora por completo o array de ícones do manifesto.
+
+O aviso cobre Android e iPhone, que funcionam de formas diferentes: no Android captura `beforeinstallprompt` e oferece botão; no iOS mostra a instrução de Compartilhar e Adicionar à Tela de Início, porque esse evento não existe lá. Não aparece se já estiver instalado, no desktop, ou se tiver sido dispensado há menos de 14 dias.
+
+`viewportFit: 'cover'` veio acompanhado do tratamento de área segura nos quatro eixos. A barra inferior usa `calc(64px + env(safe-area-inset-bottom))`, e não `minHeight: 64px` com padding: com `box-sizing: border-box` global, o padding seria descontado de dentro dos 64px e a área tocável cairia para cerca de 40px no iPhone, abaixo do mínimo de 44px do iOS.
+
+`maximumScale` não foi usado: bloquear o zoom é regressão de acessibilidade num aplicativo de campo.
+
+### Frente 5 - impressão
+
+A impressão era disparada por relógio, 600 ms depois de os dados chegarem, sem esperar imagem nenhuma. Com até 5 fotos por ponto em resolução integral, uma escolta de 8 pontos pede dezenas de megabytes: quem imprimisse pelo celular receberia um PDF com as molduras em branco, sem erro visível, **justamente na seção criada para carregar a prova**. Agora a página espera as imagens decodificarem, com teto de 15 segundos para uma foto travada não impedir o resto.
+
+`utils/print.ts` foi reescrito. Ele chamava `print()` por conta própria 1200 ms depois do load, o que somado ao disparo da própria página produzia **dois diálogos de impressão**. Agora quem decide a hora é a página, que avisa por `postMessage`, e o utilitário só espera para remover o iframe, com rede de segurança de 25 segundos.
+
+O contador de fotos passa a declarar a lacuna. A policy `fotos_select` só dá acesso amplo a administrador, gestor, supervisor e central; para os demais perfis ela alcança apenas a foto escalar de `pontos_controle.foto_id`, e os ids das fotos 2 a 5 vivem no JSON de observações. Sem isso o relatório diria "5 fotos" e mostraria uma, sem explicar. **A correção de fundo é estender a policy, que exige migration e ficou pendente.**
+
+### Documentação corrigida
+
+README, ARQUITETURA e ESTRUTURA prometiam funcionamento offline com IndexedDB, Cache API e Service Workers desde junho, e nada disso existia. Agora que o aplicativo ficou instalável, a promessa ficaria ainda mais enganosa. Os três dizem o que é: instalável na tela de início, **sem funcionamento offline**, com um service worker que não guarda nada.
+
+### Método
+
+Três rodadas de agentes em paralelo, uma por arquivo para não haver conflito de edição, cada uma seguida de um revisor instruído a refutar, não a concordar.
+
+A revisão adversarial se pagou: das cinco frentes implementadas, **as cinco voltaram com defeito**, sendo cinco regressões que o `tsc` não pegaria. As duas mais caras seriam invisíveis até o cliente reclamar: a impressão sem fotos e o endereço do ponto sumindo do mapa.
+
+### Revisão final: o que quase foi para produção
+
+A revisão adversarial do conjunto fechado encontrou quatro coisas que o `tsc` e o `build` não pegariam, sendo uma delas a mais grave do dia inteiro.
+
+#### Migration 181 - `emergencia_sem_gps_e_sem_viatura`
+
+**O botão de emergência não funcionava, e mentia dizendo que sim.**
+
+Três defeitos empilhados em `campo/page.tsx`:
+
+1. `emergencias.latitude` e `longitude` são NOT NULL, e a tela enviava nulo quando não havia sinal. O insert violava `23502`.
+2. O retorno do insert **não era lido**. O `supabase-js` nunca lança: devolve `{ data, error }`. O `try/catch` em volta não via nada.
+3. Não havia chamada ao Telegram em lugar nenhum de `acionarEmergencia`, nem trigger, nem webhook em `emergencias`.
+
+O resultado somado: o operador em túnel, subsolo ou garagem apertava o botão de pânico, via a confirmação verde escrita **"EMERGÊNCIA ACIONADA! Central notificada"**, e nada tinha sido gravado nem comunicado a ninguém. A central só descobriria se estivesse olhando o contador da tela de indicadores, que também estaria em zero.
+
+`select count(*) from emergencias` devolvia **0**: o botão nunca foi usado em produção, então isto estava armado esperando o primeiro uso real, que por definição seria o pior momento possível.
+
+Correção em três frentes, porque nenhuma sozinha resolve: a migration solta as duas coordenadas e `escolta_veiculo_id` (perfil administrativo aciona sem viatura vinculada) com o mesmo CHECK de coerência da 180; o código passa a ler o erro e a mandar ligar para a central se falhar; e o acionamento passa a disparar o Telegram de verdade, sem `await`, porque o registro já está salvo e esperar a rede atrasaria a confirmação de quem está em emergência. O texto virou "EMERGÊNCIA REGISTRADA! Central acionada", que é o que de fato acontece.
+
+#### A tela de campo finalizava escolta sem nada
+
+Com `finalizada` na lista de etapas sem ponto de controle, a exigência de foto sumia e o botão deixava de travar. Qualquer vigilante escalado tocava "Finalizar Escolta" no celular e a escolta encerrava com **zero foto, zero checklist de entrega, zero relatório final**. O banco aceita: `validar_transicao_status_escolta` não impõe pré-condição em `na_base -> finalizada`.
+
+A mesma transição, pela tela de detalhe, exige 5 fotos de ângulo da viatura, os 5 itens do checklist respondidos, descrição de cada não conformidade e relatório não vazio.
+
+Pior que a diferença de portão: o caminho do campo não gravava `observacao_fechamento` nem `data_finalizacao`, e nenhuma trigger preenche esses campos. A escolta ficava finalizada com `data_finalizacao` nula, o que quebra a duração no impresso e o indicador de tempo médio.
+
+`na_base` saiu do avanço da tela de campo, e no lugar do botão entrou um aviso dizendo onde a finalização acontece. A exceção `finalizada` saiu junto: exceção morta é o que faz alguém reintroduzir o caminho por engano.
+
+#### A finalização era o único passo que ainda travava por GPS
+
+Dez dos onze caminhos já usavam a função que não bloqueia. `handleFinalizacao` continuava com a que lança, e a exceção virava "User denied Geolocation" **depois** de as 5 fotos da viatura já terem subido. O cenário é diário: a viatura é recolhida na garagem coberta da base, que é exatamente onde não há sinal, e cada nova tentativa subia mais 5 fotos órfãs no bucket.
+
+#### O impresso perdia etapas de escolta antiga
+
+O filtro do feed descartava do histórico todas as sete etapas que produzem ponto, na premissa de que a linha equivalente viria dos pontos. A premissa vale para escolta nova e falha para as antigas. A primeira escolta de teste chegou ao destino sem os pontos `transito_destino` e `destino`: o relatório dela deixaria de mostrar essas etapas por caminho nenhum, junto com a observação que o operador digitou na transição, que só existe em `escolta_status_historico`.
+
+A supressão passou a depender da existência do ponto, não do status. Exigiu trazer o código do tipo de ponto na consulta.
+
+#### Menores, corrigidos junto
+
+- As fotos do diálogo de finalização não eram zeradas ao reabrir. O componente de câmera guarda a lista em estado interno e é desmontado ao fechar, então os widgets voltavam vazios enquanto o cabeçalho continuava verde com "OK" e o contador dizia "5 de 5": a tela mostrava uma coisa e o banco recebia os arquivos antigos.
+- O wizard de pré-início não passava pela guarda de pré-requisitos. Sessão expirada com o wizard aberto gravava os dois checklists e as 7 fotos, e só então quebrava no insert do ponto, porque `lancado_por` é NOT NULL.
+- O botão do check-in era o único dos nove sem a trava de foto mínima: ficava verde e habilitado e só devolvia erro depois do toque.
+- `STATUS_ATIVOS` estava importado na tela de campo e nunca usado, enquanto a tela mantinha o próprio array, que exclui `agendada` enquanto o importado a inclui. Import morto de regra compartilhada é pior que nenhum, porque sugere que a regra está unificada.
+
+### Estado da verificação
+
+`npx tsc --noEmit` em zero erros. `npm run build` verde. `npx next lint` com zero erros e 30 avisos, todos de código morto pré-existente.
+
+Servidor de produção subido localmente: as 11 rotas do dashboard devolvem 307 para o login sem sessão, as duas públicas devolvem 200, `/manifest.webmanifest` devolve 200 com `application/manifest+json`, e os cinco ícones respondem. O HTML traz `<link rel="apple-touch-icon">` de 180x180, que é o que o iPhone usa.
+
+### O que continua pendente, declarado
+
+1. **Atomicidade real.** A conferência de etapa antes de gravar o ponto reduziu a janela de segundos para milissegundos. Não a fechou. Só uma RPC transacional, gravando ponto, status e histórico numa transação, elimina o ponto órfão.
+2. **Policy `fotos_select`.** Ela só alcança a coluna escalar `pontos_controle.foto_id`, e os ids das fotos 2 a 5 vivem no JSON de observações. Operador e vigilante veem uma foto por ponto no impresso, com o aviso de lacuna. A correção é migration.
+3. **`PODE_FINALIZAR_ESCOLTA`** existe em `lib/permissions.ts` restrito a administrador, gestor e supervisor, e não é importado em lugar nenhum. Nem o botão da tela de detalhe o consulta.
+4. **Diálogo "Saída da Base" inalcançável.** `setDialogStartBase(true)` não existe no arquivo: são cerca de 150 linhas mortas, incluindo um caminho completo de insert. Já era morto antes desta rodada.
+5. **Ponto de controle da tela de campo não grava `tipoLabel` nem `endereco`**, então o mapa não rotula o último ponto da equipe na estrada e a tela de notificações mostra menos contexto. A tela de detalhe grava os dois.
+6. **Três decisões de produto** aguardando Pecanha: se o pré-início pode ser vencido pela tela de campo sem o wizard; como complementar endereço com "apto 302" sem perder a coordenada; e para qual viatura vai o ponto quando a escolta tem duas.
+
+
+---
+
 ## 2026-08-19 - Limpeza da base operacional para testes
 
 ### Migration 172 - `corrige_escalada_por_update_direto`

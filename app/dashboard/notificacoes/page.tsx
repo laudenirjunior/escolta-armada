@@ -9,6 +9,7 @@ import {
   ChevronRight, Radio, Shield, MapPin,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { lerObservacao } from '@/lib/pontos-controle'
 import { useAuth } from '@/hooks/useAuth'
 
 const sb = createClient() as any
@@ -44,6 +45,7 @@ const ESCOLTA_STATUS: Record<string, { label: string; color: string; bg: string 
   na_origem:     { label: 'Na Origem',   color: '#0891B2', bg: '#E0F4FA' },
   em_transito_destino: { label: 'Trânsito p/ Destino', color: '#2563EB', bg: '#E7EEFE' },
   no_destino:    { label: 'No Destino',  color: '#0891B2', bg: '#E0F4FA' },
+  em_transito_retorno: { label: 'Trânsito p/ Retorno', color: '#53648A', bg: '#EBF0F8' },
   retornando:    { label: 'Retornando',  color: '#8B6914', bg: '#FBF3DE' },
   na_base:       { label: 'Na Base',     color: '#53648A', bg: '#EBF0F8' },
   finalizada:    { label: 'Finalizada',  color: '#53648A', bg: '#EBF0F8' },
@@ -53,6 +55,7 @@ const ESCOLTA_STATUS: Record<string, { label: string; color: string; bg: string 
 const STATUS_LABEL: Record<string, string> = {
   rascunho: 'Rascunho', agendada: 'Agendada', em_pre_inicio: 'Pré-Início',
   em_andamento: 'Em Andamento', na_origem: 'Na Origem', em_transito_destino: 'Trânsito p/ Destino', no_destino: 'No Destino',
+  em_transito_retorno: 'Trânsito p/ Retorno',
   retornando: 'Retornando', na_base: 'Na Base', finalizada: 'Finalizada', cancelada: 'Cancelada',
 }
 
@@ -108,30 +111,42 @@ function formatDHFull(iso: string) {
   })
 }
 
+/**
+ * Endereco e precisao existem apenas no JSON de alguns pontos e nao fazem parte das
+ * quatro chaves fixas de `lerObservacao`, entao continuam sendo lidos aqui, de forma
+ * tolerante: JSON quebrado devolve os dois nulos e a linha segue com o resto.
+ */
+function contextoLegado(json: string): { endereco: string | null; precisao: number | null } {
+  const vazio = { endereco: null, precisao: null }
+  try {
+    const obj = JSON.parse(json)
+    if (!obj || typeof obj !== 'object') return vazio
+    return {
+      endereco: typeof obj.endereco === 'string' ? obj.endereco : null,
+      precisao: typeof obj.precisao_metros === 'number' ? obj.precisao_metros : null,
+    }
+  } catch {
+    return vazio
+  }
+}
+
 function parseObservacao(raw: string | null): string {
   if (!raw) return ''
   const trimmed = raw.trim()
-  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-    try {
-      const obj = JSON.parse(trimmed)
-      const parts: string[] = []
-      if (obj.tipoLabel && typeof obj.tipoLabel === 'string') parts.push(obj.tipoLabel)
-      if (obj.observacao && typeof obj.observacao === 'string' && obj.observacao.trim()) {
-        parts.push(obj.observacao.trim())
-      }
-      if (obj.endereco && typeof obj.endereco === 'string') {
-        const addr = obj.endereco.split(',').slice(0, 3).join(',').trim()
-        parts.push(addr)
-      }
-      if (obj.precisao_metros && typeof obj.precisao_metros === 'number') {
-        parts.push(`±${obj.precisao_metros}m`)
-      }
-      return parts.length > 0 ? parts.join(' · ') : trimmed
-    } catch {
-      return trimmed
-    }
-  }
-  return trimmed
+  // O ramo de renderizacao continua decidido pelo primeiro caractere: o que nao comeca
+  // com { ou [ e texto do operador e vai para a tela exatamente como foi gravado.
+  if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return trimmed
+
+  const lido = lerObservacao(trimmed)
+  const { endereco, precisao } = contextoLegado(trimmed)
+
+  const parts: string[] = []
+  if (typeof lido.tipoLabel === 'string' && lido.tipoLabel) parts.push(lido.tipoLabel)
+  if (typeof lido.observacao === 'string' && lido.observacao.trim()) parts.push(lido.observacao.trim())
+  if (endereco) parts.push(endereco.split(',').slice(0, 3).join(',').trim())
+  if (precisao) parts.push(`±${precisao}m`)
+
+  return parts.length > 0 ? parts.join(' · ') : trimmed
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────

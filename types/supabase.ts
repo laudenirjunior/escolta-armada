@@ -1394,10 +1394,11 @@ export type Database = {
           foto_id: string | null
           id: string
           lancado_por: string
-          latitude: number
-          longitude: number
+          latitude: number | null
+          longitude: number | null
           observacoes: string | null
           precisao_metros: number | null
+          sem_sinal_gps: boolean
           sincronizado: boolean
           tipo_ponto_id: string
         }
@@ -1410,10 +1411,11 @@ export type Database = {
           foto_id?: string | null
           id?: string
           lancado_por: string
-          latitude: number
-          longitude: number
+          latitude: number | null
+          longitude: number | null
           observacoes?: string | null
           precisao_metros?: number | null
+          sem_sinal_gps?: boolean
           sincronizado?: boolean
           tipo_ponto_id: string
         }
@@ -1426,10 +1428,11 @@ export type Database = {
           foto_id?: string | null
           id?: string
           lancado_por?: string
-          latitude?: number
-          longitude?: number
+          latitude?: number | null
+          longitude?: number | null
           observacoes?: string | null
           precisao_metros?: number | null
+          sem_sinal_gps?: boolean
           sincronizado?: boolean
           tipo_ponto_id?: string
         }
