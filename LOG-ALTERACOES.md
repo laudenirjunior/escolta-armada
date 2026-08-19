@@ -513,3 +513,42 @@ Removidas `STATUS_ESCOLTA`, `TIPOS_PONTO`, `LABELS_STATUS`, `LABELS_PONTO` e `TR
 | `viaturas[0]` em 19 pontos | 2 escoltas têm 2 viaturas; a segunda não recebe ponto |
 | Fila offline | Não existe |
 | 4 rotas órfãs | 1364 linhas não removidas |
+
+---
+
+## 2026-08-19 - Commit e verificação final
+
+Commit `5a6c198` na branch `fase0-seguranca`: 49 arquivos, 4058 inserções.
+
+O arquivo `types/supabase.ts.antigo`, backup meu da geração de tipos, foi retirado do commit e apagado. Nenhum arquivo `.env` entrou.
+
+### Correção da view de reconciliação
+
+`vw_historico_divergente` acusava 3 escoltas como divergentes. Era falso positivo meu: são escoltas em `agendada` que nunca mudaram de status, e por isso nunca geraram histórico. A view passou a exigir que a escolta tenha saído do estado inicial. Agora retorna vazia.
+
+### Verificação final
+
+| Verificação | Resultado |
+|---|---|
+| Tabelas sem RLS | nenhuma |
+| `SECURITY DEFINER` executável por `anon` | nenhuma |
+| Política com `true` em tabela sensível | nenhuma |
+| Conta sem `auth.identities` | nenhuma |
+| Histórico divergente | nenhum |
+| Histórico total | 71 linhas (eram 111, com 40 duplicatas) |
+| Dados | 16 escoltas, 120 fotos, 63 pontos, 3 usuários |
+| `tsc --noEmit` | exit 0 |
+| `next build` | compilado |
+| Rotas do dashboard sem sessão | 307 |
+| Rotas públicas | 200 |
+| APIs sem sessão | 401 |
+| Árvore de trabalho | limpa |
+
+### Push
+
+**Não realizado.** O comando foi bloqueado pelo classificador de permissões do ambiente. O commit está local, íntegro e verificado. O push precisa ser executado por Pecanha:
+
+```bash
+cd "C:/Users/Laudenir/Documents/00 - Projetos Vibe/escolta-armada/escolta-armada"
+git push -u origin fase0-seguranca
+```
