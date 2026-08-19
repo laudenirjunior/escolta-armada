@@ -108,6 +108,35 @@ O `middleware.ts` renova a sessão a cada navegação e barra quem não está au
 
 A checagem de **perfil** continua no cliente, porque depende de uma consulta a `usuarios`. Quem garante a autorização de fato é a RLS no banco, não a tela.
 
+## Backups e limpeza de base
+
+Em 2026-08-19 a base operacional foi zerada para os testes do fluxo de 9 etapas. O estado anterior está no schema `backup_20260819`, com 15 tabelas mais os metadados do Storage.
+
+Consultar o backup sem restaurar:
+
+```sql
+select table_name, (xpath('/row/c/text()',
+  query_to_xml('select count(*) c from backup_20260819.'||table_name, false, true, '')))[1]::text::int linhas
+from information_schema.tables where table_schema = 'backup_20260819' order by 1;
+```
+
+O procedimento completo de restauração, com a ordem correta das tabelas, está no `LOG-ALTERACOES.md`, na entrada de 2026-08-19.
+
+**A restauração não devolve as fotos.** Os 117 arquivos do bucket foram apagados definitivamente e o backup guarda só os metadados. Restaurar traz de volta datas, GPS, observações e checklists, e deixa toda galeria com imagem quebrada.
+
+**Antes de qualquer limpeza futura, nesta ordem:**
+
+1. Criar o schema de backup e **conferir a contagem de cada tabela contra a origem**, antes de apagar qualquer coisa.
+2. Confirmar com Pecanha o que fica e o que sai. A fronteira não é óbvia: sem cliente, viatura e modelo de checklist não dá para criar a primeira escolta.
+3. Declarar explicitamente que os arquivos do Storage não têm cópia.
+4. Apagar das folhas para a raiz, numa transação. `fotos` é a última, porque pontos, checklists, ocorrências e presenças a referenciam.
+5. Apagar o Storage por listagem recursiva da própria API, nunca por lista transcrita à mão.
+6. Provar que funciona vazio: criar uma escolta pela API e apagá-la em seguida.
+
+## Sequência do código da escolta
+
+`gerar_codigo_escolta` deriva de `MAX()` sobre as escoltas do ano corrente, não de uma sequence. Com a tabela vazia, a próxima escolta do ano vira `ESC-AAAA-0001`. Não há risco de colisão enquanto não se restaurar backup por cima de escoltas novas: aí sim dois registros podem disputar o mesmo código, e a conferência é obrigatória antes de restaurar.
+
 ## Riscos conhecidos
 
 | Risco | Situação |

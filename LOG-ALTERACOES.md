@@ -8,6 +8,71 @@ Branch de trabalho: `fase0-seguranca`
 
 ---
 
+## 2026-08-19 - Limpeza da base operacional para testes
+
+### Migration 170 - `backup_pre_limpeza`
+
+**O quê:** schema `backup_20260819` com cópia integral de 15 tabelas operacionais mais os metadados dos objetos do bucket `fotos`.
+
+**Por quê:** Pecanha pediu a base zerada para começar os testes do fluxo novo de 9 etapas. Exclusão em produção não se faz sem cópia recuperável, conforme a regra do `CLAUDE.md` de `Documents`. Backup em schema, e não em arquivo de texto, porque não passa por serialização e volta com `INSERT INTO ... SELECT`.
+
+**Verificação:** contagem por tabela conferida contra a origem antes de qualquer exclusão. Todas bateram: escoltas 16, escolta_veiculos 18, escolta_efetivo 44, escolta_armamentos 6, pontos_controle 63, fotos 120, checklists 27, checklist_respostas 171, ocorrencias 1, presencas 1, escolta_status_historico 71, storage_objetos 117.
+
+O schema tem `REVOKE ALL ... FROM anon, authenticated, PUBLIC`, então não é alcançável pela API.
+
+### Exclusão dos dados operacionais
+
+**O quê:** `DELETE` em 16 tabelas dentro de uma transação, das folhas para a raiz, e remoção dos 117 objetos do bucket `fotos`.
+
+Apagado: checklist_respostas (171), checklists (27), pontos_controle (63), ocorrencias (1), emergencias (0), presencas (1), rastreamento (0), atualizacoes_status (0), escolta_status_historico (71), notificacoes (0), escolta_armamentos (6), escolta_efetivo (44), escolta_veiculos (18), escoltas (16), fotos (120). Mais 117 arquivos no Storage.
+
+Preservado: usuarios (3), clientes (5), vigilantes (11), veiculos (6), armamentos (10), checklist_modelos (6), checklist_modelo_itens (35), logs_auditoria (10) e as tabelas de domínio.
+
+**Por quê essa fronteira:** sem cliente, viatura e modelo de checklist não é possível criar a primeira escolta, e o pedido era deixar pronto para testar, não para recadastrar. As notificações entraram na exclusão por decisão de Pecanha na confirmação.
+
+**Sobre os arquivos do Storage:** o backup guarda os metadados (id, nome, bucket, data, `metadata`), **não os bytes**. Os 117 arquivos foram removidos definitivamente e não têm cópia. Isso foi declarado a Pecanha antes da execução e a exclusão foi autorizada.
+
+A remoção usou listagem recursiva pela própria API de Storage, não uma lista transcrita, e conferiu o bucket vazio depois. `storage.objects` para o bucket `fotos` ficou em 0.
+
+**Verificação, com JWT real de administrador:**
+
+| Prova | Resultado |
+|---|---|
+| 15 tabelas operacionais | 0 linhas cada |
+| Bucket `fotos` | 0 objetos, no banco e no storage |
+| Cadastros base | intactos, todos legíveis com HTTP 200 |
+| `vw_historico_divergente` | vazia |
+| Listar escoltas, pontos, fotos e checklists com base vazia | HTTP 200, sem erro |
+| Criar escolta pela API | HTTP 201 |
+| Código gerado | `ESC-2026-0001`, sequência reiniciada corretamente |
+| `fluxo_versao` da escolta nova | 2, ou seja, já nasce sob a regra do trânsito de retorno |
+| Apagar a escolta de teste | HTTP 200, 1 linha |
+
+A escolta de teste foi removida em seguida, e a base ficou de fato em zero.
+
+**Como restaurar**, se for preciso voltar atrás:
+
+```sql
+-- ordem inversa da exclusao: raiz primeiro, folhas depois
+insert into public.fotos select * from backup_20260819.fotos;
+insert into public.escoltas select * from backup_20260819.escoltas;
+insert into public.escolta_veiculos select * from backup_20260819.escolta_veiculos;
+insert into public.escolta_efetivo select * from backup_20260819.escolta_efetivo;
+insert into public.escolta_armamentos select * from backup_20260819.escolta_armamentos;
+insert into public.pontos_controle select * from backup_20260819.pontos_controle;
+insert into public.checklists select * from backup_20260819.checklists;
+insert into public.checklist_respostas select * from backup_20260819.checklist_respostas;
+insert into public.ocorrencias select * from backup_20260819.ocorrencias;
+insert into public.presencas select * from backup_20260819.presencas;
+insert into public.escolta_status_historico select * from backup_20260819.escolta_status_historico;
+```
+
+**Limite da restauração:** ela devolve as linhas, **não as fotos**. Os registros de `fotos` voltariam apontando para caminhos que não existem mais no bucket, e toda galeria mostraria imagem quebrada. Restaurar só faz sentido para recuperar dado operacional (datas, GPS, observações, checklists), não a prova fotográfica.
+
+**Risco assumido:** os 11 vigilantes continuam com `usuario_id` nulo. Nenhum deles tem conta, então **nenhum login de perfil operador enxerga escolta hoje**, porque toda a RLS de campo depende desse vínculo. Para testar o fluxo de campo é preciso criar um operador pela tela de usuários, que cria o vínculo automaticamente.
+
+---
+
 ## 2026-08-19 - Fase 0: Guardrails e hotfix de segurança
 
 ### Migration 100 - `hotfix_seguranca_security_definer`
