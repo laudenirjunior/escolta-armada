@@ -7,6 +7,7 @@ import { printEscolta } from '@/utils/print'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
 import { PODE_CRIAR_ESCOLTA, PODE_EDITAR_ESCOLTA } from '@/lib/permissions'
+import { DialogoAssumirEscolta } from '@/components/escolta/dialogo-assumir-escolta'
 
 interface EscoltaRow {
   id: string
@@ -63,6 +64,9 @@ export default function EscoltasPage() {
   const [souComandanteIds, setSouComandanteIds] = useState<string[]>([])
   const [puxando, setPuxando] = useState<string | null>(null)
   const [avisoMural, setAvisoMural] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null)
+  // Escolta que o operador esta assumindo agora, e o vigilante vinculado a ele.
+  const [assumindo, setAssumindo] = useState<EscoltaRow | null>(null)
+  const [meuVigilanteId, setMeuVigilanteId] = useState<string | null>(null)
   const { user } = useAuth()
   const router = useRouter()
   const perfil = (user?.perfil?.codigo ?? '') as any
@@ -93,6 +97,7 @@ export default function EscoltasPage() {
 
       // Resolve as escoltas em que este operador está escalado (via vigilante)
       const { data: vig } = await sb.from('vigilantes').select('id').eq('usuario_id', user?.id).maybeSingle()
+      setMeuVigilanteId(vig?.id ?? null)
       let escoltaIds: string[] = []
       let comandoIds: string[] = []
       if (vig) {
@@ -144,19 +149,17 @@ export default function EscoltasPage() {
     }
   }, [ehOperador, loading, minhasEscoltaIds.length, semEquipeIds.length])
 
-  /** Puxa a escolta para si. Quem valida de verdade e a RPC, que trava a linha. */
-  const puxar = async (id: string) => {
-    setPuxando(id)
+  /**
+   * Abre o dialogo de assumir. Ele mostra a equipe ja escalada, pede confirmacao e
+   * exige motivo quando ha alguem a substituir. Escolta vazia passa direto.
+   *
+   * Antes daqui saia uma chamada direta que RECUSAVA escolta com equipe. A regra mudou
+   * a pedido de Pecanha: a dupla escalada pode faltar, e a escolta nao pode parar por
+   * isso quando a gestao nao esta disponivel para reescalar.
+   */
+  const abrirAssumir = (e: EscoltaRow) => {
     setAvisoMural(null)
-    const { error } = await sb.rpc('puxar_escolta', { p_escolta_id: id })
-    if (error) {
-      setAvisoMural({ tipo: 'erro', texto: error.message ?? 'Não foi possível puxar a escolta.' })
-    } else {
-      setAvisoMural({ tipo: 'ok', texto: 'Escolta puxada. Você é o comandante e pode incluir o companheiro de viatura.' })
-      setModoLista('minhas')
-    }
-    setPuxando(null)
-    await carregar()
+    setAssumindo(e)
   }
 
   /** Devolve ao mural. So enquanto nao comecou, e so o comandante. */
@@ -175,9 +178,14 @@ export default function EscoltasPage() {
 
   const escoltasFiltradas = escoltas.filter((e) => {
     if (ehOperador && modoLista === 'minhas' && !minhasEscoltaIds.includes(e.id)) return false
-    // Mural: so agendada e sem ninguem escalado. Escolta que ja tem equipe sai da lista
-    // dos demais, conforme a decisao de Pecanha.
-    if (ehOperador && modoLista === 'disponiveis' && !semEquipeIds.includes(e.id)) return false
+    // Mural: toda escolta agendada, tenha equipe ou nao.
+    //
+    // Antes mostrava apenas as sem equipe. A regra mudou a pedido de Pecanha: a dupla
+    // escalada pode faltar, e quem esta na base precisa conseguir assumir sem depender
+    // da gestao. As que ja tem equipe aparecem marcadas, e assumir uma delas pede
+    // confirmacao e motivo, que ficam no historico.
+    if (ehOperador && modoLista === 'disponiveis'
+        && (e.status !== 'agendada' || minhasEscoltaIds.includes(e.id))) return false
     if (!busca) return true
     const termo = busca.toLowerCase()
     return (
@@ -240,6 +248,11 @@ export default function EscoltasPage() {
                       {e.checklist_pendente_no_inicio && (
                         <span className="badge-warning ml-2">Checklist</span>
                       )}
+                      {/* Aviso antes do clique: assumir esta pede confirmacao e motivo. */}
+                      {ehOperador && e.status === 'agendada' && !semEquipeIds.includes(e.id) && (
+                        <span className="ml-2 text-[9px] font-black uppercase tracking-wider px-1 py-0.5"
+                          style={{ backgroundColor: '#FFF7E6', color: '#8A5A10' }}>já escalada</span>
+                      )}
                     </td>
                     <td>
                       <span className="text-sm font-medium" style={{ color: '#1E2D35' }}>
@@ -269,15 +282,15 @@ export default function EscoltasPage() {
                         {/* Mural: puxar e devolver, so para operador e so em escolta agendada.
                             Quem valida de verdade sao as RPCs, que travam a linha da escolta
                             antes de escalar. */}
-                        {ehOperador && e.status === 'agendada' && semEquipeIds.includes(e.id) && (
+                        {ehOperador && e.status === 'agendada' && !souComandanteIds.includes(e.id) && (
                           <button
-                            onClick={() => puxar(e.id)}
+                            onClick={() => abrirAssumir(e)}
                             disabled={puxando === e.id}
                             className="px-3 h-9 text-[10px] font-black uppercase tracking-wider text-white transition-all disabled:opacity-50"
-                            style={{ backgroundColor: '#1E7C52', borderRadius: '2px' }}
+                            style={{ backgroundColor: semEquipeIds.includes(e.id) ? '#1E7C52' : '#C8813A', borderRadius: '2px' }}
                             title="Assumir esta escolta como comandante"
                           >
-                            {puxando === e.id ? '...' : 'Puxar'}
+                            {semEquipeIds.includes(e.id) ? 'Puxar' : 'Assumir'}
                           </button>
                         )}
                         {ehOperador && e.status === 'agendada' && souComandanteIds.includes(e.id) && (
@@ -360,6 +373,10 @@ export default function EscoltasPage() {
                     {e.checklist_pendente_no_inicio && (
                       <span className="badge-warning ml-2 text-[10px]">Checklist</span>
                     )}
+                    {ehOperador && e.status === 'agendada' && !semEquipeIds.includes(e.id) && (
+                      <span className="ml-2 text-[9px] font-black uppercase tracking-wider px-1 py-0.5"
+                        style={{ backgroundColor: '#FFF7E6', color: '#8A5A10' }}>já escalada</span>
+                    )}
                   </div>
                   <span className={s.cls}>{s.label}</span>
                 </div>
@@ -389,14 +406,14 @@ export default function EscoltasPage() {
                 {/* Puxar e devolver no celular, que e onde o operador de fato usa.
                     Botao de largura inteira e altura de toque, separado dos demais para
                     ninguem puxar escolta por engano ao mirar em Ver. */}
-                {ehOperador && e.status === 'agendada' && semEquipeIds.includes(e.id) && (
+                {ehOperador && e.status === 'agendada' && !souComandanteIds.includes(e.id) && (
                   <button
-                    onClick={(ev) => { ev.stopPropagation(); puxar(e.id) }}
+                    onClick={(ev) => { ev.stopPropagation(); abrirAssumir(e) }}
                     disabled={puxando === e.id}
                     className="w-full flex items-center justify-center gap-2 rounded-lg text-xs font-black uppercase tracking-wider text-white mb-2 disabled:opacity-50"
-                    style={{ minHeight: '44px', backgroundColor: '#1E7C52' }}
+                    style={{ minHeight: '44px', backgroundColor: semEquipeIds.includes(e.id) ? '#1E7C52' : '#C8813A' }}
                   >
-                    {puxando === e.id ? 'Puxando...' : 'Puxar esta escolta para mim'}
+                    {semEquipeIds.includes(e.id) ? 'Puxar esta escolta para mim' : 'Assumir esta escolta (já escalada)'}
                   </button>
                 )}
                 {ehOperador && e.status === 'agendada' && souComandanteIds.includes(e.id) && (
@@ -501,8 +518,10 @@ export default function EscoltasPage() {
 
           {modoLista === 'disponiveis' && (
             <p className="text-[11px] leading-relaxed" style={{ color: '#6B7E8A' }}>
-              Escoltas agendadas que ainda não têm equipe. Ao puxar, você vira o comandante
-              e ela sai desta lista para os demais. Pode devolver enquanto não começar.
+              Escoltas agendadas. Ao assumir, você vira o comandante e escolhe quem vai
+              junto. As marcadas como <strong>já escalada</strong> têm equipe designada:
+              assumir uma delas pede confirmação e motivo, que ficam no histórico.
+              Pode devolver enquanto não começar.
             </p>
           )}
 
@@ -754,6 +773,28 @@ export default function EscoltasPage() {
             </div>
           ) : null}
         </div>
+      )}
+
+      {/* Assumir escolta do mural. O dialogo decide sozinho se pede confirmacao e
+          motivo, conforme haja ou nao equipe escalada. */}
+      {assumindo && (
+        <DialogoAssumirEscolta
+          escoltaId={assumindo.id}
+          codigo={assumindo.codigo_escolta}
+          meuVigilanteId={meuVigilanteId}
+          onFechar={() => setAssumindo(null)}
+          onAssumido={async (substituiu) => {
+            setAssumindo(null)
+            setModoLista('minhas')
+            setAvisoMural({
+              tipo: 'ok',
+              texto: substituiu
+                ? 'Escolta assumida. A equipe anterior foi substituída e o registro ficou no histórico.'
+                : 'Escolta assumida. Você é o comandante e já pode iniciar o pré-início.',
+            })
+            await carregar()
+          }}
+        />
       )}
     </div>
   )
