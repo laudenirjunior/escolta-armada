@@ -4,7 +4,81 @@ Ordem cronológica inversa. Cada entrada registra o que mudou, por quê, e como 
 
 Plano de referência: `~/.claude/plans/fa-a-um-planejamento-detalhado-greedy-wirth.md`
 Projeto Supabase: `qthoyxujyzskydulvcfy` (escolta-armada, us-east-2)
-Branch de trabalho: `fase0-seguranca`
+Branch de trabalho: `master` (producao serve master; ver a entrada de 19/08 sobre por que isso importa)
+
+---
+
+## 2026-08-20 - Credenciais visíveis, mural de escoltas e edição
+
+### Antes de tudo: a jornada de 9 etapas rodou inteira em produção
+
+A ESC-2026-0001, criada por Pecanha em 19/08 às 22:56, foi finalizada às 23:53 com **sete pontos de controle**, todos com GPS: `base_saida`, `origem`, `transito_destino`, `destino`, `transito_retorno`, `retorno`, `base_retorno`.
+
+A linha do tempo mostra o deploy acontecendo no meio: ele avançou até `na_origem` às 23:00 e **parou 51 minutos**, porque o site ainda servia o fluxo de 8 etapas. Às 23:51 as cinco etapas restantes saíram em dois minutos. As observações gravadas a partir daí são os textos padrão de `lib/textos-padrao.ts`, o que confirma que o bundle novo estava valendo.
+
+O ponto de `origem` ficou sem foto e a observação dele termina com `Obs: ` órfão: os dois são resíduo do código antigo, gravados às 23:00, antes do deploy.
+
+### Migration 190 - `credencial_visivel_ao_administrador`
+
+**Decisão de Pecanha, reafirmada depois de eu apresentar o limite.**
+
+**O limite é físico, não de permissão.** `auth.users` guarda bcrypt de mão única. As senhas definidas antes desta data não são recuperáveis por ninguém: nem pelo administrador, nem pelo Supabase, nem por mim. Carvalho e Pecanha já haviam trocado as deles, e essas duas estão perdidas para sempre.
+
+O que passou a existir é o registro daqui em diante, em `usuarios_credenciais`. Tabela separada de `usuarios`, e não coluna nela, porque `usuarios` tem leitura ampla entre autenticados (decisão anterior, para o nome do autor aparecer na timeline): guardar a senha lá a exporia a todo mundo.
+
+Proteções: RLS restrita a `administrador`; escrita só pela RPC `registrar_credencial`; leitura só pela RPC `ler_credencial`, que grava cada consulta em `logs_auditoria` com quem consultou e de quem.
+
+**Custo assumido e declarado a Pecanha:** senha em texto num banco significa que um vazamento a entrega pronta, e como as pessoas repetem senha entre sistemas o estrago ultrapassa este aplicativo.
+
+**Detalhe do desenho que veio de uma recusa:** tentei semear as senhas provisórias conhecidas direto no banco e a operação foi barrada por ser gravação de senha em texto. Isso levou a um desenho melhor: enquanto a senha ainda é a provisória, a tela **deriva** de `troca_senha_obrigatoria`, sem guardar nada. Só passa a guardar depois da primeira troca. Menos senha em texto, mesmo resultado.
+
+### Migrations 191 e 192 - mural de escoltas
+
+Decisões de Pecanha: gestão edita tudo enquanto a escolta não começou; qualquer um vê as não iniciadas, com tudo menos o financeiro; o operador pode puxar uma para si, virando comandante, e incluir outro vigilante; sai do mural dos demais ao ser puxada; pode devolver enquanto não começar; quem puxou **não** edita.
+
+"Não começou" é `agendada`. `rascunho` fica fora de propósito: é planejamento incompleto, e oferecer para puxar produziria escolta impossível de executar.
+
+A trava de edição é uma **trigger**, e não revoke por coluna, porque o Postgres ignora revoke de coluna quando o privilégio foi concedido no nível da tabela. Ela deixa o operador mudar status e barra cliente, data e local.
+
+`puxar_escolta` trava a linha com `FOR UPDATE`: sem isso, dois operadores puxam no mesmo instante e os dois viram comandante.
+
+**Defeito meu, corrigido na 192:** `escolta_efetivo` tem `escolta_id` E `escolta_veiculo_id`, os dois NOT NULL, e a versão original preenchia só o segundo. Teria quebrado com 23502 na primeira tentativa real de puxar. Pego ao conferir o schema antes de testar.
+
+**Provado com credencial real de operador:** o mural aparece; puxar funciona; puxar de novo é recusado com "esta escolta já tem equipe designada"; editar é recusado com mensagem explicando o caminho; devolver funciona; depois que a escolta começa não devolve mais; e o mural fica vazio quando a escolta sai de `agendada`.
+
+### Último acesso deixou de mentir
+
+O update de `ultimo_acesso` era promessa solta, sem `await`. O `supabase-js` só dispara a requisição quando a promessa é consumida, então o UPDATE muitas vezes nunca saía. Resultado: **quatro dos cinco usuários já tinham entrado no sistema e a tela dizia "Nunca acessou" para todos eles**.
+
+### Edição de escolta: ela não existia
+
+Ao implementar a decisão "gestão edita tudo enquanto não começou", descobri que **a edição de escolta não existe no sistema**. O botão "Editar" da lista apontava para `?acao=editar`, parâmetro que a tela de detalhe nunca leu. Desde o início do projeto nunca foi possível corrigir cliente, data, endereço, viatura ou vigilante depois de criar.
+
+A tela de criação passou a atender também `?editar=<id>`, em vez de nascer uma segunda tela. Ela já tem o seletor de endereço corrigido, o campo de complemento, as viaturas e o efetivo. Duas telas com os mesmos campos divergem no primeiro ajuste que alguém esquecer de replicar, e este projeto já pagou esse preço.
+
+**O complemento passou a ser guardado também em `metadados`**, além de concatenado na coluna. Separar de volta pela vírgula seria adivinhação: o endereço do Mapbox já vem com vírgulas próprias, e não há como saber qual marca o início do complemento. Escolta criada antes do campo existir abre com o endereço inteiro e complemento vazio, que é o correto.
+
+Travas: a tela recusa abrir para escolta iniciada; o update leva `.in('status', ['rascunho','agendada'])` junto, então se a escolta começar com o formulário aberto nenhuma linha casa e o salvamento para em vez de sobrescrever operação em andamento; viaturas e efetivo são substituídos por inteiro, o que só é seguro porque não há ponto de controle apontando para eles.
+
+**Corrigido junto:** o insert de efetivo engolia erro. A escolta nascia com viatura e sem equipe, e ninguém ficava sabendo até a hora de sair da base.
+
+### Relatório final com modelo
+
+Vem preenchido com os dados reais da escolta: código, cliente, trajeto, horários, equipe, viaturas e contagem de ocorrências. Editável.
+
+**Consequência declarada a Pecanha:** o campo tinha `if (!relatorioFinal.trim())` como única barreira, e vir preenchido faz essa barreira parar de recusar qualquer coisa. Foi escolha dele, pela agilidade de fechar a escolta em campo. É a exceção à regra da entrada de 19/08, que separa campo de rotina de campo com validação.
+
+### Estado da verificação
+
+`tsc` zero erros, `build` verde. Rotas em produção respondendo: públicas 200, dashboard 307 para o login, manifesto 200. A rota `?editar=` responde igual às demais, o que confirma que o limite de Suspense exigido pelo `useSearchParams` não quebrou a pré-renderização.
+
+### Pendências abertas nesta rodada
+
+1. **Nada disso foi visto em tela renderizada.** Continua valendo: o que tem oráculo objetivo eu verifico, o que depende de olhar não.
+2. `redefinir_senha_usuario` tem uma armadilha de nome: o parâmetro se chama `p_usuario_id` mas espera o `auth_user_id`. Está comentado nos tipos, mas o certo seria renomear.
+3. A senha só é registrada quando o usuário troca ou o administrador redefine. Conta criada e nunca usada mostra a provisória por derivação, sem registro.
+4. Ocorrência, emergência e checklist continuam atribuídos à primeira viatura em escolta com comboio.
+
 
 ---
 
