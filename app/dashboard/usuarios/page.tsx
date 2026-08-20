@@ -66,26 +66,36 @@ function CelulaCredencial({
   const [revelada, setRevelada] = useState<string | null>(null)
   const [buscando, setBuscando] = useState(false)
   const [semRegistro, setSemRegistro] = useState(false)
+  const [ehDeducao, setEhDeducao] = useState(false)
 
-  // O login e o que a pessoa digita para entrar. Conta interna mostra a parte antes do
-  // arroba; conta com e-mail real mostra o e-mail, que e o proprio login dela.
-  const login = usuario.email.endsWith('@operador.local')
-    ? usuario.email.split('@')[0]
-    : usuario.email
+  // O login e o que a pessoa digita para entrar. Conta interna usa a parte antes do
+  // arroba; conta com e-mail real usa o proprio e-mail.
+  const contaInterna = usuario.email.endsWith('@operador.local')
+  const login = contaInterna ? usuario.email.split('@')[0] : usuario.email
 
   const aindaProvisoria = usuario.troca_senha_obrigatoria
 
+  /**
+   * O registro do banco tem prioridade sobre a deducao, sempre.
+   *
+   * A primeira versao deduzia "troca_senha_obrigatoria, logo a senha e 123456", e isso
+   * MENTE: quando o administrador redefine para outra coisa, a marca continua ligada e a
+   * senha nao e mais a provisoria. Uma tela que mostra senha errada e pior que uma tela
+   * que nao mostra senha nenhuma, porque manda a pessoa tentar e falhar sem saber por que.
+   *
+   * A deducao so entra quando nao ha registro E a marca esta ligada, e mesmo assim o
+   * rotulo diz que e o padrao de fabrica, nao um fato confirmado.
+   */
   const revelar = async () => {
-    // Provisoria e constante conhecida do sistema: nao precisa ir ao banco buscar.
-    if (aindaProvisoria) { setRevelada(SENHA_PROVISORIA); return }
     setBuscando(true)
     setSemRegistro(false)
     try {
       const sb = createClient()
       const { data, error } = await sb.rpc('ler_credencial', { p_usuario_id: usuario.id })
       if (error) throw new Error(error.message)
-      if (data) setRevelada(data as string)
-      else setSemRegistro(true)
+      if (data) { setRevelada(data as string); setEhDeducao(false); return }
+      if (aindaProvisoria) { setRevelada(SENHA_PROVISORIA); setEhDeducao(true); return }
+      setSemRegistro(true)
     } catch {
       setSemRegistro(true)
     } finally {
@@ -95,17 +105,35 @@ function CelulaCredencial({
 
   return (
     <div>
+      {/* E-mail e login lado a lado. Para conta com e-mail real os dois sao a mesma
+          coisa e mostrar duas vezes seria ruido, entao a linha do login so aparece
+          quando ela de fato acrescenta informacao. */}
       <div className="flex items-center gap-1.5">
-        <code className="text-xs font-mono" style={{ color: '#1A2F4A' }}>{login}</code>
+        <code className="text-xs font-mono" style={{ color: '#1A2F4A' }}>{usuario.email}</code>
         <button
-          onClick={() => navigator.clipboard.writeText(login)}
+          onClick={() => navigator.clipboard.writeText(usuario.email)}
           className="p-1 rounded opacity-0 hover:opacity-100 transition-opacity"
-          title="Copiar login"
+          title="Copiar e-mail"
           style={{ color: '#6B7E8A' }}
         >
           <Copy size={11} />
         </button>
       </div>
+
+      {contaInterna && (
+        <div className="flex items-center gap-1.5 mt-0.5">
+          <span className="text-[9px] font-black uppercase tracking-wider" style={{ color: '#A8B8C2' }}>login</span>
+          <code className="text-[11px] font-mono font-bold" style={{ color: '#1A2F4A' }}>{login}</code>
+          <button
+            onClick={() => navigator.clipboard.writeText(login)}
+            className="p-0.5 rounded"
+            title="Copiar login"
+            style={{ color: '#6B7E8A' }}
+          >
+            <Copy size={10} />
+          </button>
+        </div>
+      )}
 
       {souAdministrador ? (
         <div className="flex items-center gap-1 mt-0.5 flex-wrap">
@@ -117,10 +145,19 @@ function CelulaCredencial({
                 className="p-0.5 rounded" title="Copiar senha" style={{ color: '#6B7E8A' }}>
                 <Copy size={10} />
               </button>
-              <button onClick={() => setRevelada(null)}
+              <button onClick={() => { setRevelada(null); setEhDeducao(false) }}
                 className="p-0.5 rounded" title="Ocultar senha" style={{ color: '#6B7E8A' }}>
                 <EyeOff size={11} />
               </button>
+              {/* Deducao nao e fato: a marca de "troca obrigatoria" continua ligada
+                  depois de o administrador redefinir para outra senha, entao aqui a tela
+                  diz o que sabe e o que apenas supoe. */}
+              {ehDeducao && (
+                <span className="text-[9px] w-full leading-snug" style={{ color: '#A8B8C2' }}>
+                  padrão de fábrica, ainda não trocado. Se não funcionar, foi redefinida
+                  fora desta tela: use redefinir.
+                </span>
+              )}
             </>
           ) : semRegistro ? (
             <>

@@ -6,7 +6,7 @@ import { Plus, Search, Eye, Pencil, ArrowRight, MapPin, Clock, Truck, CheckCircl
 import { printEscolta } from '@/utils/print'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
-import { PODE_CRIAR_ESCOLTA } from '@/lib/permissions'
+import { PODE_CRIAR_ESCOLTA, PODE_EDITAR_ESCOLTA } from '@/lib/permissions'
 
 interface EscoltaRow {
   id: string
@@ -130,6 +130,7 @@ export default function EscoltasPage() {
   useEffect(() => { carregar() }, [carregar])
 
   const ehOperador = perfil === 'operador'
+  const podeEditar = PODE_EDITAR_ESCOLTA.includes(perfil)
 
   /** Puxa a escolta para si. Quem valida de verdade e a RPC, que trava a linha. */
   const puxar = async (id: string) => {
@@ -289,6 +290,11 @@ export default function EscoltasPage() {
                         >
                           <Eye size={14} />
                         </button>
+                        {/* Editar so aparece para gestao e so enquanto a escolta nao
+                            comecou. Mostrar para operador seria oferecer um caminho que a
+                            trigger do banco recusa, e mostrar em escolta iniciada levaria
+                            a uma tela que abre so para dizer que nao da. */}
+                        {podeEditar && ['rascunho', 'agendada'].includes(e.status) && (
                         <button
                           onClick={() => router.push(`/dashboard/escoltas/nova?editar=${e.id}`)}
                           className="flex items-center justify-center transition-all"
@@ -300,6 +306,7 @@ export default function EscoltasPage() {
                         >
                           <Pencil size={13} />
                         </button>
+                        )}
                         <button
                           onClick={() => printEscolta(e.id)}
                           className="flex items-center justify-center transition-all"
@@ -402,15 +409,17 @@ export default function EscoltasPage() {
                     <Eye size={14} />
                     Ver
                   </button>
-                  <button
-                    onClick={() => router.push(`/dashboard/escoltas/nova?editar=${e.id}`)}
-                    className="flex-1 flex items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors"
-                    style={{ minHeight: '44px', backgroundColor: '#EBF7F1', color: '#1E7C52' }}
-                    aria-label="Editar escolta"
-                  >
-                    <Pencil size={13} />
-                    Editar
-                  </button>
+                  {podeEditar && ['rascunho', 'agendada'].includes(e.status) && (
+                    <button
+                      onClick={() => router.push(`/dashboard/escoltas/nova?editar=${e.id}`)}
+                      className="flex-1 flex items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors"
+                      style={{ minHeight: '44px', backgroundColor: '#EBF7F1', color: '#1E7C52' }}
+                      aria-label="Editar escolta"
+                    >
+                      <Pencil size={13} />
+                      Editar
+                    </button>
+                  )}
                   <button
                     onClick={() => printEscolta(e.id)}
                     className="flex items-center justify-center rounded-lg transition-colors"

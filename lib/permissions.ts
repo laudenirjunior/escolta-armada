@@ -13,8 +13,18 @@ export type CodigoPerfil = typeof PERFIS[keyof typeof PERFIS]
 
 // ── Permissões por funcionalidade ─────────────────────────────────────────────
 
-/** Pode criar nova escolta */
-export const PODE_CRIAR_ESCOLTA: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor']
+/** Pode criar nova escolta. Central entrou por decisao de Pecanha em 2026-08-20. */
+export const PODE_CRIAR_ESCOLTA: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor', 'central']
+
+/**
+ * Pode editar uma escolta que ainda nao comecou: cliente, data, local, viatura, efetivo.
+ *
+ * Operador fica de fora de proposito. Ele pode PUXAR uma escolta agendada e incluir o
+ * companheiro de viatura, mas nao altera o que foi contratado. A regra tambem esta no
+ * banco, na trigger `impedir_edicao_por_operador` (migration 191): esta lista serve para
+ * a tela nao oferecer um botao que o banco vai recusar.
+ */
+export const PODE_EDITAR_ESCOLTA: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor', 'central']
 
 /** Pode cancelar/reagendar uma escolta */
 export const PODE_CANCELAR_ESCOLTA: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor']

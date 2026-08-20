@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
+import { PODE_CRIAR_ESCOLTA, type CodigoPerfil } from '@/lib/permissions'
 
 interface Resumo {
   escoltas_ativas: number
@@ -150,11 +151,16 @@ export default function DashboardPage() {
             })}
           </p>
         </div>
-        <Link href="/dashboard/escoltas/nova" className="btn-gradient shrink-0 text-xs md:text-sm px-3 md:px-4 py-2 md:py-2.5">
-          <Shield size={14} />
-          <span className="hidden sm:inline">Nova Escolta</span>
-          <span className="sm:hidden">Nova</span>
-        </Link>
+        {/* Criar escolta e ato de gestao. Este botao nao tinha guarda nenhuma, entao o
+            operador via "Nova Escolta" no painel e caia num formulario que o banco nao
+            deixaria salvar. */}
+        {PODE_CRIAR_ESCOLTA.includes((user?.perfil?.codigo ?? '') as CodigoPerfil) && (
+          <Link href="/dashboard/escoltas/nova" className="btn-gradient shrink-0 text-xs md:text-sm px-3 md:px-4 py-2 md:py-2.5">
+            <Shield size={14} />
+            <span className="hidden sm:inline">Nova Escolta</span>
+            <span className="sm:hidden">Nova</span>
+          </Link>
+        )}
       </div>
 
       {/* ── KPI cards ── */}
