@@ -117,6 +117,58 @@ export const CAMPOS_SEM_TEXTO_PADRAO = [
 ] as const
 
 /**
+ * Modelo do relatorio final, por decisao de Pecanha em 2026-08-19.
+ *
+ * Vem preenchido e editavel. Diferente dos outros textos padrao, este monta as linhas
+ * com os dados reais da escolta: um relatorio que so diz "sem alteracao" nao serve como
+ * documento para o cliente, enquanto um que ja traz trajeto, horarios e equipe da ao
+ * supervisor uma base para completar em vez de uma folha em branco.
+ *
+ * Consequencia assumida: o campo tinha `if (!relatorioFinal.trim())` como unica barreira,
+ * e vir preenchido faz essa barreira deixar de recusar qualquer coisa. A escolha e de
+ * Pecanha, pela agilidade de fechar a escolta em campo.
+ */
+export function modeloRelatorioFinal(dados: {
+  codigo?: string | null
+  cliente?: string | null
+  origem?: string | null
+  destino?: string | null
+  inicio?: string | null
+  fim?: string | null
+  equipe?: string[]
+  viaturas?: string[]
+  ocorrencias?: number
+  paradas?: number
+}): string {
+  const hora = (v?: string | null) =>
+    v ? new Date(v).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : 'não registrado'
+
+  const linhas = [
+    `RELATÓRIO FINAL${dados.codigo ? ` - ${dados.codigo}` : ''}`,
+    '',
+    `Cliente: ${dados.cliente || 'não informado'}`,
+    `Origem: ${dados.origem || 'não informada'}`,
+    `Destino: ${dados.destino || 'não informado'}`,
+    `Início: ${hora(dados.inicio)}`,
+    `Término: ${hora(dados.fim)}`,
+  ]
+
+  if (dados.viaturas?.length) linhas.push(`Viatura(s): ${dados.viaturas.join(', ')}`)
+  if (dados.equipe?.length) linhas.push(`Equipe: ${dados.equipe.join(', ')}`)
+
+  linhas.push('')
+  linhas.push(
+    dados.ocorrencias
+      ? `Ocorrências registradas: ${dados.ocorrencias}. Descrever abaixo o desfecho de cada uma.`
+      : 'Escolta realizada sem alterações. Nenhuma ocorrência registrada.'
+  )
+  if (dados.paradas) linhas.push(`Paradas no trajeto: ${dados.paradas}.`)
+  linhas.push('Carga entregue no destino e viatura recolhida à base sem intercorrências.')
+
+  return linhas.join('\n')
+}
+
+/**
  * Verdadeiro quando o texto e exatamente o padrao daquela etapa, ou seja, o operador
  * nao escreveu nada de proprio.
  *

@@ -38,6 +38,130 @@ interface UsuarioRow {
   perfil: Perfil | null
 }
 
+/**
+ * Login e senha no lugar do e-mail, por decisao de Pecanha em 2026-08-19.
+ *
+ * SOBRE A SENHA, o limite e fisico e nao de permissao: `auth.users` guarda bcrypt de mao
+ * unica, entao NINGUEM le a senha ja definida, nem o administrador, nem o Supabase. O que
+ * da para fazer sao duas coisas:
+ *
+ *   1. Enquanto o usuario nao trocar, a senha E a provisoria conhecida. A tela deriva isso
+ *      de `troca_senha_obrigatoria`, sem precisar guardar senha nenhuma.
+ *   2. Depois que ele troca, a senha nova fica em `usuarios_credenciais`, gravada pela RPC
+ *      `registrar_credencial`. So administrador le, pela RPC `ler_credencial`, que registra
+ *      cada consulta em `logs_auditoria`.
+ *
+ * As senhas definidas antes de 19/08/2026 nao aparecem: nunca foram guardadas em texto e
+ * nao ha como recuperar. Nesses casos sobra redefinir.
+ */
+function CelulaCredencial({
+  usuario,
+  souAdministrador,
+  onRedefinir,
+}: {
+  usuario: UsuarioRow
+  souAdministrador: boolean
+  onRedefinir: (u: UsuarioRow) => void
+}) {
+  const [revelada, setRevelada] = useState<string | null>(null)
+  const [buscando, setBuscando] = useState(false)
+  const [semRegistro, setSemRegistro] = useState(false)
+
+  // O login e o que a pessoa digita para entrar. Conta interna mostra a parte antes do
+  // arroba; conta com e-mail real mostra o e-mail, que e o proprio login dela.
+  const login = usuario.email.endsWith('@operador.local')
+    ? usuario.email.split('@')[0]
+    : usuario.email
+
+  const aindaProvisoria = usuario.troca_senha_obrigatoria
+
+  const revelar = async () => {
+    // Provisoria e constante conhecida do sistema: nao precisa ir ao banco buscar.
+    if (aindaProvisoria) { setRevelada(SENHA_PROVISORIA); return }
+    setBuscando(true)
+    setSemRegistro(false)
+    try {
+      const sb = createClient()
+      const { data, error } = await sb.rpc('ler_credencial', { p_usuario_id: usuario.id })
+      if (error) throw new Error(error.message)
+      if (data) setRevelada(data as string)
+      else setSemRegistro(true)
+    } catch {
+      setSemRegistro(true)
+    } finally {
+      setBuscando(false)
+    }
+  }
+
+  return (
+    <div>
+      <div className="flex items-center gap-1.5">
+        <code className="text-xs font-mono" style={{ color: '#1A2F4A' }}>{login}</code>
+        <button
+          onClick={() => navigator.clipboard.writeText(login)}
+          className="p-1 rounded opacity-0 hover:opacity-100 transition-opacity"
+          title="Copiar login"
+          style={{ color: '#6B7E8A' }}
+        >
+          <Copy size={11} />
+        </button>
+      </div>
+
+      {souAdministrador ? (
+        <div className="flex items-center gap-1 mt-0.5 flex-wrap">
+          {revelada ? (
+            <>
+              <code className="text-[11px] font-mono px-1 rounded"
+                style={{ backgroundColor: '#FFF7E6', color: '#8A6100' }}>{revelada}</code>
+              <button onClick={() => navigator.clipboard.writeText(revelada)}
+                className="p-0.5 rounded" title="Copiar senha" style={{ color: '#6B7E8A' }}>
+                <Copy size={10} />
+              </button>
+              <button onClick={() => setRevelada(null)}
+                className="p-0.5 rounded" title="Ocultar senha" style={{ color: '#6B7E8A' }}>
+                <EyeOff size={11} />
+              </button>
+            </>
+          ) : semRegistro ? (
+            <>
+              <span className="text-[10px]" style={{ color: '#A8B8C2' }}>
+                senha trocada pelo usuário, não recuperável
+              </span>
+              <button onClick={() => onRedefinir(usuario)}
+                className="text-[10px] font-semibold underline" style={{ color: '#2166A8' }}>
+                redefinir
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="text-[10px]" style={{ color: '#A8B8C2' }}>••••••••••</span>
+              <button onClick={revelar} disabled={buscando}
+                className="p-0.5 rounded" title="Mostrar senha" style={{ color: '#6B7E8A' }}>
+                <Eye size={11} />
+              </button>
+              {aindaProvisoria && (
+                <span className="text-[9px] font-semibold px-1 py-0.5 rounded"
+                  style={{ backgroundColor: '#FFF7E6', color: '#8A6100' }}>PROVISÓRIA</span>
+              )}
+            </>
+          )}
+        </div>
+      ) : (
+        <div className="flex items-center gap-1 mt-0.5">
+          <span className="text-[10px]" style={{ color: '#A8B8C2' }}>••••••••••</span>
+          {usuario.auth_user_id ? (
+            <span className="text-[9px] font-semibold px-1 py-0.5 rounded"
+              style={{ backgroundColor: '#EBF5F1', color: '#1E7C52' }}>AUTH ATIVO</span>
+          ) : (
+            <span className="text-[9px] font-semibold px-1 py-0.5 rounded"
+              style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>SEM AUTH</span>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 interface FormData {
   nome_completo: string
   email: string
@@ -216,12 +340,34 @@ export default function UsuariosPage() {
   const confirmarReset = async () => {
     if (!resetando || !novaSenhaReset.trim()) return
     setSavingReset(true)
+    setErro('')
+    const senha = novaSenhaReset.trim()
+    // Apesar do nome do parametro, esta RPC espera o auth_user_id, e nao usuarios.id.
     const { error } = await sb.rpc('redefinir_senha_usuario', {
-      p_usuario_id: resetando.auth_user_id,
-      p_nova_senha: novaSenhaReset.trim(),
+      p_usuario_id: resetando.auth_user_id as string,
+      p_nova_senha: senha,
     })
-    if (!error) { setResetando(null); setNovaSenhaReset('') }
+    if (error) {
+      // Antes o erro era engolido e o dialogo fechava como se tivesse dado certo.
+      setErro(error.message ?? 'Não foi possível redefinir a senha.')
+      setSavingReset(false)
+      return
+    }
+    // Guarda a senha para o administrador poder consultar depois. Se falhar, a senha
+    // ja foi trocada e funciona: o que se perde e a consulta futura, entao avisa em vez
+    // de fingir que nada aconteceu.
+    const { error: credErr } = await sb.rpc('registrar_credencial', {
+      p_usuario_id: resetando.id,
+      p_senha: senha,
+      p_provisoria: senha === SENHA_PROVISORIA,
+    })
+    if (credErr) {
+      setErro('Senha redefinida, mas não foi possível guardá-la para consulta: ' + credErr.message)
+    }
+    setResetando(null)
+    setNovaSenhaReset('')
     setSavingReset(false)
+    await carregar()
   }
 
   const toggleStatus = async (u: UsuarioRow) => {
@@ -452,30 +598,12 @@ export default function UsuariosPage() {
                   </div>
                 </div>
 
-                {/* E-mail */}
-                <div>
-                  <div className="flex items-center gap-1.5">
-                    <code className="text-xs font-mono" style={{ color: '#1A2F4A' }}>{u.email}</code>
-                    <button
-                      onClick={() => navigator.clipboard.writeText(u.email)}
-                      className="p-1 rounded opacity-0 hover:opacity-100 transition-opacity"
-                      title="Copiar e-mail"
-                      style={{ color: '#6B7E8A' }}
-                    >
-                      <Copy size={11} />
-                    </button>
-                  </div>
-                  <div className="flex items-center gap-1 mt-0.5">
-                    <span className="text-[10px]" style={{ color: '#A8B8C2' }}>••••••••••</span>
-                    {u.auth_user_id ? (
-                      <span className="text-[9px] font-semibold px-1 py-0.5 rounded"
-                        style={{ backgroundColor: '#EBF5F1', color: '#1E7C52' }}>AUTH ATIVO</span>
-                    ) : (
-                      <span className="text-[9px] font-semibold px-1 py-0.5 rounded"
-                        style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>SEM AUTH</span>
-                    )}
-                  </div>
-                </div>
+                {/* Login e senha, no lugar do e-mail interno */}
+                <CelulaCredencial
+                  usuario={u}
+                  souAdministrador={perfilAtual === 'administrador'}
+                  onRedefinir={(alvo) => { setResetando(alvo); setNovaSenhaReset(SENHA_PROVISORIA) }}
+                />
 
                 {/* Perfil */}
                 <div>

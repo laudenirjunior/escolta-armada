@@ -34,6 +34,7 @@ import {
   PLACEHOLDER,
   ehTextoPadrao,
   comporObservacao,
+  modeloRelatorioFinal,
 } from '@/lib/textos-padrao'
 import { serializarObservacao, lerObservacao, fotoIdsDoPonto } from '@/lib/pontos-controle'
 
@@ -3433,6 +3434,21 @@ export default function EscoltaDetalhePage() {
                 // fechar o dialogo. Sem zerar aqui, reabrir mostra os widgets vazios
                 // com o cabecalho verde e o contador em 5 de 5, e envia as fotos velhas.
                 setFotosViaturaFinal(Object.fromEntries(FOTOS_VIATURA_DEF.map(fv => [fv.key, null])))
+                // Relatorio ja preenchido com os dados reais da escolta, editavel.
+                // Decisao de Pecanha: folha em branco no fim da operacao atrasa o
+                // fechamento e produz relatorio pior do que um modelo para completar.
+                setRelatorioFinal(modeloRelatorioFinal({
+                  codigo: escolta.codigo_escolta,
+                  cliente: escolta.cliente?.nome_cliente,
+                  origem: escolta.origem_endereco,
+                  destino: escolta.destino_endereco,
+                  inicio: timeline.find(t => t.tipo === 'status')?.data_hora ?? escolta.data_hora_prevista,
+                  fim: new Date().toISOString(),
+                  equipe: viaturas.flatMap(v => v.efetivo.map(e => e.vigilante?.nome_completo ?? '')).filter(Boolean),
+                  viaturas: viaturas.map(v => v.veiculo?.placa ?? '').filter(Boolean),
+                  ocorrencias: ocorrencias.length,
+                  paradas: paradas.length,
+                }))
                 setDialogFinalizacao(true)
                 setFinalizacaoAbertoEm(new Date().toISOString())
               }}

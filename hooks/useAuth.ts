@@ -38,8 +38,23 @@ export function useAuth() {
         .eq('id', u.perfil_id)
         .maybeSingle() as any
 
-      // atualiza último acesso sem bloquear
-      ;(supabase as any).from('usuarios').update({ ultimo_acesso: new Date().toISOString() }).eq('id', u.id)
+      // Ultimo acesso, COM await.
+      //
+      // Antes era promessa solta, sem await. O PostgREST do supabase-js so dispara a
+      // requisicao quando a promessa e consumida, entao o UPDATE muitas vezes nunca saia:
+      // em 19/08/2026, quatro dos cinco usuarios ja tinham entrado no sistema e a tela de
+      // usuarios mostrava "Nunca acessou" para todos eles.
+      //
+      // Falha aqui nao pode derrubar o login: quem entrou, entrou. O que se perde e a
+      // data na tela de governanca.
+      try {
+        await (supabase as any)
+          .from('usuarios')
+          .update({ ultimo_acesso: new Date().toISOString() })
+          .eq('id', u.id)
+      } catch {
+        // silencioso de proposito: ver comentario acima
+      }
 
       return {
         ...u,
@@ -135,6 +150,24 @@ export function useAuth() {
       if (err) throw err
       if (user) {
         await (supabase as any).from('usuarios').update({ troca_senha_obrigatoria: false }).eq('id', user.id)
+
+        // Guarda a senha para o administrador poder consultar depois, decisao de Pecanha
+        // em 2026-08-19. Este e o UNICO momento em que a senha nova existe em texto no
+        // aplicativo: `auth.users` so guarda o bcrypt, e dele nao se volta.
+        //
+        // Falha aqui nao derruba a troca: a senha nova ja esta valendo e o usuario
+        // consegue entrar. O que se perde e a consulta futura pelo administrador, e para
+        // esse caso a tela dele oferece redefinir.
+        try {
+          await (supabase as any).rpc('registrar_credencial', {
+            p_usuario_id: user.id,
+            p_senha: newPassword,
+            p_provisoria: false,
+          })
+        } catch {
+          // silencioso de proposito: ver comentario acima
+        }
+
         setUser({ ...user, troca_senha_obrigatoria: false })
       }
     } catch (err) {

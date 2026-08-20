@@ -1846,8 +1846,40 @@ export type Database = {
       get_meu_vigilante_id: { Args: never; Returns: string }
       perfil_usuario_atual: { Args: never; Returns: string }
       redefinir_senha_usuario: {
+        // Atencao: apesar do nome, p_usuario_id espera o auth_user_id, nao usuarios.id.
         Args: { p_nova_senha: string; p_usuario_id: string }
         Returns: undefined
+      }
+      criar_usuario_por_login: {
+        Args: {
+          p_cpf: string
+          p_nome: string
+          p_perfil_id: string
+          p_telefone: string | null
+        }
+        Returns: { login: string; senha: string; usuario_id: string }
+      }
+      // Credencial em texto, decisao de Pecanha em 2026-08-19. Ver migration 190.
+      registrar_credencial: {
+        Args: { p_provisoria?: boolean; p_senha: string; p_usuario_id: string }
+        Returns: undefined
+      }
+      ler_credencial: {
+        Args: { p_usuario_id: string }
+        Returns: string | null
+      }
+      // Mural de escoltas e auto-escala do operador. Ver migrations 191 e 192.
+      puxar_escolta: {
+        Args: { p_escolta_id: string }
+        Returns: { ok: boolean; escolta_veiculo_id: string }
+      }
+      devolver_escolta: {
+        Args: { p_escolta_id: string }
+        Returns: { ok: boolean }
+      }
+      incluir_vigilante_na_minha_escolta: {
+        Args: { p_escolta_id: string; p_vigilante_id: string }
+        Returns: { ok: boolean }
       }
     }
     Enums: {
