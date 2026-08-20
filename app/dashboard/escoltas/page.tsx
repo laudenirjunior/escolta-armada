@@ -290,7 +290,7 @@ export default function EscoltasPage() {
                           <Eye size={14} />
                         </button>
                         <button
-                          onClick={() => router.push(`/dashboard/escoltas/${e.id}?acao=editar`)}
+                          onClick={() => router.push(`/dashboard/escoltas/nova?editar=${e.id}`)}
                           className="flex items-center justify-center transition-all"
                           style={{ color: '#6B7E8A', width: '36px', height: '36px', borderRadius: '2px' }}
                           onMouseEnter={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = '#EBF7F1'; (ev.currentTarget as HTMLElement).style.color = '#1E7C52' }}
@@ -403,7 +403,7 @@ export default function EscoltasPage() {
                     Ver
                   </button>
                   <button
-                    onClick={() => router.push(`/dashboard/escoltas/${e.id}?acao=editar`)}
+                    onClick={() => router.push(`/dashboard/escoltas/nova?editar=${e.id}`)}
                     className="flex-1 flex items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors"
                     style={{ minHeight: '44px', backgroundColor: '#EBF7F1', color: '#1E7C52' }}
                     aria-label="Editar escolta"

@@ -1,7 +1,7 @@
 ﻿'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
-import { useRouter } from 'next/navigation'
+import { useEffect, useState, useCallback, useRef, Suspense } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import {
   ArrowLeft, ArrowRight, Plus, Trash2, CheckCircle,
   MapPin, Flag, FileText, Briefcase, Radio, Building2,
@@ -97,6 +97,22 @@ const OBS_PADRAO = `Verificar na saída: (1) documentação do veículo e carga,
 // apartamento, o portão ou a doca sem descobrir o resto por rádio.
 const enderecoComComplemento = (endereco: string, complemento: string) =>
   [endereco.trim(), complemento.trim()].filter(Boolean).join(', ')
+
+/**
+ * O endereco vai concatenado com o complemento para a coluna, porque e assim que ele
+ * precisa aparecer no mapa, no relatorio e na tela do operador. Mas o complemento
+ * TAMBEM e guardado separado em `metadados`, e e de la que a edicao o recupera.
+ *
+ * O motivo e que separar de volta pela virgula seria adivinhacao: o endereco do Mapbox
+ * ja vem cheio de virgulas ("Rua X, 100 - Centro, Jacarei - Sao Paulo, 12310, Brasil"),
+ * entao nao ha como saber qual delas marca o inicio do complemento. Guardar a parte
+ * separada custa um campo em JSON e elimina o palpite.
+ */
+interface ComplementosSalvos {
+  origem_complemento?: string
+  destino_complemento?: string
+  observacoes?: string
+}
 
 // ─── Autocomplete de Endereço (Mapbox Geocoding) ──────────────────────────────
 interface MapboxFeature {
@@ -304,7 +320,25 @@ function AddressAutocomplete({
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
+
+/**
+ * `useSearchParams` obriga a um limite de Suspense no App Router: sem ele, o
+ * `next build` falha na pre-renderizacao desta rota. O componente de dentro e quem le
+ * o parametro `editar`.
+ */
 export default function NovaEscoltaPage() {
+  return (
+    <Suspense fallback={
+      <div className="max-w-3xl mx-auto py-16 text-center">
+        <p className="text-sm" style={{ color: P.sub }}>Carregando…</p>
+      </div>
+    }>
+      <FormularioEscolta />
+    </Suspense>
+  )
+}
+
+function FormularioEscolta() {
   const router  = useRouter()
   const { user } = useAuth()
 
@@ -323,6 +357,21 @@ export default function NovaEscoltaPage() {
   const [clientes,    setClientes]    = useState<ClienteOpt[]>([])
   const [veiculos,    setVeiculos]    = useState<VeiculoOpt[]>([])
   const [vigilantes,  setVigilantes]  = useState<VigilanteOpt[]>([])
+
+  // ── Modo edicao ───────────────────────────────────────────────────────────
+  //
+  // Decisao de Pecanha em 2026-08-19: enquanto a escolta nao comecou, a gestao edita
+  // tudo, inclusive viatura, local e vigilante. Nao existia edicao nenhuma no sistema:
+  // o botao "Editar" da lista so abria a tela de detalhe.
+  //
+  // Esta tela e reaproveitada em vez de se criar uma segunda, porque ela ja tem o
+  // seletor de endereco corrigido, o campo de complemento, as viaturas e o efetivo.
+  // Duas telas com os mesmos campos divergem no primeiro ajuste que alguem esquecer
+  // de replicar, e este projeto ja pagou esse preco.
+  const params = useSearchParams()
+  const editandoId = params.get('editar')
+  const [carregandoEdicao, setCarregandoEdicao] = useState(!!editandoId)
+  const [bloqueioEdicao, setBloqueioEdicao] = useState<string | null>(null)
   const [valorCobrado, setValorCobrado] = useState('')
   const [outrosCustos, setOutrosCustos] = useState('')
   const [obsFinanceiro, setObsFinanceiro] = useState('')
@@ -341,6 +390,100 @@ export default function NovaEscoltaPage() {
   }, [])
 
   useEffect(() => { carregar() }, [carregar])
+
+  /**
+   * Carrega a escolta para edicao e desmonta o endereco de volta em base e complemento.
+   *
+   * O banco guarda os dois juntos numa coluna so, entao o complemento e reconhecido pelo
+   * separador usado na gravacao. Se o endereco nao tiver o separador, ele vai inteiro
+   * para o campo base e o complemento fica vazio, que e o comportamento certo para as
+   * escoltas criadas antes de o campo existir.
+   */
+  const carregarParaEdicao = useCallback(async () => {
+    if (!editandoId) return
+    setCarregandoEdicao(true)
+    try {
+      const { data: e, error } = await sb
+        .from('escoltas')
+        .select(`
+          id, cliente_id, status, data_hora_prevista, metadados,
+          origem_endereco, origem_lat, origem_lng,
+          destino_endereco, destino_lat, destino_lng,
+          periodicidade_checkin_min, valor_cobrado, outros_custos, observacao_financeira,
+          veiculos:escolta_veiculos(
+            id, veiculo_id,
+            efetivo:escolta_efetivo(id, vigilante_id, papel_na_escolta, valor_pago_vigilante)
+          )
+        `)
+        .eq('id', editandoId)
+        .maybeSingle()
+
+      if (error) throw new Error(error.message)
+      if (!e) { setBloqueioEdicao('Escolta não encontrada.'); return }
+
+      // A trava real esta no banco; aqui e so para nao abrir um formulario que nao vai
+      // conseguir salvar.
+      if (!['rascunho', 'agendada'].includes(e.status)) {
+        setBloqueioEdicao('Esta escolta já começou e não pode mais ser editada. Para corrigir algo, fale com a gestão.')
+        return
+      }
+
+      const dt = new Date(e.data_hora_prevista)
+      const meta = (e.metadados ?? {}) as ComplementosSalvos
+
+      // O complemento vem de `metadados`, nao de dividir o endereco pela virgula: o
+      // endereco do Mapbox ja tem virgulas proprias e nao ha como distinguir.
+      // Escolta criada antes deste campo existir simplesmente vem sem complemento, com
+      // o endereco inteiro no campo base, que e o correto.
+      const origComp = meta.origem_complemento ?? ''
+      const destComp = meta.destino_complemento ?? ''
+      const tirarSufixo = (completo: string, comp: string) =>
+        comp && completo.endsWith(`, ${comp}`)
+          ? completo.slice(0, -(comp.length + 2))
+          : completo
+
+      setDados({
+        cliente_id: e.cliente_id ?? '',
+        data_prevista: dt.toISOString().slice(0, 10),
+        hora_prevista_h: String(dt.getHours()).padStart(2, '0'),
+        hora_prevista_m: String(dt.getMinutes()).padStart(2, '0'),
+        origem_endereco: tirarSufixo(e.origem_endereco ?? '', origComp),
+        origem_complemento: origComp,
+        origem_lat: Number(e.origem_lat ?? 0), origem_lng: Number(e.origem_lng ?? 0),
+        destino_endereco: tirarSufixo(e.destino_endereco ?? '', destComp),
+        destino_complemento: destComp,
+        destino_lat: Number(e.destino_lat ?? 0), destino_lng: Number(e.destino_lng ?? 0),
+        observacoes: meta.observacoes ?? '',
+      })
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const vts = (e.veiculos ?? []) as any[]
+      setViaturas(vts.length
+        ? vts.map((v) => ({
+            uid: uid(),
+            veiculo_id: v.veiculo_id ?? '',
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            membros: (v.efetivo ?? []).map((m: any) => ({
+              uid: uid(),
+              vigilante_id: m.vigilante_id ?? '',
+              papel_na_escolta: (m.papel_na_escolta === 'comandante' ? 'comandante' : 'operador') as 'comandante' | 'operador',
+              valor_pago: m.valor_pago_vigilante != null ? String(m.valor_pago_vigilante) : '',
+            })),
+          }))
+        : [novaViatura()])
+
+      setPeriodicidadeCheckin(e.periodicidade_checkin_min != null ? String(e.periodicidade_checkin_min) : '30')
+      setValorCobrado(e.valor_cobrado != null ? String(e.valor_cobrado) : '')
+      setOutrosCustos(e.outros_custos != null ? String(e.outros_custos) : '')
+      setObsFinanceiro(e.observacao_financeira ?? '')
+    } catch (err) {
+      setBloqueioEdicao(err instanceof Error ? err.message : 'Não foi possível carregar a escolta.')
+    } finally {
+      setCarregandoEdicao(false)
+    }
+  }, [editandoId])
+
+  useEffect(() => { carregarParaEdicao() }, [carregarParaEdicao])
 
   // ── Validações ────────────────────────────────────────────────────────────
   const validar1 = () => {
@@ -388,36 +531,76 @@ export default function NovaEscoltaPage() {
     try {
       const dtStr = `${dados.data_prevista}T${dados.hora_prevista_h}:${dados.hora_prevista_m}:00`
 
-      const { data: nova, error: e1 } = await sb
-        .from('escoltas')
-        .insert({
-          cliente_id:          dados.cliente_id,
-          data_hora_prevista:  new Date(dtStr).toISOString(),
-          data_solicitacao:    new Date().toISOString(),
-          status:              'agendada',
-          origem_endereco:     enderecoComComplemento(dados.origem_endereco, dados.origem_complemento),
-          origem_lat:          dados.origem_lat,
-          origem_lng:          dados.origem_lng,
-          destino_endereco:    enderecoComComplemento(dados.destino_endereco, dados.destino_complemento),
-          destino_lat:         dados.destino_lat,
-          destino_lng:         dados.destino_lng,
-          metadados:           dados.observacoes.trim() ? { observacoes: dados.observacoes.trim() } : null,
-          checklist_pendente_no_inicio: true,
-          periodicidade_checkin_min: periodicidadeCheckin ? Number(periodicidadeCheckin) : null,
-          criada_por:          user?.id,
-          valor_cobrado:       verFinanceiro && valorCobrado ? parseFloat(valorCobrado) : null,
-          outros_custos:       verFinanceiro && outrosCustos ? parseFloat(outrosCustos) : 0,
-          observacao_financeira: verFinanceiro && obsFinanceiro.trim() ? obsFinanceiro.trim() : null,
-        })
-        .select('id').single()
+      // O complemento vai junto no endereco, para aparecer no mapa e no relatorio, E
+      // separado em metadados, para a edicao conseguir recuperar sem adivinhar onde ele
+      // comeca. Ver o comentario de ComplementosSalvos.
+      const meta: ComplementosSalvos = {}
+      if (dados.observacoes.trim()) meta.observacoes = dados.observacoes.trim()
+      if (dados.origem_complemento.trim()) meta.origem_complemento = dados.origem_complemento.trim()
+      if (dados.destino_complemento.trim()) meta.destino_complemento = dados.destino_complemento.trim()
 
-      if (e1 || !nova) throw new Error('Erro ao criar a escolta.')
+      const camposEscolta = {
+        cliente_id:          dados.cliente_id,
+        data_hora_prevista:  new Date(dtStr).toISOString(),
+        origem_endereco:     enderecoComComplemento(dados.origem_endereco, dados.origem_complemento),
+        origem_lat:          dados.origem_lat,
+        origem_lng:          dados.origem_lng,
+        destino_endereco:    enderecoComComplemento(dados.destino_endereco, dados.destino_complemento),
+        destino_lat:         dados.destino_lat,
+        destino_lng:         dados.destino_lng,
+        metadados:           Object.keys(meta).length ? meta : null,
+        periodicidade_checkin_min: periodicidadeCheckin ? Number(periodicidadeCheckin) : null,
+        valor_cobrado:       verFinanceiro && valorCobrado ? parseFloat(valorCobrado) : null,
+        outros_custos:       verFinanceiro && outrosCustos ? parseFloat(outrosCustos) : 0,
+        observacao_financeira: verFinanceiro && obsFinanceiro.trim() ? obsFinanceiro.trim() : null,
+      }
+
+      let escoltaId: string
+
+      if (editandoId) {
+        // A precondicao de status vive junto do update: se a escolta tiver comecado
+        // enquanto o formulario estava aberto, nenhuma linha casa e o salvamento para,
+        // em vez de sobrescrever dados de uma operacao em andamento.
+        const { data: atualizadas, error: eU } = await sb
+          .from('escoltas')
+          .update(camposEscolta)
+          .eq('id', editandoId)
+          .in('status', ['rascunho', 'agendada'])
+          .select('id')
+        if (eU) throw new Error(eU.message)
+        if (!atualizadas || atualizadas.length === 0) {
+          throw new Error('A escolta já começou enquanto você editava. Recarregue a página: as alterações não foram salvas.')
+        }
+        escoltaId = editandoId
+
+        // Viaturas e efetivo sao substituidos por inteiro. Trocar linha a linha exigiria
+        // casar o que ficou, o que saiu e o que entrou, e o ganho nao paga o risco de
+        // deixar vinculo orfao. Como a escolta ainda nao comecou, nao ha ponto de
+        // controle nem foto apontando para essas linhas.
+        await sb.from('escolta_efetivo').delete().eq('escolta_id', editandoId)
+        const { error: eDel } = await sb.from('escolta_veiculos').delete().eq('escolta_id', editandoId)
+        if (eDel) throw new Error('Não foi possível atualizar as viaturas: ' + eDel.message)
+      } else {
+        const { data: nova, error: e1 } = await sb
+          .from('escoltas')
+          .insert({
+            ...camposEscolta,
+            data_solicitacao: new Date().toISOString(),
+            status: 'agendada',
+            checklist_pendente_no_inicio: true,
+            criada_por: user?.id,
+          })
+          .select('id').single()
+
+        if (e1 || !nova) throw new Error('Erro ao criar a escolta.')
+        escoltaId = nova.id
+      }
 
       for (const v of viaturas) {
         const { data: ev, error: e2 } = await sb
           .from('escolta_veiculos')
           .insert({
-            escolta_id: nova.id,
+            escolta_id: escoltaId,
             veiculo_id: v.veiculo_id,
           })
           .select('id').single()
@@ -425,18 +608,21 @@ export default function NovaEscoltaPage() {
         if (e2 || !ev) throw new Error('Erro ao vincular viatura.')
 
         for (const m of v.membros) {
-          await sb.from('escolta_efetivo').insert({
-            escolta_id:         nova.id,
+          const { error: e3 } = await sb.from('escolta_efetivo').insert({
+            escolta_id:         escoltaId,
             escolta_veiculo_id: ev.id,
             vigilante_id:       m.vigilante_id,
             papel_na_escolta:   m.papel_na_escolta,
             confirmado:         false,
             valor_pago_vigilante: verFinanceiro && m.valor_pago ? parseFloat(m.valor_pago) : null,
           })
+          // Antes o erro era engolido: a escolta nascia com viatura e sem equipe, e
+          // ninguem ficava sabendo ate a hora de sair da base.
+          if (e3) throw new Error('Erro ao escalar vigilante: ' + e3.message)
         }
       }
 
-      router.push(`/dashboard/escoltas/${nova.id}`)
+      router.push(`/dashboard/escoltas/${escoltaId}`)
     } catch (err) {
       setErros([err instanceof Error ? err.message : 'Erro inesperado.'])
       setSalvando(false)
@@ -463,6 +649,32 @@ export default function NovaEscoltaPage() {
     : '—'
 
   // ── Render ────────────────────────────────────────────────────────────────
+
+  // Editando: nao renderiza o formulario antes de os dados chegarem, senao o usuario ve
+  // campos vazios por um instante e pode comecar a digitar por cima do que esta vindo.
+  if (carregandoEdicao) {
+    return (
+      <div className="max-w-3xl mx-auto py-16 text-center">
+        <p className="text-sm" style={{ color: P.sub }}>Carregando escolta para edição…</p>
+      </div>
+    )
+  }
+
+  if (bloqueioEdicao) {
+    return (
+      <div className="max-w-3xl mx-auto py-12 px-3">
+        <div className="p-5 text-center" style={{ border: `1px solid ${P.border}`, backgroundColor: P.surface }}>
+          <AlertTriangle size={26} className="mx-auto mb-3" style={{ color: '#C8813A' }} />
+          <p className="text-sm font-semibold mb-1" style={{ color: P.text }}>Não é possível editar</p>
+          <p className="text-xs leading-relaxed mb-5" style={{ color: P.sub }}>{bloqueioEdicao}</p>
+          <button onClick={() => router.back()} className="btn-outline">
+            <ArrowLeft size={14} /> Voltar
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="max-w-3xl mx-auto space-y-5 pb-10 px-3 md:px-0">
 
@@ -478,10 +690,23 @@ export default function NovaEscoltaPage() {
           <ArrowLeft size={15} />
         </button>
         <div>
-          <h2 className="text-lg font-black uppercase tracking-widest" style={{ color: P.text }}>Nova Escolta</h2>
+          <h2 className="text-lg font-black uppercase tracking-widest" style={{ color: P.text }}>
+            {editandoId ? 'Editar Escolta' : 'Nova Escolta'}
+          </h2>
           <p className="text-[11px] uppercase tracking-widest" style={{ color: P.sub }}>{STEPS[step-1]}</p>
         </div>
       </div>
+
+      {/* Editando: a escolta ja existe, entao vale avisar o que sera substituido. */}
+      {editandoId && !bloqueioEdicao && (
+        <div className="p-3" style={{ border: `1px solid ${P.border}`, backgroundColor: '#FFF7E6' }}>
+          <p className="text-[11px] leading-relaxed" style={{ color: '#8A6100' }}>
+            Você está alterando uma escolta que já existe. As viaturas e a equipe são
+            substituídas pelo que estiver aqui ao salvar. A edição só é possível enquanto
+            a escolta não começar.
+          </p>
+        </div>
+      )}
 
       {/* Stepper */}
       <div className="grid grid-cols-3 gap-2">
