@@ -500,20 +500,34 @@ function FormularioEscolta() {
     return e
   }
 
+  /**
+   * A equipe passou a ser OPCIONAL, e isso e o que faz o mural existir de verdade.
+   *
+   * Enquanto escalar vigilante era obrigatorio, toda escolta nascia com equipe, e o mural
+   * (que so mostra agendada SEM equipe) ficava permanentemente vazio: o operador nunca
+   * tinha o que puxar. O recurso existia e era inalcancavel.
+   *
+   * Agora: viatura continua obrigatoria, porque sem ela o operador nao consegue registrar
+   * ponto de controle nenhum e `puxar_escolta` recusa. Vigilante fica de fora: deixar em
+   * branco manda a escolta para o mural. Quem for preenchido, porem, tem de estar
+   * completo, e uma viatura com gente precisa de comandante.
+   */
   const validar2 = () => {
     const e: string[] = []
     if (!viaturas.length) { e.push('Adicione ao menos uma viatura.'); return e }
     viaturas.forEach((v, i) => {
-      if (!v.veiculo_id)   e.push(`Viatura ${i+1}: selecione o veículo.`)
-      if (!v.membros.length) e.push(`Viatura ${i+1}: adicione ao menos um vigilante.`)
+      if (!v.veiculo_id) e.push(`Viatura ${i+1}: selecione o veículo.`)
       v.membros.forEach((m, j) => {
-        if (!m.vigilante_id) e.push(`Viatura ${i+1}, membro ${j+1}: selecione o vigilante.`)
+        if (!m.vigilante_id) e.push(`Viatura ${i+1}, membro ${j+1}: selecione o vigilante ou remova a linha.`)
       })
-      if (!v.membros.some(m => m.papel_na_escolta === 'comandante'))
-        e.push(`Viatura ${i+1}: defina um Comandante.`)
+      if (v.membros.length > 0 && !v.membros.some(m => m.papel_na_escolta === 'comandante'))
+        e.push(`Viatura ${i+1}: defina um Comandante entre os vigilantes escalados.`)
     })
     return e
   }
+
+  /** Verdadeiro quando nenhuma viatura tem gente: a escolta vai para o mural. */
+  const iraParaOMural = viaturas.every(v => v.membros.length === 0)
 
   const avancar = () => {
     const e = step === 1 ? validar1() : step === 2 ? validar2() : []
@@ -1076,8 +1090,15 @@ function FormularioEscolta() {
                   </div>
 
                   {viatura.membros.length === 0 ? (
-                    <div className="py-6 text-center" style={{ border: `1.5px dashed ${P.border}`, borderRadius: '2px' }}>
-                      <p className="text-xs" style={{ color: P.sub }}>Nenhum vigilante escalado.</p>
+                    <div className="py-5 px-4 text-center" style={{ border: `1.5px dashed #C8813A`, borderRadius: '2px', backgroundColor: '#FFFBEB' }}>
+                      <p className="text-xs font-bold mb-1" style={{ color: '#8A5A10' }}>
+                        Sem vigilante escalado: vai para o mural
+                      </p>
+                      <p className="text-[11px] leading-relaxed" style={{ color: P.sub }}>
+                        Deixando em branco, esta escolta aparece para os operadores como
+                        disponível, e o primeiro que puxar vira o comandante. Se você já
+                        sabe quem vai, escale aqui e ela não entra no mural.
+                      </p>
                     </div>
                   ) : (
                     <div className="space-y-2">
@@ -1181,6 +1202,22 @@ function FormularioEscolta() {
             <p className="text-sm font-black text-white uppercase tracking-wide">Confirme todos os dados antes de criar a operação</p>
           </div>
 
+          {/* Sem equipe em nenhuma viatura: a escolta nasce no mural. Avisar aqui, e nao
+              so na tela anterior, porque e a ultima chance antes de gravar. */}
+          {iraParaOMural && (
+            <div className="p-4" style={{ border: '1.5px solid #C8813A', backgroundColor: '#FFFBEB', borderRadius: '2px' }}>
+              <p className="text-xs font-black uppercase tracking-wide mb-1" style={{ color: '#8A5A10' }}>
+                Esta escolta vai para o mural
+              </p>
+              <p className="text-[11px] leading-relaxed" style={{ color: P.sub }}>
+                Nenhum vigilante foi escalado. Ela aparecerá como disponível para os
+                operadores, e o primeiro que puxar assume como comandante e escolhe o
+                companheiro de viatura. Para designar a equipe você mesmo, volte ao passo
+                anterior.
+              </p>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
             {/* Dados da missão */}
             <div style={{ backgroundColor: P.surface, border: `1px solid ${P.border}`, borderRadius: '2px' }}>
@@ -1235,7 +1272,13 @@ function FormularioEscolta() {
                       </div>
                       <div className="flex items-center justify-between text-xs" style={{ borderBottom: `1px solid ${P.border}`, paddingBottom: '8px' }}>
                         <span style={{ color: P.sub }}>Efetivo</span>
-                        <span className="font-black" style={{ color: P.text }}>{v.membros.length} vigilante{v.membros.length !== 1 ? 's' : ''}</span>
+                        {v.membros.length === 0 ? (
+                          <span className="font-black text-right" style={{ color: '#8A5A10' }}>
+                            a definir · vai para o mural
+                          </span>
+                        ) : (
+                          <span className="font-black" style={{ color: P.text }}>{v.membros.length} vigilante{v.membros.length !== 1 ? 's' : ''}</span>
+                        )}
                       </div>
                       <div className="space-y-1.5 pt-1">
                         {v.membros.map(m => {

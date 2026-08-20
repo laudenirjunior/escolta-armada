@@ -374,6 +374,38 @@ export default function UsuariosPage() {
     setSaving(false)
   }
 
+  /**
+   * Exporta a lista visivel em CSV. Sem senha, deliberadamente.
+   *
+   * A senha aparece na tela sob auditoria: cada consulta grava quem viu e de quem. Um
+   * arquivo nao tem nada disso. Ele e copiado, anexado em e-mail e esquecido em pasta
+   * compartilhada, e a partir dali nao ha como saber quem leu. Exportar senha destruiria
+   * o unico controle que existe sobre esse dado.
+   */
+  const exportarCsv = () => {
+    const cabecalho = ['Nome', 'E-mail', 'Login', 'CPF', 'Telefone', 'Perfil', 'Status', 'Último acesso']
+    const escapar = (v: string) => `"${(v ?? '').replace(/"/g, '""')}"`
+    const linhas = filtrados.map((u) => [
+      u.nome_completo,
+      u.email,
+      u.email.endsWith('@operador.local') ? u.email.split('@')[0] : u.email,
+      u.cpf ? mascaraCPF(u.cpf) : '',
+      u.telefone ? mascaraTelefone(u.telefone) : '',
+      u.perfil?.nome_exibicao ?? '',
+      u.status,
+      u.ultimo_acesso ? new Date(u.ultimo_acesso).toLocaleString('pt-BR') : 'nunca acessou',
+    ].map(c => escapar(String(c))).join(';'))
+
+    // BOM no inicio: sem ele o Excel abre o arquivo em ANSI e todo acento vira lixo.
+    const csv = '﻿' + [cabecalho.map(escapar).join(';'), ...linhas].join('\r\n')
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `usuarios-${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   const confirmarReset = async () => {
     if (!resetando || !novaSenhaReset.trim()) return
     setSavingReset(true)
@@ -499,19 +531,25 @@ export default function UsuariosPage() {
             <ChevronDown size={11} className={`transition-transform ${mostrarFiltros ? 'rotate-180' : ''}`} />
           </button>
 
-          {/* Export / Print — ocultos no mobile para economizar espaço */}
+          {/* Export / Print — ocultos no mobile para economizar espaço.
+              Os dois estavam sem onClick desde sempre: o botao existia e nao fazia nada.
+              A exportacao NUNCA inclui senha, mesmo para administrador: arquivo sai do
+              sistema, vai para pasta compartilhada e anexo de e-mail, e ali nao ha
+              auditoria nenhuma de quem leu. */}
           <button
+            onClick={exportarCsv}
             className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all"
             style={{ backgroundColor: '#F0F2F4', color: '#4A5568', border: '1px solid #DDE3E8' }}
-            title="Exportar"
+            title="Exportar a lista em CSV (sem senhas)"
           >
             <Download size={12} />
             Exportar
           </button>
           <button
+            onClick={() => window.print()}
             className="hidden md:flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-all"
             style={{ backgroundColor: '#F0F2F4', color: '#4A5568', border: '1px solid #DDE3E8' }}
-            title="Imprimir"
+            title="Imprimir a lista"
           >
             <Printer size={12} />
             Imprimir

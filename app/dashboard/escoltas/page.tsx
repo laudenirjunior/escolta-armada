@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { Plus, Search, Eye, Pencil, ArrowRight, MapPin, Clock, Truck, CheckCircle2, Shield, FileDown } from 'lucide-react'
 import { printEscolta } from '@/utils/print'
@@ -131,6 +131,18 @@ export default function EscoltasPage() {
 
   const ehOperador = perfil === 'operador'
   const podeEditar = PODE_EDITAR_ESCOLTA.includes(perfil)
+
+  // Operador sem escolta nenhuma cai numa lista vazia e nao descobre sozinho que existe
+  // uma aba com escoltas para pegar. Nesse caso a tela ja abre no mural. A ref garante
+  // que isso aconteca uma vez so: depois disso a escolha e dele.
+  const jaEscolheuModo = useRef(false)
+  useEffect(() => {
+    if (!ehOperador || jaEscolheuModo.current || loading) return
+    if (minhasEscoltaIds.length === 0 && semEquipeIds.length > 0) {
+      setModoLista('disponiveis')
+      jaEscolheuModo.current = true
+    }
+  }, [ehOperador, loading, minhasEscoltaIds.length, semEquipeIds.length])
 
   /** Puxa a escolta para si. Quem valida de verdade e a RPC, que trava a linha. */
   const puxar = async (id: string) => {
