@@ -49,3 +49,6 @@ logs
 .claude/
 .agents/
 skills-lock.json
+
+# Dumps de dados reais da operacao. Nunca versionar: tem GPS, CPF e endereco de cliente.
+/database/backups/

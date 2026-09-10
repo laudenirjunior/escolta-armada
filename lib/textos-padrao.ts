@@ -80,6 +80,27 @@ export const SUGESTAO_PARADA: Record<string, string> = {
 }
 
 /**
+ * Texto modelo do checklist de materiais do wizard de pre-inicio.
+ *
+ * MUDANCA DE DECISAO, 10/09/2026, a pedido de Pecanha.
+ *
+ * Este campo estava na familia 2, so com PLACEHOLDER, e listado em
+ * CAMPOS_SEM_TEXTO_PADRAO. Pecanha pediu que abrisse preenchido com um texto modelo,
+ * pela mesma razao que levou o relatorio final a vir pronto: agilidade de quem esta
+ * na base prestes a sair.
+ *
+ * CUSTO ASSUMIDO, e ele e real: a unica barreira do campo era `if (!obsMateriais.trim())`.
+ * Com valor de fabrica, essa barreira deixa de recusar qualquer coisa, e o Passo 1 do
+ * wizard passa a ser confirmavel sem uma linha digitada. O que continua barrando a
+ * saida sem conferencia e a foto obrigatoria dos materiais, que nao tem texto de fabrica
+ * possivel. Quem trocar isso de novo precisa saber que a foto virou a unica prova.
+ *
+ * O PLACEHOLDER.obsMateriais continua existindo, para quando o operador limpar o campo.
+ */
+export const TEXTO_PADRAO_MATERIAIS =
+  'Materiais e equipamentos conferidos, sem alterações. Coletes, rádios, lanternas, armamento, munição e equipamentos de suporte em conformidade e operacionais.'
+
+/**
  * Dica de preenchimento. Entra em `placeholder`, jamais em `value`.
  * Cada um destes campos tem validacao de texto obrigatorio por tras.
  */
@@ -106,7 +127,7 @@ export const CAMPOS_SEM_TEXTO_PADRAO = [
   'app/dashboard/campo/page.tsx: descricao da ocorrencia',
   'app/dashboard/campo/page.tsx: observacao de item de checklist nao conforme',
   'app/dashboard/escoltas/[id]/page.tsx: observacao de item nao conforme do checklist de entrega',
-  'app/dashboard/escoltas/[id]/page.tsx: obsMateriais do wizard de pre-inicio',
+  // obsMateriais saiu desta lista em 10/09/2026. Ver TEXTO_PADRAO_MATERIAIS.
   'app/dashboard/escoltas/[id]/page.tsx: obsViatura do wizard de pre-inicio',
   'app/dashboard/escoltas/[id]/page.tsx: obsPartida do wizard de pre-inicio',
   'app/dashboard/escoltas/[id]/page.tsx: motivo de cancelamento',

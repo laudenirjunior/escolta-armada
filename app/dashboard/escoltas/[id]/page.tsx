@@ -30,6 +30,7 @@ import {
 import {
   TEXTO_PADRAO_ETAPA,
   TEXTO_PADRAO_PONTO,
+  TEXTO_PADRAO_MATERIAIS,
   SUGESTAO_PARADA,
   PLACEHOLDER,
   ehTextoPadrao,
@@ -198,6 +199,26 @@ const FOTOS_VIATURA_DEF = [
   { key: 'lat_dir',  label: 'Lateral Direita',   tipoId: 'add816e1-218f-4538-8eef-7ea25107f4e0' },
   { key: 'painel',   label: 'Painel / Interior', tipoId: '405bceff-db5d-4c10-b4ba-89aa16929fb4' },
 ] as const
+
+/**
+ * Checklist de materiais do Passo 1 do wizard de pre-inicio. Fonte unica: a tela e o
+ * insert em `checklist_respostas` leem daqui.
+ *
+ * Antes de 10/09/2026 a lista existia em dois lugares, com rotulos divergentes: a tela
+ * dizia "Radios comunicadores (HT) operacionais" e o banco gravava "carregados"; a tela
+ * dizia "Lanternas taticas com baterias carregadas" e o banco gravava "e baterias
+ * sobressalentes". O operador assinava um texto e o documento guardava outro.
+ *
+ * Armamento, municao e equipamentos de suporte entraram por pedido de Pecanha na mesma data.
+ */
+const ITENS_CHECKLIST_MATERIAL = [
+  { key: 'coletes',      label: 'Coletes balísticos (nível III-A) em conformidade' },
+  { key: 'radios',       label: 'Rádios comunicadores (HT) operacionais' },
+  { key: 'lanternas',    label: 'Lanternas táticas com baterias carregadas' },
+  { key: 'armamento',    label: 'Armamento conferido, em condições de uso e devidamente documentado' },
+  { key: 'municao',      label: 'Munição conferida, na quantidade prevista e dentro da validade' },
+  { key: 'equipSuporte', label: 'Equipamentos de suporte conferidos e operacionais' },
+]
 
 const ITENS_CHECKLIST_VIATURA = [
   { key: 'pneus',        label: 'Pneus e estepe calibrados e em bom estado' },
@@ -729,13 +750,11 @@ export default function EscoltaDetalhePage() {
   const [usuariosOperacionais, setUsuariosOperacionais] = useState<any[]>([])
 
   const [wizardStep, setWizardStep] = useState(1)
-  const [checkMateriais, setCheckMateriais] = useState<Record<string, boolean>>({
-    coletes: false,
-    radios: false,
-    lanternas: false
-  })
+  const [checkMateriais, setCheckMateriais] = useState<Record<string, boolean>>(
+    Object.fromEntries(ITENS_CHECKLIST_MATERIAL.map(i => [i.key, false]))
+  )
   const [fotoMateriais, setFotoMateriais] = useState<File | null>(null)
-  const [obsMateriais, setObsMateriais] = useState('')
+  const [obsMateriais, setObsMateriais] = useState(TEXTO_PADRAO_MATERIAIS)
 
   const [checkViatura, setCheckViatura] = useState<Record<string, boolean>>(
     Object.fromEntries(ITENS_CHECKLIST_VIATURA.map(i => [i.key, false]))
@@ -1205,12 +1224,7 @@ export default function EscoltaDetalhePage() {
       }).select('id').single()
       if (clMatErr) throw new Error(clMatErr.message)
 
-      const itensMat = [
-        { key: 'coletes', label: 'Coletes balísticos (nível III-A) em conformidade' },
-        { key: 'radios', label: 'Rádios comunicadores (HT) carregados' },
-        { key: 'lanternas', label: 'Lanternas táticas e baterias sobressalentes' }
-      ]
-      for (const item of itensMat) {
+      for (const item of ITENS_CHECKLIST_MATERIAL) {
         await sb.from('checklist_respostas').insert({
           checklist_id: clMat.id,
           descricao_item: item.label,
@@ -2767,11 +2781,7 @@ export default function EscoltaDetalhePage() {
               <h3 className="font-bold text-xs text-[#53648A] uppercase tracking-wider">Passo 1: Checklist de Equipamentos e Materiais</h3>
               
               <div className="space-y-2">
-                {[
-                  { key: 'coletes', label: 'Coletes balísticos (nível III-A) em conformidade' },
-                  { key: 'radios', label: 'Rádios comunicadores (HT) operacionais' },
-                  { key: 'lanternas', label: 'Lanternas táticas com baterias carregadas' }
-                ].map((item) => (
+                {ITENS_CHECKLIST_MATERIAL.map((item) => (
                   <label key={item.key} className="flex items-start gap-3 p-3 bg-[#F5F7FA] rounded cursor-pointer hover:bg-[#D6DAE5]/70 border border-[#D6DAE5] transition-colors">
                     <input
                       type="checkbox"

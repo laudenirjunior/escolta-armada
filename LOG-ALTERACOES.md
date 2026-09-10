@@ -8,6 +8,86 @@ Branch de trabalho: `master` (producao serve master; ver a entrada de 19/08 sobr
 
 ---
 
+## 2026-09-10 - Checklist de materiais e preparação da limpeza de base
+
+### O checklist do Passo 1 gravava um texto diferente do que a tela mostrava
+
+A lista de itens do checklist de materiais existia em dois lugares, e dois dos três rótulos divergiam:
+
+| Tela mostrava | `checklist_respostas` gravava |
+|---|---|
+| Rádios comunicadores (HT) **operacionais** | Rádios comunicadores (HT) **carregados** |
+| Lanternas táticas **com baterias carregadas** | Lanternas táticas **e baterias sobressalentes** |
+
+O operador assinava um texto e o documento guardava outro. Num checklist com valor de prova, isso é defeito, não detalhe.
+
+Agora existe `ITENS_CHECKLIST_MATERIAL` no topo de `app/dashboard/escoltas/[id]/page.tsx`, no mesmo padrão de `ITENS_CHECKLIST_VIATURA`. A tela e o insert leem da mesma constante.
+
+### Três itens novos, a pedido de Pecanha
+
+Armamento, munição e equipamentos de suporte entraram no checklist. Passou de 3 para 6 itens. A contagem que vai ao Telegram já era derivada de `Object.keys(checkMateriais).length` e se ajustou sozinha.
+
+### `obsMateriais` passou a vir preenchido, e o custo disso
+
+**Reversão consciente de uma decisão anterior.** O campo estava em `CAMPOS_SEM_TEXTO_PADRAO`, com a justificativa de que sua única barreira era `if (!obsMateriais.trim())` e que preencher o valor anularia essa barreira.
+
+Pecanha pediu que abrisse preenchido, pela mesma razão que levou o relatório final a vir pronto em 19/08: agilidade de quem está na base prestes a sair. Feito, com `TEXTO_PADRAO_MATERIAIS`.
+
+**Consequência assumida, registrada no próprio `lib/textos-padrao.ts`:** o Passo 1 passou a ser confirmável sem uma linha digitada. **A foto obrigatória dos materiais é agora a única prova de que houve conferência.** Quem tornar a foto opcional transforma o passo inteiro em formalidade.
+
+`npx tsc --noEmit` limpo.
+
+### Zeramento total da base: executado
+
+**O escopo mudou no meio.** O pedido inicial era manter o que Bruno Moreira criou. Depois de ver que ele havia criado uma escolta e nenhum cadastro, Pecanha decidiu zerar tudo: *"pode retirar tudo, deixando apenas os usuários, os logins e as senhas"*.
+
+Executado em 10/09/2026. **355 linhas apagadas e os 72 arquivos do bucket `fotos`.** Bucket em zero, conferido por listagem recursiva da própria API depois da exclusão.
+
+| Sobreviveu | Motivo |
+|---|---|
+| `usuarios`, 4 linhas | Pedido explícito |
+| `usuarios_credenciais`, 1 linha | Pedido explícito. **Não estava no primeiro backup**, lacuna corrigida antes de executar |
+| `auth.users` | Nunca foi tocada |
+| As 9 tabelas `dom_*` | **Restrição, não escolha.** `usuarios.perfil_id` referencia `dom_perfis`: apagá-la derrubaria os usuários que deviam ficar e o próprio login. As demais são listas fixas que alimentam menu, tipos de ponto, calibres e tipos de foto |
+
+Zeradas: `escoltas` e as 12 tabelas filhas, `clientes`, `veiculos`, `vigilantes`, `armamentos`, `fotos`, `checklists`, `checklist_respostas`, `checklist_modelos`, `checklist_modelo_itens`, `logs_auditoria`, `chat_mensagens`, `notificacoes`.
+
+**Consequência a saber:** os 6 modelos de checklist e seus 35 itens saíram junto. O assistente de pré-início não depende deles, porque usa constantes no código, mas a tela de campo ficaria sem itens. Ver a reposição abaixo.
+
+### Reposto um único modelo de checklist
+
+Pecanha pediu para manter o modelo que estivesse em uso e, se nenhum estivesse, repor um só para a tela não ficar vazia.
+
+**Nenhum estava em uso.** As 11 execuções em `checklists` gravaram `modelo_id` nulo, sem exceção, o que confere com o código: o assistente e a tela de campo inserem com `modelo_id: null`. O vínculo entre modelo e execução nunca existiu.
+
+Reposto do backup, com os ids originais: **Checklist de Material Padrão**, tipo `material`, 8 itens.
+
+Escolhido em vez do de Viatura porque a tela de campo é onde o checklist de material acontece, e porque 5 dos 11 itens do modelo de viatura são "Foto da frente", "Foto da traseira" e afins, já cobertos pelas 5 fotos obrigatórias do assistente.
+
+**Defeito encontrado no caminho, não corrigido.** `app/dashboard/campo/page.tsx:449` carrega `checklist_modelo_itens` filtrando só por `ativo`, sem filtrar por modelo nem por tipo, com `limit(30)`. Antes do zeramento o operador via os 35 itens dos 6 modelos embaralhados e cortados em 30, misturando conferência de viatura com a de material em qualquer etapa. Com um modelo só a lista ficou coerente, mas **cadastrar um segundo modelo faz os itens dos dois se somarem na mesma lista**. Corrigir exige filtrar por modelo e por tipo antes de criar novos modelos.
+
+A trigger `tr_gerar_codigo_escolta` deriva de `MAX()` sobre o ano: com a tabela vazia, a próxima escolta nasce `ESC-2026-0001` sozinha. Nenhuma renumeração foi necessária.
+
+Backup em `database/backups/2026-09-10 - Antes do Zeramento Total`: 34 tabelas em JSON, zero falhas. **Os arquivos do Storage não têm cópia.** As 72 imagens foram apagadas em definitivo, e o backup guarda só os metadados: caminho, GPS, data e hora.
+
+### Limpeza parcial: o plano anterior, superado
+
+O plano completo está em `docs/11 - Plano de Limpeza de Base.md`, com o diagnóstico real na seção 11.
+
+Levantamento: dos 6 registros de escolta, **Bruno Moreira criou um só**, a ESC-2026-0006, finalizada em 10/09 às 22h07. Ele não cadastrou nenhum cliente, veículo, vigilante ou armamento. `armamentos`, `checklist_modelos` e `escolta_veiculos` têm `criado_por` nulo em todas as linhas, resíduo da semente de 27/06.
+
+Backup em `database/backups/2026-09-10 - Antes da Limpeza`: 33 tabelas em JSON, 280 KB, zero falhas. `/database/backups/` entrou no `.gitignore`, porque o dump tem GPS, CPF e endereço de cliente.
+
+**Armadilha tratada:** uma foto pode estar referenciada só dentro do JSON de `pontos_controle.observacoes`, sem chave estrangeira. Varredura comum de órfãs apagaria as fotos extras do Bruno. O script usa a mesma leitura de `lib/pontos-controle.ts`.
+
+**Defeito do próprio ensaio, corrigido:** a primeira versão calculava "em uso" sobre o estado atual, então um veículo usado por escolta que ia sair se protegia sozinho e o ensaio subestimava o corte. Passou a simular o estado final em memória.
+
+Ensaio validado: saem 5 escoltas, 23 pontos, 8 checklists, 68 respostas, 27 linhas de histórico, 51 fotos com 51 arquivos no Storage, 5 veículos, 8 vigilantes, 4 clientes e 10 armamentos. A ESC-2026-0006 vira ESC-2026-0001.
+
+**Este plano parcial nunca foi executado.** A tentativa foi recusada pelo classificador de permissões do ambiente e, antes de uma segunda tentativa, Pecanha ampliou o escopo para o zeramento total descrito acima. O script está em `database/backups/2026-09-10 - Antes da Limpeza/limpar.mjs` como registro do que se pretendia, sem uso daqui em diante.
+
+---
+
 ## 2026-08-20 - Credenciais visíveis, mural de escoltas e edição
 
 ### Antes de tudo: a jornada de 9 etapas rodou inteira em produção
