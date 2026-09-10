@@ -96,6 +96,37 @@ interface ChecklistItem {
   fotoPreview: string | null
 }
 
+interface ModeloChecklist {
+  id: string
+  tipo: string
+  nome: string
+  versao: number
+  itens: { id: string; descricao_item: string; exige_foto: boolean; ordem: number; ativo: boolean }[]
+}
+
+/**
+ * O tipo de checklist que a etapa pede. Fonte unica: a selecao do modelo e o insert
+ * em `checklists` liam esta regra separadamente, e podiam divergir.
+ */
+function tipoChecklistDoStatus(status: string | null | undefined): 'viatura' | 'material' {
+  return status === STATUS.EM_PRE_INICIO ? 'viatura' : 'material'
+}
+
+/**
+ * O modelo ativo daquele tipo, na maior versao. Empate resolvido pelo mais recente.
+ *
+ * Antes desta funcao a tela carregava `checklist_modelo_itens` filtrando so por
+ * `ativo`, sem modelo e sem tipo, com `limit(30)`. Com os 6 modelos que existiam na
+ * base, o operador via os 35 itens de todos eles embaralhados e cortados em 30,
+ * misturando conferencia de viatura com a de material em qualquer etapa. Um modelo
+ * novo somava os itens dele a lista, em vez de substituir.
+ */
+function escolherModelo(modelos: ModeloChecklist[], tipo: string): ModeloChecklist | null {
+  const candidatos = modelos.filter(m => m.tipo === tipo)
+  if (!candidatos.length) return null
+  return candidatos.sort((a, b) => b.versao - a.versao || b.id.localeCompare(a.id))[0]
+}
+
 interface FotoCaptura {
   file: File
   preview: string
@@ -304,6 +335,7 @@ export default function CampoPage() {
   const [escoltaAtiva, setEscoltaAtiva] = useState<EscoltaAtiva | null>(null)
   const [todasEscoltas, setTodasEscoltas] = useState<EscoltaAtiva[]>([])
   const [checklistItems, setChecklistItems] = useState<ChecklistItem[]>([])
+  const [modelosChecklist, setModelosChecklist] = useState<ModeloChecklist[]>([])
   const [tiposOcorrencia, setTiposOcorrencia] = useState<TipoOcorrencia[]>([])
   const [loading, setLoading] = useState(true)
   const [executando, setExecutando] = useState(false)
@@ -444,27 +476,55 @@ export default function CampoPage() {
       }
     }
 
-    const [{ data: tipos }, { data: ckItens }] = await Promise.all([
+    // Carrega os modelos com os itens embutidos. Quem escolhe qual modelo vale e o
+    // efeito abaixo, pelo tipo que a etapa atual pede.
+    const [{ data: tipos }, { data: ckModelos }] = await Promise.all([
       sb.from('dom_tipos_ocorrencia').select('id, nome').eq('ativo', true).order('nome'),
-      sb.from('checklist_modelo_itens').select('id, descricao_item, exige_foto, ordem').eq('ativo', true).order('ordem').limit(30),
+      sb.from('checklist_modelos')
+        .select('id, tipo, nome, versao, checklist_modelo_itens(id, descricao_item, exige_foto, ordem, ativo)')
+        .eq('ativo', true),
     ])
 
     setTiposOcorrencia(tipos ?? [])
-    if (ckItens) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      setChecklistItems((ckItens as any[]).map(i => ({
-        ...i,
-        resposta: null,
-        observacao: '',
-        foto: null,
-        fotoPreview: null,
-      })))
-    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setModelosChecklist(((ckModelos ?? []) as any[]).map(m => ({
+      id: m.id,
+      tipo: m.tipo,
+      nome: m.nome,
+      versao: m.versao ?? 1,
+      itens: (m.checklist_modelo_itens ?? []).filter((i: any) => i.ativo),
+    })))
     setLoading(false)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user])
 
   useEffect(() => { carregar() }, [carregar])
+
+  // ── Qual modelo de checklist vale nesta etapa ─────────────────────────────
+  const tipoChecklistAtual = tipoChecklistDoStatus(escoltaAtiva?.status)
+  const modeloChecklistAtual = escolherModelo(modelosChecklist, tipoChecklistAtual)
+
+  // Refaz a lista quando o modelo muda, e so quando ele muda. A dependencia e o id,
+  // nao o objeto: `escolherModelo` devolve referencia nova a cada render, e depender
+  // dela apagaria as respostas que o operador acabou de marcar.
+  useEffect(() => {
+    setChecklistItems(
+      (modeloChecklistAtual?.itens ?? [])
+        .slice()
+        .sort((a, b) => a.ordem - b.ordem)
+        .map(i => ({
+          id: i.id,
+          descricao_item: i.descricao_item,
+          exige_foto: i.exige_foto,
+          ordem: i.ordem,
+          resposta: null,
+          observacao: '',
+          foto: null,
+          fotoPreview: null,
+        }))
+    )
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modeloChecklistAtual?.id])
 
   // Texto padrão da etapa, reaplicado toda vez que o painel de checkpoint abre.
   // A chave é o status de DESTINO da transição, não o atual: o operador descreve
@@ -945,15 +1005,17 @@ export default function CampoPage() {
 
     setExecutando(true)
     try {
-      const status = escoltaAtiva?.status ?? ''
-      const tipoChecklist = status === 'em_pre_inicio' ? 'viatura' : 'material'
+      const tipoChecklist = tipoChecklistAtual
       const tipoFotoChecklist = tipoChecklist === 'viatura'
         ? TIPO_FOTO.CHECKLIST_VIATURA
         : TIPO_FOTO.CHECKLIST_MATERIAL
 
+      // `modelo_id` era gravado como null em todo insert, aqui e no wizard. O efeito
+      // pratico apareceu na limpeza de 10/09: nao havia como saber qual modelo cada
+      // checklist tinha usado, porque as 11 execucoes existentes apontavam para nada.
       const { data: cl } = await sb.from('checklists').insert({
         escolta_veiculo_id: escoltaAtiva?.escolta_veiculo_id ?? null,
-        modelo_id: null,
+        modelo_id: modeloChecklistAtual?.id ?? null,
         tipo: tipoChecklist,
         concluido: true,
         data_conclusao: new Date().toISOString(),

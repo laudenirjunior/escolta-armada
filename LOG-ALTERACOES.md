@@ -64,7 +64,29 @@ Reposto do backup, com os ids originais: **Checklist de Material Padrão**, tipo
 
 Escolhido em vez do de Viatura porque a tela de campo é onde o checklist de material acontece, e porque 5 dos 11 itens do modelo de viatura são "Foto da frente", "Foto da traseira" e afins, já cobertos pelas 5 fotos obrigatórias do assistente.
 
-**Defeito encontrado no caminho, não corrigido.** `app/dashboard/campo/page.tsx:449` carrega `checklist_modelo_itens` filtrando só por `ativo`, sem filtrar por modelo nem por tipo, com `limit(30)`. Antes do zeramento o operador via os 35 itens dos 6 modelos embaralhados e cortados em 30, misturando conferência de viatura com a de material em qualquer etapa. Com um modelo só a lista ficou coerente, mas **cadastrar um segundo modelo faz os itens dos dois se somarem na mesma lista**. Corrigir exige filtrar por modelo e por tipo antes de criar novos modelos.
+### O checklist de campo ignorava modelo e tipo
+
+`app/dashboard/campo/page.tsx` carregava `checklist_modelo_itens` filtrando só por `ativo`, sem modelo e sem tipo, com `limit(30)`. Com os 6 modelos que existiam, o operador via os 35 itens de todos eles embaralhados e cortados em 30, misturando conferência de viatura com a de material em qualquer etapa. Um modelo novo somava os itens dele à lista em vez de substituir.
+
+A tela passou a carregar `checklist_modelos` com os itens embutidos e a escolher o modelo pelo tipo que a etapa pede, na maior versão. Três peças novas:
+
+- `tipoChecklistDoStatus(status)`: a regra `em_pre_inicio -> viatura, resto -> material` existia duplicada, na seleção e no insert, e podia divergir. Agora é uma função só.
+- `escolherModelo(modelos, tipo)`: maior versão, empate pelo mais recente.
+- Um efeito que refaz a lista **apenas quando o id do modelo muda**. A dependência é o id, não o objeto: `escolherModelo` devolve referência nova a cada render, e depender dela apagaria as respostas que o operador acabou de marcar.
+
+**`modelo_id` deixou de ser gravado como null.** Era null em todo insert, aqui e no wizard. A consequência apareceu na limpeza deste mesmo dia: não havia como saber qual modelo cada checklist usara, porque as 11 execuções existentes apontavam para nada.
+
+### Consequência do filtro: faltava modelo de viatura
+
+Encontrada testando a consulta nova contra o banco, não por leitura. `mostrarChecklist` é `['em_pre_inicio', 'na_base']`, então a tela alcança os **dois** tipos. Com apenas o modelo de material reposto, o "Checklist Pré-Saída" abriria vazio.
+
+Reposto do backup **Checklist Viatura - Pré-Saída**, 6 itens, escolhido em vez do "Viatura Padrão" porque o nome corresponde ao rótulo que a tela exibe em `em_pre_inicio` e porque os 5 primeiros itens do Padrão são "Foto da frente", "Foto da traseira" e afins, já cobertos pelas 5 fotos obrigatórias do assistente.
+
+Estado final: um modelo ativo por tipo, `material` com 8 itens e `viatura` com 6.
+
+### Defeito vizinho, encontrado e não corrigido
+
+`handleFotoChecklist` chama `capturarFoto(f)` e **descarta o resultado**, enviando o arquivo cru. A foto de item de checklist sobe sem o carimbo de data, hora e GPS que todas as outras recebem. O lint já acusava: `'captura' is assigned a value but never used`. Fica registrado, fora do escopo pedido.
 
 A trigger `tr_gerar_codigo_escolta` deriva de `MAX()` sobre o ano: com a tabela vazia, a próxima escolta nasce `ESC-2026-0001` sozinha. Nenhuma renumeração foi necessária.
 
