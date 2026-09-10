@@ -16,6 +16,7 @@ import {
 } from '@/lib/fluxo-escolta'
 import { TEXTO_PADRAO_ETAPA, PLACEHOLDER, ehTextoPadrao } from '@/lib/textos-padrao'
 import { serializarObservacao } from '@/lib/pontos-controle'
+import { aplicarCarimbo, linhasDoCarimbo } from '@/lib/carimbo-foto'
 import { useAuth } from '@/hooks/useAuth'
 import { AiTextButton } from '@/components/ui/ai-text-button'
 
@@ -141,6 +142,13 @@ interface FotoCaptura {
   preview: string
   timestamp: string
   gps: { lat: number; lng: number; precisao: number } | null
+  /**
+   * Se o carimbo foi mesmo desenhado nos pixels desta imagem.
+   *
+   * Vai direto para `fotos.carimbo_aplicado`. Antes a coluna recebia `true` fixo nesta
+   * tela, e nenhuma foto era carimbada de verdade.
+   */
+  carimbado: boolean
 }
 
 interface TipoOcorrencia { id: string; nome: string }
@@ -238,11 +246,13 @@ async function obterGPS(): Promise<{ lat: number; lng: number; precisao: number 
   }
 }
 
-function formatarCarimbo(timestamp: string, gps: { lat: number; lng: number } | null): string {
-  const d = new Date(timestamp)
-  const data = d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })
-  if (gps) return `${data}  |  ${gps.lat.toFixed(5)}, ${gps.lng.toFixed(5)}`
-  return data
+/**
+ * Rotulo do carimbo na tela. Delega para `linhasDoCarimbo` de proposito: o texto que o
+ * operador le na miniatura e o mesmo que foi desenhado nos pixels. Enquanto eram duas
+ * formatacoes separadas, elas podiam divergir sem ninguem notar.
+ */
+function formatarCarimbo(timestamp: string, gps: { lat: number; lng: number; precisao: number } | null): string {
+  return linhasDoCarimbo({ timestamp, gps }).join('  |  ')
 }
 
 // ─── Toast ────────────────────────────────────────────────────────────────────
@@ -550,7 +560,6 @@ export default function CampoPage() {
 
   // ── Helper: capturar foto com GPS + timestamp ─────────────────────────────
   const capturarFoto = async (file: File): Promise<FotoCaptura> => {
-    const preview = URL.createObjectURL(file)
     const timestamp = new Date().toISOString()
     let gps: { lat: number; lng: number; precisao: number } | null = null
     try {
@@ -561,7 +570,16 @@ export default function CampoPage() {
       gps = null
       showToast('erro', 'Foto registrada sem coordenadas: sem sinal de GPS.')
     }
-    return { file, preview, timestamp, gps }
+
+    // O GPS vem antes do carimbo de proposito: e a coordenada que o carimbo escreve.
+    const { file: carimbada, carimbado } = await aplicarCarimbo(file, { timestamp, gps })
+    if (!carimbado) {
+      showToast('erro', 'Não foi possível carimbar a imagem. A foto vale, e o registro no banco diz que ela não tem carimbo.')
+    }
+
+    // O preview aponta para o arquivo que sobe, nao para o original: se o carimbo
+    // falhou, a miniatura precisa mostrar a mesma imagem que o cliente vai receber.
+    return { file: carimbada, preview: URL.createObjectURL(carimbada), timestamp, gps, carimbado }
   }
 
   // ── Helper: fazer upload e criar registro em fotos ────────────────────────
@@ -584,7 +602,7 @@ export default function CampoPage() {
       longitude: captura.gps?.lng ?? null,
       precisao_metros: captura.gps?.precisao ?? null,
       data_hora_captura: captura.timestamp,
-      carimbo_aplicado: true,
+      carimbo_aplicado: captura.carimbado,
       enviada_telegram: false,
       sincronizada: true,
       criado_por: user?.id ?? null,
@@ -1700,13 +1718,11 @@ export default function CampoPage() {
                                     {/* eslint-disable-next-line @next/next/no-img-element */}
                                     <img src={item.captura.preview} alt="foto item" className="w-full h-28 object-cover" />
                                     <div className="absolute bottom-0 left-0 right-0 px-2 py-1.5" style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
-                                      {/* Horario da captura, nao o do render: antes este rotulo avancava
-                                          a cada redesenho da tela e nunca correspondia a foto. */}
+                                      {/* Mesmo texto do carimbo desenhado na imagem. Antes era
+                                          `new Date()`, o horario do render, que avancava a cada
+                                          redesenho e nunca correspondia a foto. */}
                                       <p className="text-white font-mono text-[10px]">
-                                        {new Date(item.captura.timestamp).toLocaleString('pt-BR')}
-                                        {item.captura.gps
-                                          ? ` · ${item.captura.gps.lat.toFixed(5)}, ${item.captura.gps.lng.toFixed(5)}`
-                                          : ' · sem GPS'}
+                                        {formatarCarimbo(item.captura.timestamp, item.captura.gps)}
                                       </p>
                                     </div>
                                     <button

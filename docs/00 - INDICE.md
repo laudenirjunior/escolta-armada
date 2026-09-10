@@ -14,7 +14,8 @@ Pasta criada para ser recortada ao final do projeto. Registra o que foi feito, c
 | [08 - Manual do Usuario - Roteiro e Prints.md](08%20-%20Manual%20do%20Usuario%20-%20Roteiro%20e%20Prints.md) | Roteiro original do manual e o plano das 74 capturas (superado pelo 09 e 10) |
 | [09 - Manual do Usuario.md](09%20-%20Manual%20do%20Usuario.md) | O manual em si, por perfil, focado em Supervisor e Operador |
 | [10 - Plano de Captura de Prints.md](10%20-%20Plano%20de%20Captura%20de%20Prints.md) | Lista reduzida de 35 prints, viabilidade e comandos de captura |
-| [11 - Plano de Limpeza de Base.md](11%20-%20Plano%20de%20Limpeza%20de%20Base.md) | Manter só o que o Bruno cadastrou, apagar o resto e renumerar as escoltas |
+| [11 - Plano de Limpeza de Base.md](11%20-%20Plano%20de%20Limpeza%20de%20Base.md) | O plano parcial e o diagnóstico da base, superado pelo zeramento total de 10/09 |
+| [12 - Pendencias Abertas.md](12%20-%20Pendencias%20Abertas.md) | **Lista viva** do que se sabe que está errado e ainda não foi resolvido |
 
 O histórico cronológico das alterações fica em [`../LOG-ALTERACOES.md`](../LOG-ALTERACOES.md).
 

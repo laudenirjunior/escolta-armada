@@ -98,7 +98,27 @@ Corrigido no mesmo caminho: o rótulo sobre a miniatura mostrava `new Date()`, o
 
 `tsc` limpo, `next lint` sem nenhum aviso no arquivo, `next build` completo.
 
-**Fica um resíduo conhecido, não tocado:** `uploadFoto` grava `carimbo_aplicado: true` em toda foto desta tela, e nenhuma recebe carimbo embutido de fato. A coluna mente para todas por igual desde antes, e corrigi-la é decisão à parte.
+### O carimbo passou a existir de verdade no Campo
+
+`fotos.carimbo_aplicado` mentia **nos dois sentidos**. O Campo gravava `true` em toda foto e não carimbava nenhuma: usa `<input type="file" capture="environment">`, a câmera nativa, que devolve o arquivo pronto sem passo de desenho. A tela de detalhe grava `false` mesmo quando carimba, no caminho de vídeo ao vivo. A coluna não servia para responder a única pergunta que justifica existir: esta imagem carrega a prova dentro dela.
+
+Novo `lib/carimbo-foto.ts`. Desenha data, hora e coordenada nos pixels, e devolve junto se conseguiu. `capturarFoto` chama depois de obter o GPS, porque é a coordenada que o carimbo escreve. `uploadFoto` grava o valor real em vez de `true` fixo.
+
+Três decisões que valem registro:
+
+- **`imageOrientation: 'from-image'` no `createImageBitmap`.** Sem isso, foto tirada em pé no celular chega deitada no canvas e o carimbo sai girado junto.
+- **Falha é declarada, nunca engolida.** Aparelho antigo com foto de 12 MP pode estourar a memória do canvas. Nesse caso a função devolve o arquivo original, o banco recebe `false` e o operador vê um aviso. Foto sem carimbo é aceitável; banco afirmando carimbo que não existe, não.
+- **O preview aponta para o arquivo carimbado**, não para o original. A miniatura mostra a mesma imagem que o cliente vai receber.
+
+`formatarCarimbo`, que já existia na tela, passou a delegar para `linhasDoCarimbo`. Enquanto eram duas formatações separadas, o texto da miniatura e o texto desenhado na imagem podiam divergir sem ninguém notar.
+
+**O que o carimbo não promete:** não é assinatura. Quem tiver a imagem pode editar o texto. Ele evita confusão honesta, não fraude deliberada. Se um dia precisar valer contra adulteração, o caminho é hash no upload, não pixel. O metadado no banco continua sendo a fonte precisa; o carimbo serve para quando a imagem sai do sistema, no Telegram, num PDF ou impressa, onde o metadado não vai junto.
+
+`tsc` limpo, `next lint` sem avisos, `next build` compilado.
+
+### Pendências passaram a ter lugar próprio
+
+Criado `docs/12 - Pendencias Abertas.md`, lista viva do que se sabe que está errado e ainda não foi resolvido, separada do histórico. Inclui o que sobrou de hoje, o que é herdado e o caminho de acesso ao banco para quem retomar, já que o conector do Supabase não enxerga este projeto.
 
 A trigger `tr_gerar_codigo_escolta` deriva de `MAX()` sobre o ano: com a tabela vazia, a próxima escolta nasce `ESC-2026-0001` sozinha. Nenhuma renumeração foi necessária.
 
