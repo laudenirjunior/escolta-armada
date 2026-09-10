@@ -92,8 +92,17 @@ interface ChecklistItem {
   ordem: number
   resposta: boolean | null
   observacao: string
-  foto: File | null
-  fotoPreview: string | null
+  /**
+   * A captura inteira, nao so o arquivo.
+   *
+   * Antes o item guardava `foto` e `fotoPreview` soltos, e `handleFotoChecklist`
+   * chamava `capturarFoto`, que pede o GPS, e descartava o retorno. Na hora de
+   * gravar, `salvarChecklist` remontava a captura com `gps: null` e um horario novo.
+   * Resultado: a foto do item nao conforme era a unica da tela a chegar ao banco sem
+   * latitude, longitude e precisao, e com o horario da gravacao no lugar do horario
+   * da captura. Justamente a foto que existe para provar a nao conformidade.
+   */
+  captura: FotoCaptura | null
 }
 
 interface ModeloChecklist {
@@ -519,8 +528,7 @@ export default function CampoPage() {
           ordem: i.ordem,
           resposta: null,
           observacao: '',
-          foto: null,
-          fotoPreview: null,
+          captura: null,
         }))
     )
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -630,9 +638,8 @@ export default function CampoPage() {
     const f = e.target.files?.[0]
     if (!f || checklistFotoIdx === null) return
     const captura = await capturarFoto(f)
-    const preview = URL.createObjectURL(f)
     setChecklistItems(its => its.map((item, idx) =>
-      idx === checklistFotoIdx ? { ...item, foto: f, fotoPreview: preview } : item
+      idx === checklistFotoIdx ? { ...item, captura } : item
     ))
     setChecklistFotoIdx(null)
   }
@@ -663,8 +670,8 @@ export default function CampoPage() {
   const limparFotoChecklistItem = (idx: number) => {
     setChecklistItems(its => its.map((item, i) => {
       if (i !== idx) return item
-      if (item.fotoPreview) URL.revokeObjectURL(item.fotoPreview)
-      return { ...item, foto: null, fotoPreview: null }
+      if (item.captura?.preview) URL.revokeObjectURL(item.captura.preview)
+      return { ...item, captura: null }
     }))
   }
 
@@ -1027,15 +1034,8 @@ export default function CampoPage() {
         for (const item of checklistItems) {
           // Upload foto do item se houver
           let fotoId: string | null = null
-          if (item.foto) {
-            const captura: FotoCaptura = {
-              file: item.foto,
-              preview: item.fotoPreview ?? '',
-              timestamp: new Date().toISOString(),
-              gps: null,
-            }
-            fotoId = await uploadFoto(captura, tipoFotoChecklist)
-          }
+          // Usa a captura como veio, com o GPS e o horario do momento da foto.
+          if (item.captura) fotoId = await uploadFoto(item.captura, tipoFotoChecklist)
 
           await sb.from('checklist_respostas').insert({
             checklist_id: cl.id,
@@ -1051,7 +1051,7 @@ export default function CampoPage() {
       showToast('ok', 'Checklist concluído e salvo com sucesso!')
 
       // Reset checklist
-      setChecklistItems(its => its.map(i => ({ ...i, resposta: null, observacao: '', foto: null, fotoPreview: null })))
+      setChecklistItems(its => its.map(i => ({ ...i, resposta: null, observacao: '', captura: null })))
     } catch (err) {
       showToast('erro', err instanceof Error ? err.message : 'Erro ao salvar checklist.')
     } finally {
@@ -1695,12 +1695,19 @@ export default function CampoPage() {
                                 />
 
                                 {/* Foto do item não conforme */}
-                                {item.fotoPreview ? (
+                                {item.captura ? (
                                   <div className="relative rounded overflow-hidden border" style={{ borderColor: '#E2E8EC' }}>
                                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img src={item.fotoPreview} alt="foto item" className="w-full h-28 object-cover" />
+                                    <img src={item.captura.preview} alt="foto item" className="w-full h-28 object-cover" />
                                     <div className="absolute bottom-0 left-0 right-0 px-2 py-1.5" style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
-                                      <p className="text-white font-mono text-[10px]">{new Date().toLocaleString('pt-BR')}</p>
+                                      {/* Horario da captura, nao o do render: antes este rotulo avancava
+                                          a cada redesenho da tela e nunca correspondia a foto. */}
+                                      <p className="text-white font-mono text-[10px]">
+                                        {new Date(item.captura.timestamp).toLocaleString('pt-BR')}
+                                        {item.captura.gps
+                                          ? ` · ${item.captura.gps.lat.toFixed(5)}, ${item.captura.gps.lng.toFixed(5)}`
+                                          : ' · sem GPS'}
+                                      </p>
                                     </div>
                                     <button
                                       onClick={() => limparFotoChecklistItem(idx)}

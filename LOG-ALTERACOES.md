@@ -84,9 +84,21 @@ Reposto do backup **Checklist Viatura - Pré-Saída**, 6 itens, escolhido em vez
 
 Estado final: um modelo ativo por tipo, `material` com 8 itens e `viatura` com 6.
 
-### Defeito vizinho, encontrado e não corrigido
+### A foto da não conformidade chegava ao banco sem GPS
 
-`handleFotoChecklist` chama `capturarFoto(f)` e **descarta o resultado**, enviando o arquivo cru. A foto de item de checklist sobe sem o carimbo de data, hora e GPS que todas as outras recebem. O lint já acusava: `'captura' is assigned a value but never used`. Fica registrado, fora do escopo pedido.
+`handleFotoChecklist` chamava `capturarFoto(f)`, que pede a coordenada ao aparelho, e **descartava o retorno**. Na gravação, `salvarChecklist` remontava a captura com `gps: null` e `new Date()`.
+
+Efeito: a foto do item reprovado era a única da tela a chegar em `fotos` com `latitude`, `longitude` e `precisao_metros` nulos, e com o horário da gravação no lugar do horário da captura. Justamente a foto que existe para provar a não conformidade. O operador ainda via o pedido de GPS e o aviso de falha, porque `capturarFoto` rodava inteira: só o resultado ia fora.
+
+O lint acusava havia tempo, como `'captura' is assigned a value but never used`. O aviso descrevia a causa e ninguém tinha lido o que ele significava.
+
+`ChecklistItem` deixou de guardar `foto` e `fotoPreview` soltos e passou a guardar a `captura` inteira. Não há mais como remontar errado, porque não há mais remontagem.
+
+Corrigido no mesmo caminho: o rótulo sobre a miniatura mostrava `new Date()`, o horário do render, que avançava a cada redesenho da tela e nunca correspondia à foto. Agora mostra o horário da captura e a coordenada, ou "sem GPS" quando não houve sinal.
+
+`tsc` limpo, `next lint` sem nenhum aviso no arquivo, `next build` completo.
+
+**Fica um resíduo conhecido, não tocado:** `uploadFoto` grava `carimbo_aplicado: true` em toda foto desta tela, e nenhuma recebe carimbo embutido de fato. A coluna mente para todas por igual desde antes, e corrigi-la é decisão à parte.
 
 A trigger `tr_gerar_codigo_escolta` deriva de `MAX()` sobre o ano: com a tabela vazia, a próxima escolta nasce `ESC-2026-0001` sozinha. Nenhuma renumeração foi necessária.
 
