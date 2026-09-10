@@ -61,7 +61,7 @@ O conector do Supabase da claude.ai **não enxerga** o projeto `qthoyxujyzskydul
 Os dois caminhos que funcionam:
 
 1. **SQL Editor do Supabase**, no navegador. Roda como `postgres` e ignora RLS. Não depende de token.
-2. **PostgREST com a chave `sb_secret`**, que foi como o diagnóstico, a limpeza e a reposição de 10/09 foram feitos. Ver os scripts em `database/backups/2026-09-10 - Antes do Zeramento Total`.
+2. **PostgREST com a chave `sb_secret`**. As ferramentas de leitura e backup estão em [`../database/ferramentas/`](../database/ferramentas/), com README próprio. Os scripts destrutivos de 10/09 ficam junto do backup daquele dia, fora do git.
 
 Atenção para uma limitação do PostgREST: ele não executa DDL. Backup em schema, criação de tabela e leitura de `pg_constraint` só pelo SQL Editor. O backup de 10/09 foi feito como exportação JSON por essa razão.
 

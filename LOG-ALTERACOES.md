@@ -143,6 +143,21 @@ Fica registrado como método: rota sem menu não é sinônimo de rota sem funç�
 
 `docs/12` nasceu copiando os "Débitos conhecidos" de `docs/03 - Arquitetura Atual.md` **sem verificar contra o código**. Dois itens já estavam resolvidos havia semanas: as APIs exigem sessão por `lib/api-auth.ts`, e o `middleware.ts` tem matcher real e barra quem não está logado. O documento foi corrigido e ganhou um aviso no topo da seção.
 
+### O projeto passou a ter ferramenta de backup
+
+Os scripts do dia viviam numa pasta temporária de sessão e sumiriam com ela, inclusive o de backup, que hoje é **a única ferramenta de backup que funciona neste projeto**.
+
+`database/ferramentas/` recebeu os dois de leitura, com README:
+
+- `backup.mjs`, exporta as 34 tabelas para JSON, uma por arquivo, mais manifesto com contagem. Sai com erro se qualquer tabela falhar.
+- `diagnostico.mjs`, inventário de autoria, escoltas, cadastros e volume.
+
+Nenhum guarda chave: a credencial entra por variável de ambiente.
+
+Os destrutivos, `zerar.mjs` e `repor.mjs`, ficaram junto do backup que precedeu a operação, fora do git. São registro do que foi feito, não ferramenta de uso corrente.
+
+**Armadilha que o README registra:** ao criar tabela nova, é preciso acrescentá-la à lista `TABELAS` do `backup.mjs`. A `usuarios_credenciais` ficou fora do primeiro backup por isso, e a falha só apareceu quando ela virou uma das tabelas que precisavam sobreviver ao zeramento.
+
 ### Pendências passaram a ter lugar próprio
 
 Criado `docs/12 - Pendencias Abertas.md`, lista viva do que se sabe que está errado e ainda não foi resolvido, separada do histórico. Inclui o que sobrou de hoje, o que é herdado e o caminho de acesso ao banco para quem retomar, já que o conector do Supabase não enxerga este projeto.
