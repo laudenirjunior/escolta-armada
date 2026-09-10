@@ -16,15 +16,30 @@ const sb = supabase as any
 type Tab = 'clientes' | 'vigilantes' | 'veiculos'
 
 /* ─── CLIENTES ─────────────────────────────────────── */
+/**
+ * Quatro campos abaixo existiam apenas em `app/dashboard/clientes/page.tsx`, uma tela
+ * que nenhum menu alcanca. Esta aba, que e a alcancavel, nao os oferecia, e o resultado
+ * era que `telegram_chat_id` e as regras de KM so podiam ser preenchidos por quem
+ * soubesse digitar a URL da tela orfa. `telegram_chat_id` e o que faz a notificacao
+ * chegar ao grupo do cliente: sem ele, o cliente nao recebe nada.
+ */
 interface Cliente {
   id: string; nome_cliente: string; cnpj: string | null; contato: string | null
   telefone: string | null; cor_destaque: string | null; status: string
   observacoes: string | null
+  telegram_chat_id: string | null
+  valor_padrao_escolta: number | null
+  km_franquia: number | null
+  valor_km_excedente: number | null
 }
 const emptyCliente = (): Omit<Cliente,'id'> => ({
   nome_cliente:'', cnpj:'', contato:'', telefone:'',
   cor_destaque:'#3b82f6', status:'ativo', observacoes:'',
+  telegram_chat_id:'', valor_padrao_escolta:null, km_franquia:null, valor_km_excedente:null,
 })
+
+/** Campo numerico opcional: vazio vira null, nao 0. Zero e um valor, ausencia nao. */
+const numOuNulo = (v: string): number | null => (v.trim() === '' ? null : Number(v))
 
 /* ─── VIGILANTES ────────────────────────────────────── */
 interface Funcao { id: string; nome: string }
@@ -363,7 +378,7 @@ export default function CadastrosPage() {
                       {canEdit && (
                         <td className="text-right">
                           <div className="flex items-center justify-end gap-1">
-                            <button onClick={() => { setEditCliente(c.id); setFormCliente({ nome_cliente:c.nome_cliente, cnpj:c.cnpj??'', contato:c.contato??'', telefone:c.telefone??'', cor_destaque:c.cor_destaque??'#3b82f6', status:c.status, observacoes:c.observacoes??'' }); setDialogCliente(true) }}
+                            <button onClick={() => { setEditCliente(c.id); setFormCliente({ nome_cliente:c.nome_cliente, cnpj:c.cnpj??'', contato:c.contato??'', telefone:c.telefone??'', cor_destaque:c.cor_destaque??'#3b82f6', status:c.status, observacoes:c.observacoes??'', telegram_chat_id:c.telegram_chat_id??'', valor_padrao_escolta:c.valor_padrao_escolta??null, km_franquia:c.km_franquia??null, valor_km_excedente:c.valor_km_excedente??null }); setDialogCliente(true) }}
                               className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors">
                               <Pencil size={14} />
                             </button>
@@ -417,7 +432,7 @@ export default function CadastrosPage() {
                   {canEdit && (
                     <div className="flex gap-2 pt-3 border-t border-gray-100">
                       <button
-                        onClick={() => { setEditCliente(c.id); setFormCliente({ nome_cliente:c.nome_cliente, cnpj:c.cnpj??'', contato:c.contato??'', telefone:c.telefone??'', cor_destaque:c.cor_destaque??'#3b82f6', status:c.status, observacoes:c.observacoes??'' }); setDialogCliente(true) }}
+                        onClick={() => { setEditCliente(c.id); setFormCliente({ nome_cliente:c.nome_cliente, cnpj:c.cnpj??'', contato:c.contato??'', telefone:c.telefone??'', cor_destaque:c.cor_destaque??'#3b82f6', status:c.status, observacoes:c.observacoes??'', telegram_chat_id:c.telegram_chat_id??'', valor_padrao_escolta:c.valor_padrao_escolta??null, km_franquia:c.km_franquia??null, valor_km_excedente:c.valor_km_excedente??null }); setDialogCliente(true) }}
                         className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold"
                         style={{ backgroundColor: '#EBF3FC', color: '#2166A8' }}>
                         <Pencil size={14} /> Editar
@@ -681,6 +696,31 @@ export default function CadastrosPage() {
               <option value="ativo">Ativo</option>
               <option value="inativo">Inativo</option>
             </select>
+          </Field>
+        </div>
+        <Field label="Telegram Chat ID">
+          <input className="input-light min-h-[48px] md:min-h-0" placeholder="-100123456789"
+            value={formCliente.telegram_chat_id??''}
+            onChange={e => setFormCliente(p => ({...p, telegram_chat_id:e.target.value}))} />
+          <p className="text-[11px] mt-1 text-gray-400">
+            Sem isto, o grupo do cliente não recebe as notificações desta escolta.
+          </p>
+        </Field>
+        <Field label="Valor padrão da escolta (R$)">
+          <input type="number" step="0.01" className="input-light min-h-[48px] md:min-h-0" placeholder="0,00"
+            value={formCliente.valor_padrao_escolta??''}
+            onChange={e => setFormCliente(p => ({...p, valor_padrao_escolta:numOuNulo(e.target.value)}))} />
+        </Field>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <Field label="Franquia KM">
+            <input type="number" className="input-light min-h-[48px] md:min-h-0" placeholder="200"
+              value={formCliente.km_franquia??''}
+              onChange={e => setFormCliente(p => ({...p, km_franquia:numOuNulo(e.target.value)}))} />
+          </Field>
+          <Field label="Valor por KM Excedente (R$)">
+            <input type="number" step="0.01" className="input-light min-h-[48px] md:min-h-0" placeholder="0,00"
+              value={formCliente.valor_km_excedente??''}
+              onChange={e => setFormCliente(p => ({...p, valor_km_excedente:numOuNulo(e.target.value)}))} />
           </Field>
         </div>
         <Field label="Observações">

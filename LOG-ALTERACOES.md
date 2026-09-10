@@ -116,6 +116,33 @@ Três decisões que valem registro:
 
 `tsc` limpo, `next lint` sem avisos, `next build` compilado.
 
+### O cliente não tinha onde receber notificação
+
+Quatro colunas de `clientes` só podiam ser preenchidas em `app/dashboard/clientes/page.tsx`, uma tela que **nenhum menu alcança**. A aba de Cadastros, que é a alcançável, não as oferecia:
+
+| Coluna | Para que serve |
+|---|---|
+| `telegram_chat_id` | O grupo do cliente que recebe as notificações. Sem ele, o cliente não recebe nada |
+| `valor_padrao_escolta` | Valor cobrado por escolta |
+| `km_franquia` | Franquia de quilometragem do contrato |
+| `valor_km_excedente` | Valor do km que passar da franquia |
+
+Com a base zerada, o primeiro ato de quem operar é cadastrar cliente. Ia cadastrar sem o chat do Telegram e sem regra de cobrança, e a falha só apareceria na primeira escolta, quando o cliente não recebesse notificação nenhuma.
+
+Os quatro campos foram para a aba de Cadastros, com os mesmos rótulos da tela órfã, para não criar vocabulário novo. `numOuNulo` garante que campo numérico vazio vire `null` e não `0`: zero é um valor, ausência não.
+
+Não havia perda de dado antes disto, porque os dois handlers de edição montavam o formulário campo a campo e o `update` não tocava nas quatro colunas.
+
+### As rotas órfãs não foram apagadas, e o motivo importa
+
+O plano era apagar as quatro rotas sem menu, 1364 linhas. Antes de apagar, comparei campo a campo o que cada uma oferecia contra a aba que a substitui. **A de clientes não era redundante**: era o único lugar com as quatro colunas acima.
+
+Fica registrado como método: rota sem menu não é sinônimo de rota sem função. As três restantes só podem ser apagadas depois da mesma conferência.
+
+### Duas pendências que eu havia inventado
+
+`docs/12` nasceu copiando os "Débitos conhecidos" de `docs/03 - Arquitetura Atual.md` **sem verificar contra o código**. Dois itens já estavam resolvidos havia semanas: as APIs exigem sessão por `lib/api-auth.ts`, e o `middleware.ts` tem matcher real e barra quem não está logado. O documento foi corrigido e ganhou um aviso no topo da seção.
+
 ### Pendências passaram a ter lugar próprio
 
 Criado `docs/12 - Pendencias Abertas.md`, lista viva do que se sabe que está errado e ainda não foi resolvido, separada do histórico. Inclui o que sobrou de hoje, o que é herdado e o caminho de acesso ao banco para quem retomar, já que o conector do Supabase não enxerga este projeto.

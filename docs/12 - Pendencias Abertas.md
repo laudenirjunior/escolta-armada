@@ -40,15 +40,17 @@ Atualizado em 10/09/2026, depois do zeramento total da base e dos três commits 
 
 Levantadas em `docs/03 - Arquitetura Atual.md` e no LOG, ainda sem solução.
 
+> **Aviso sobre esta seção.** Ela foi montada em 10/09 copiando os "Débitos conhecidos" de `docs/03 - Arquitetura Atual.md`, **sem verificar contra o código**. Dois itens já estavam resolvidos havia semanas. A verificação foi feita depois, item a item, e o resultado está abaixo. Lição registrada: aquele documento descreve o estado de quando foi escrito, não o de hoje.
+
 | # | Pendência | Situação |
 |---|---|---|
-| 4.1 | **`/api/telegram` e `/api/ai/melhorar-texto` sem autenticação** | Proxy aberto e faturado |
-| 4.2 | **`middleware.ts` com `matcher: []`** | Nunca roda |
-| 4.3 | **Histórico de status gravado em dobro** | A trigger insere e o app insere de novo em 12 pontos. Sem efeito prático agora, com a tabela zerada, mas volta a acontecer na primeira escolta nova |
+| 4.1 | ~~APIs sem autenticação~~ | **Já resolvido.** As duas rotas chamam `exigirSessao()` de `lib/api-auth.ts`, com limite por usuário. A do Telegram ainda checa perfil: só administrador e gestor mandam para chat arbitrário ou listam conversas |
+| 4.2 | ~~`middleware.ts` com `matcher: []`~~ | **Já resolvido.** O matcher cobre tudo menos estático, imagem, manifesto e `api/`. Renova a sessão e barra quem não está logado antes de a página existir |
+| 4.3 | **Histórico de status gravado em dobro** | Real e confirmado: a trigger insere e o app insere de novo em 10 pontos das telas de campo e de detalhe. **Precisa do SQL Editor**, porque a decisão certa depende de ler o corpo da trigger, e o PostgREST não lê `pg_proc`. Simplesmente apagar os inserts do app perderia o autor e a observação, que a trigger não tem como saber. **A base está zerada agora: é a melhor janela que vai existir para resolver isso** |
 | 4.4 | **`viaturas[0]` em 19 pontos** | Escolta com duas viaturas só registra ponto de controle para a primeira |
 | 4.5 | **Sem fila offline** | Não existe. Sem rede, o registro não acontece. `criado_offline` é literal `false` |
-| 4.6 | **Sem gráficos nos indicadores** | Só cartões e tabelas |
-| 4.7 | **Quatro rotas órfãs** | 1364 linhas não removidas |
+| 4.6 | **Sem gráficos nos indicadores** | Só cartões e tabelas. Não há biblioteca de gráficos no `package.json` |
+| 4.7 | **Quatro rotas órfãs, e NÃO são redundantes** | `/dashboard/clientes`, `/dashboard/veiculos`, `/dashboard/vigilantes` e `/dashboard/configuracoes/telegram-test`, 1364 linhas, nenhuma alcançável por menu. **Iam ser apagadas em 10/09 e não foram**: a de clientes era a única tela com quatro campos que a aba de Cadastros não tinha. Os campos foram levados para a aba; agora falta reconferir veículos e vigilantes antes de apagar as três |
 
 ---
 
