@@ -28,6 +28,8 @@ Este diretório guarda a referência legível do que foi aplicado. A fonte de ve
 
 ## Pendente de aplicação
 
+`193_vinculo_operador.sql` **precisa ser aplicada no SQL Editor.** Repara o vínculo `vigilantes.usuario_id` dos operadores existentes e cria as duas triggers que impedem o problema de voltar, mais a view `vw_operador_sem_vinculo`. Tudo aditivo, idempotente, sem tocar em lançamento. Ver a entrada de 2026-09-21 no `LOG-ALTERACOES.md`.
+
 `111_trigger_validacao_transicao.sql` neste diretório é uma versão consolidada da 111 e da 112 num arquivo só, mantida como referência. **Não precisa ser aplicada**: o conteúdo já está no banco pelas migrations 111 e 112.
 
 ## Regra para migrations novas

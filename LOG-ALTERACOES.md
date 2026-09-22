@@ -8,6 +8,37 @@ Branch de trabalho: `master` (producao serve master; ver a entrada de 19/08 sobr
 
 ---
 
+## 2026-09-21 - Operador sem vínculo de vigilante: reparo e trava (migration 193)
+
+### O problema relatado por Pecanha
+
+Operadores recém-cadastrados não conseguiam colocar foto, fazer checklist nem seguir o fluxo operacional. Diagnóstico: causa única no elo `vigilantes.usuario_id`. Toda a RLS de campo caminha `escolta_efetivo -> vigilantes.usuario_id -> usuarios.auth_user_id = auth.uid()` por `sou_do_efetivo()` e `sou_do_efetivo_veiculo()`. Com `usuario_id` nulo, essas funções devolvem falso e a RLS recusa foto, checklist, ponto e a mudança de status, inclusive a final. A tela de Campo aparece vazia porque ela resolve a escolta ativa pelo mesmo caminho.
+
+É a mesma classe da regressão R2 (migration 152), que corrigiu `criar_usuario_por_login`. A prova está no backup pré-zeramento: o vigilante `BRUNO MOREIRA DE MENDONÇA` aparece como comandante de escolta com `usuario_id` nulo, enquanto existe o usuário operador `Bruno Moreira` com login.
+
+### Descoberta que fecha o pedido de "até o fechamento"
+
+O botão "Finalizar Escolta" da tela de detalhe não tem trava de perfil: aparece só pela condição `status === 'na_base'`, e o operador tem "Escoltas" no menu. `PODE_FINALIZAR_ESCOLTA` é código morto, não importado. Logo, consertado o elo, o operador faz o processo inteiro, do pré-início ao fechamento, sem mudança de código. Nada em `permissions.ts` precisou mudar.
+
+### O que a migration 193 faz, tudo aditivo
+
+1. **View `vw_operador_sem_vinculo`** com `security_invoker = on`, para operador órfão aparecer no lint.
+2. **Trava A** (`trg_vincular_vigilante_a_usuario`, BEFORE em `vigilantes`): vigilante que nasce sem vínculo é ligado ao usuário operador de mesmo CPF. Cobre o caminho em que o vigilante nasce depois.
+3. **Trava B** (`trg_garantir_vinculo_operador`, AFTER em `usuarios`): usuário que vira operador liga um vigilante livre de mesmo CPF, só quando há exatamente um. Cobre o caminho em que o login nasce depois.
+4. **Reparo** dos operadores já cadastrados por CPF normalizado, só quando há um vigilante livre. Idempotente, não apaga, não recria, não toca lançamento.
+
+As duas triggers tornam o vínculo garantido em qualquer caminho de cadastro, presente ou futuro, sem depender do corpo de `cadastrar_operador` nem de `criar_usuario_por_login`. Ambas nascem sob a regra de classe: `REVOKE EXECUTE ... FROM anon, PUBLIC` e `search_path` fixado. Só ligam `usuario_id` nulo com casamento único; nunca sobrescrevem, nunca criam vigilante, nunca apagam.
+
+Armadilha tratada: `usuarios.cpf` é cru e `vigilantes.cpf` é mascarado; o casamento normaliza os dígitos dos dois lados com `regexp_replace(cpf, '\D', '', 'g')`.
+
+### Estado
+
+O SQL está versionado em `database/migrations/193_vinculo_operador.sql`, pronto para colar no SQL Editor (o PostgREST não executa DDL, e o MCP do Supabase não alcança este projeto). **Ainda não aplicado**: depende de rodar no editor. O bloco 0 e o bloco 5 do arquivo mostram antes e depois na mesma execução. Falta validar com credencial real de operador ponta a ponta, incluindo o fechamento.
+
+Opcional em aberto: levar o botão de finalizar para dentro da tela de Campo, hoje decisão pendente marcada em `campo/page.tsx`. É conveniência, não capacidade.
+
+---
+
 ## 2026-09-10 - Checklist de materiais e preparação da limpeza de base
 
 ### O checklist do Passo 1 gravava um texto diferente do que a tela mostrava

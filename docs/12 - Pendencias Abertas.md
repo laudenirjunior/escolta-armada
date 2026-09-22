@@ -10,6 +10,7 @@ Atualizado em 10/09/2026, depois do zeramento total da base e dos três commits 
 
 | # | Pendência | Situação |
 |---|---|---|
+| 1.0 | **Aplicar a migration 193 no SQL Editor** | `database/migrations/193_vinculo_operador.sql`. Repara o vínculo `vigilantes.usuario_id` dos operadores já cadastrados e cria as duas triggers que impedem a recorrência, mais a view `vw_operador_sem_vinculo`. Sem isso, operador não lança foto, checklist nem ponto, e a tela de Campo fica vazia. Aditivo e idempotente. Depois, validar com credencial real de operador, do pré-início ao fechamento |
 | 1.1 | **Rotacionar a chave `sb_secret`** | A chave de acesso total ao banco foi colada num chat para viabilizar o diagnóstico e a limpeza de 10/09. Continua válida. Rotacionar no painel do Supabase, em Settings, API Keys |
 | 1.2 | **Worktree preso em `.git/worktrees`** | `agent-ae374c2302e3f9032` não pôde ser apagado, com `Permission denied`, em todo commit do dia. Não afeta o repositório. Resolver com `git worktree prune` depois de fechar o processo que segura a pasta |
 | 1.3 | **Cadastros zerados** | Decisão de Pecanha: quem for operar cadastra cliente, viatura, vigilante e armamento antes de lançar a primeira escolta. Não é para recadastrar por antecipação |

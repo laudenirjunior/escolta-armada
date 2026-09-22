@@ -64,3 +64,13 @@ select 'trigger de escalada sem checagem de dono' as verificacao,
             else 'impedir_autopromocao regrediu' end as resultado
 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
 where n.nspname = 'public' and p.proname = 'impedir_autopromocao';
+
+-- 8. Nenhum operador pode ficar sem vigilante vinculado. Sem o elo
+--    vigilantes.usuario_id, sou_do_efetivo() falha e a RLS de campo tranca o
+--    operador em tudo: foto, checklist, ponto e status. Ver migration 193.
+select 'operador sem vinculo de vigilante' as verificacao,
+       coalesce(string_agg(u.email, ', '), 'nenhum (correto)') as resultado
+from usuarios u
+join dom_perfis dp on dp.id = u.perfil_id
+where dp.codigo = 'operador'
+  and not exists (select 1 from vigilantes v where v.usuario_id = u.id);
