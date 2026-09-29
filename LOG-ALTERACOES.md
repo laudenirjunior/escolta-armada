@@ -81,9 +81,17 @@ Operadores com pouca familiaridade com celular precisavam de uma tela que mostra
 - Capturas do painel em 390 px de largura (tela inicial com check-in atrasado, registro de etapa com duas viaturas, confirmação, escolta agendada), por página temporária com dados fictícios, apagada antes do commit.
 - **Não testado com banco real.** O conector do Supabase não alcança o projeto, e a leitura de credenciais pela VPS não foi autorizada. Pendente: migration 193, o SQL de leitura `03_fase0_modo_guiado.sql`, e o teste com credencial real de operador num comboio de duas viaturas.
 
+### Fase 0 no banco, 29/09
+
+Pecanha aplicou a migration 193 e rodou as leituras no SQL Editor. Correção antes: a subconsulta de reparo da 193 abortava o script inteiro quando dois vigilantes livres tinham o mesmo CPF; ganhou `limit 1`, e o `n = 1` já descartava o caso ambíguo.
+
+Resultado da leitura: `escolta_veiculos` (ALL) e `escoltas` (UPDATE) usam `sou_do_efetivo`, a escolta inteira. `pontos_controle` INSERT (`pontos_insert`) usa `sou_do_efetivo_veiculo`, só a própria viatura. Consequência que já existia em produção: numa escolta com duas viaturas, a tela de detalhe grava os pontos das duas num insert só, e para o operador a linha da outra viatura era recusada, derrubando o lote; só a gestão conseguia registrar.
+
+**Migration 194** (`194_ponto_por_qualquer_viatura.sql`), aditiva: `pontos_insert_mesma_escolta` (grava em qualquer viatura de escolta em que o usuário está no efetivo, só com `lancado_por` igual a ele) e `pontos_select_mesma_escolta` (lê os pontos das outras viaturas da mesma escolta; sem isso a conferência "todas as viaturas registraram" nunca fecharia para o operador). Testada num Postgres 17 local com dados sintéticos: antes, outra viatura e lote de duas recusados; depois, os dois passam, e viatura de outra escolta e registro no nome de outra pessoa continuam recusados. **Pendente: aplicar no SQL Editor.**
+
 ### Riscos conhecidos
 
-1. Se a RLS de `pontos_controle` for por viatura (`sou_do_efetivo_veiculo`), o participante da viatura A não grava pela B, e a decisão 3 exige migration. O SQL da Fase 0 responde.
+1. Até a 194 ser aplicada, o participante da viatura A não grava pela B.
 2. Wizard de partida, checklist de entrega e parada ainda gravam só na primeira viatura (Caminho 2).
 3. Sem internet o registro não acontece, como antes.
 
