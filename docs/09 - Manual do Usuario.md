@@ -52,7 +52,7 @@ O menu lateral (no computador) organiza tudo em quatro seções. O que cada perf
 
 | Seção | Itens | Quem vê |
 |---|---|---|
-| **Operações** | Painel, Escoltas, Campo, Mapa, Notificações | Todos (Campo só o Operador) |
+| **Operações** | Painel, Escoltas, Campo, Mapa, Notificações | Todos |
 | **Gestão** | Cadastros, Armamentos, Checklists | Administrador, Gestor, Supervisor, Central |
 | **Análise** | Indicadores, Relatórios | Administrador, Gestor, Supervisor, Central |
 | **Sistema** | Usuários, Telegram, Configurações, Auditoria | Ver observação abaixo |
@@ -243,6 +243,39 @@ O sistema também dispara um **alerta de check-in atrasado** quando uma escolta 
 # Parte B: Operador
 
 O Operador é o registrador da escolta. Ele trabalha no celular, em movimento. Este é o capítulo mais importante do manual, porque é o único usuário que não está sentado.
+
+## B0. Painel Operacional Guiado (Modo Guiado)
+
+Desde 29/09/2026 a tela de Campo abre no **Modo Guiado**, ligado por padrão. Ele mostra uma coisa por vez, em letra grande:
+
+- **A escolta e a etapa**: cliente, código e "Etapa N de 9", com a barra das etapas.
+- **Próxima Ação**: uma frase curta e um botão grande com o que fazer agora, por exemplo **Registrar Chegada no Destino**.
+- **Pendências da Escolta**: check-in atrasado ou perto de vencer, e viatura que ainda falta registrar.
+- **Outras Ações**: Registrar Check-in, Registrar Parada, Registrar Ocorrência, Abrir Rota no Mapa e Ver Detalhes da Escolta.
+- **Acionar Emergência**, fixo, com confirmação em dois toques.
+
+As nove etapas e o botão que registra cada uma:
+
+| # | Etapa | Botão que registra a etapa |
+|---|---|---|
+| 1 | Escolta Agendada | (já nasce agendada) |
+| 2 | Pré-início da Escolta | Iniciar Pré-início da Escolta |
+| 3 | Deslocamento para a Origem | Registrar Saída da Base (no wizard de partida, com fotos da viatura e KM Inicial) |
+| 4 | Na Origem | Registrar Chegada na Origem |
+| 5 | Deslocamento para o Destino | Registrar Saída para o Destino |
+| 6 | No Destino | Registrar Chegada no Destino |
+| 7 | Saída do Destino | Registrar Saída do Destino |
+| 8 | Retorno à Base | Registrar Retorno à Base |
+| 9 | Chegada na Base | Registrar Chegada na Base (com KM Final), depois Finalizar Escolta |
+
+Regras que valem no painel:
+
+- **Quem pode registrar**: qualquer pessoa escalada na escolta, seja qual for o perfil, e a gestão.
+- **Duas ou mais viaturas**: o painel pede a viatura do registro, já marcando a sua. Dá para trocar e registrar por outra viatura da mesma escolta. A etapa só avança quando todas as viaturas registram; enquanto isso aparece "Aguardando registro da viatura ...".
+- **Confirmação**: depois de cada registro aparece uma tela verde com o horário e a Próxima Ação. Ela só aparece se o registro foi de fato gravado.
+- **Pré-início, chegada na base, finalização e parada** abrem a tela da escolta no diálogo certo. Ao concluir, o sistema volta sozinho para o painel.
+- **Check-in atrasado** vira a Próxima Ação, em vermelho. O aviso de atraso tem o botão **Registrar Check-in**, que abre o registro direto.
+- **Ver tela completa**, no rodapé, desliga o Modo Guiado neste aparelho. O botão **Voltar ao Modo Guiado**, no topo da tela completa, liga de novo.
 
 ## B1. A tela de Campo
 

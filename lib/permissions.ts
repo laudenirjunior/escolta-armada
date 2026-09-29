@@ -29,11 +29,22 @@ export const PODE_EDITAR_ESCOLTA: CodigoPerfil[] = ['administrador', 'gestor', '
 /** Pode cancelar/reagendar uma escolta */
 export const PODE_CANCELAR_ESCOLTA: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor']
 
-/** Pode avançar o status da escolta */
+/**
+ * Pode avançar o status da escolta pelo botao generico (rascunho -> agendada ->
+ * pre-inicio). As acoes operacionais com foto, KM e ponto de controle, inclusive a
+ * finalizacao, nao dependem de perfil: dependem do vinculo com a escolta, ver
+ * lib/acesso-escolta.ts (decisao de Pecanha em 2026-09-29).
+ *
+ * PODE_FINALIZAR_ESCOLTA existia aqui e nunca foi importada: a finalizacao nunca
+ * teve trava de perfil. Saiu para nao sugerir uma regra que nao existe.
+ */
 export const PODE_AVANCAR_ESCOLTA: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor', 'central', 'operador']
 
-/** Pode finalizar uma escolta */
-export const PODE_FINALIZAR_ESCOLTA: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor']
+/**
+ * Pode alterar a periodicidade do check-in. E planejamento, nao registro de campo:
+ * antes o botao "Alterar" aparecia para qualquer perfil no Painel de Acoes.
+ */
+export const PODE_ALTERAR_PERIODICIDADE: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor', 'central']
 
 /** Pode editar registros de cadastro (clientes, vigilantes, veículos) */
 export const PODE_EDITAR_CADASTROS: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor', 'central']

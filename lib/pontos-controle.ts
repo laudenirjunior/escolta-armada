@@ -32,15 +32,27 @@ export interface ObservacaoPonto {
    * Mapbox para cada ponto.
    */
   endereco: string | null
+  /**
+   * KM do hodometro informado junto com o ponto, so na saida da base e na chegada
+   * na base.
+   *
+   * A coluna escolta_veiculos.quilometragem_* guarda so o ultimo valor, sem autor e
+   * sem horario. Aqui o KM viaja com o ponto, que ja tem lancado_por, data_hora,
+   * tipo (a etapa) e escolta_veiculo_id: e o registro de auditoria. Os relatorios
+   * continuam lendo a coluna. Como pontos_controle nao tem UPDATE nem DELETE, um KM
+   * corrigido depois muda so a coluna, e o ponto preserva o que foi informado.
+   */
+  km: number | null
 }
 
-/** Monta o JSON gravado na coluna. Chaves fixas, sempre as mesmas cinco. */
+/** Monta o JSON gravado na coluna. Chaves fixas, sempre as mesmas seis. */
 export function serializarObservacao(dados: {
   tipo?: string | null
   tipoLabel?: string | null
   observacao?: string | null
   fotoIds?: string[] | null
   endereco?: string | null
+  km?: number | null
 }): string {
   const payload: ObservacaoPonto = {
     tipo: dados.tipo ?? null,
@@ -48,6 +60,7 @@ export function serializarObservacao(dados: {
     observacao: dados.observacao?.trim() || null,
     foto_ids: dados.fotoIds ?? [],
     endereco: dados.endereco?.trim() || null,
+    km: typeof dados.km === 'number' && Number.isFinite(dados.km) ? dados.km : null,
   }
   return JSON.stringify(payload)
 }
@@ -63,6 +76,7 @@ export function lerObservacao(bruto: string | null | undefined): ObservacaoPonto
     observacao: null,
     foto_ids: [],
     endereco: null,
+    km: null,
   }
   const texto = (bruto ?? '').trim()
   if (!texto) return vazio
@@ -82,6 +96,7 @@ export function lerObservacao(bruto: string | null | undefined): ObservacaoPonto
       observacao: obj.observacao ?? obj.justificativa ?? null,
       foto_ids: Array.isArray(obj.foto_ids) ? obj.foto_ids.filter(Boolean) : [],
       endereco: obj.endereco ?? null,
+      km: typeof obj.km === 'number' ? obj.km : null,
     }
   } catch {
     // JSON malformado: preserva o texto em vez de descartar informacao operacional.

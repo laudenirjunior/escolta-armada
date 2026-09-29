@@ -8,6 +8,87 @@ Branch de trabalho: `master` (producao serve master; ver a entrada de 19/08 sobr
 
 ---
 
+## 2026-09-29 - Modo Guiado do operador (Painel Operacional Guiado), primeira entrega
+
+Branch `modo-guiado-operador`. Não vai para `master` sem aprovação de Pecanha.
+
+### O pedido
+
+Operadores com pouca familiaridade com celular precisavam de uma tela que mostrasse só o que exige ação: qual escolta, em que etapa, o que fazer agora, qual botão, o que está pendente, se o registro deu certo e qual o próximo passo. Sem destruir o fluxo atual: uma camada sobre ele.
+
+### Decisões de Pecanha em 29/09
+
+1. **Caminho 1** na primeira entrega: o modo guiado não cria gravação nova. Unificar os escritores de cada etapa (Caminho 2) fica para depois da validação com operadores reais.
+2. **Vínculo com a escolta é o critério** das ações operacionais (pré-início, fotos, KM, check-in, parada, chegadas, ocorrência, emergência, finalização), qualquer que seja o perfil. Criar, editar, cancelar, reagendar e alterar periodicidade continuam por perfil.
+3. **Várias viaturas**: qualquer participante registra por qualquer viatura da mesma escolta. Seletor obrigatório, que sugere a viatura do usuário e permite trocar.
+4. **Etapa 7** se chama "Saída do Destino". As nove: Escolta Agendada, Pré-início da Escolta, Deslocamento para a Origem, Na Origem, Deslocamento para o Destino, No Destino, Saída do Destino, Retorno à Base, Chegada na Base.
+5. **Chave do Modo Guiado, opção B**: nasce ligada e o próprio usuário desliga. A trava por supervisor (opção A) exige migration, porque o usuário consegue gravar a própria linha de `usuarios`; fica preparada no código, sem gravação.
+6. **Check-in dentro do modo guiado**, e o alerta de atraso leva à ação.
+
+### O que mudou
+
+**Novos**
+- `lib/proximo-passo-operador.ts`: nome, instrução e lugar de execução de cada etapa. Não é máquina de estados nova: ordem, transição e tipo de ponto vêm de `lib/fluxo-escolta.ts`, e o arquivo falha no carregamento se o número de nomes divergir de `JORNADA_ETAPAS`.
+- `lib/acesso-escolta.ts`: `podeOperarEscolta(perfil, vinculado)` e `viaturaSugerida`.
+- `lib/checkin.ts`: regra única de atraso e gravação única do check-in. Antes eram duas regras divergentes: o alerta global contava qualquer PARADA como check-in e ignorava a escolta sem nenhum; a tela de detalhe media só `reporte_periodico`, a partir da data prevista. Referência agora: último check-in, senão o primeiro ponto da escolta (saída da base), senão a data prevista.
+- `hooks/useModoGuiado.tsx`: Context no layout, preferência por usuário no aparelho.
+- `components/campo-guiado/painel-guiado.tsx`: o painel. Não grava nada; recebe as funções da tela de Campo por props.
+- `database/testes/03_fase0_modo_guiado.sql`: leitura das policies, triggers e funções que decidem se um participante grava por outra viatura. Só leitura.
+
+**Tela de Campo** (`app/dashboard/campo/page.tsx`)
+- Vínculo primeiro, para qualquer perfil. Antes o ramo era escolhido pelo perfil, e um supervisor escalado nunca era tratado como membro da equipe.
+- **Correção de comboio**: as viaturas passam a ser carregadas também para quem não é gestão. Antes o ramo do operador não preenchia `viaturas`, a regra "a etapa só avança quando todas as viaturas registrarem" era pulada, e o primeiro operador avançava a etapa do comboio inteiro, deixando a outra viatura sem ponto.
+- Guarda nova: a mesma viatura não registra a mesma etapa duas vezes. Com qualquer participante podendo registrar por qualquer viatura, dois aparelhos podem mirar a mesma viatura, e o segundo ponto seria permanente (`pontos_controle` não tem DELETE).
+- Escoltas agendadas do efetivo em estado próprio, nunca em `escoltaAtiva`: o `PROXIMO_STATUS` local tem `agendada -> em_pre_inicio` e o painel antigo passaria a oferecer esse avanço sem o wizard.
+- Com várias escoltas ativas, a que está na rua vem primeiro.
+- Atualização sem recarregar: tempo real em `escoltas` e `pontos_controle`, volta do app para a frente e relógio de 60 s. A escolta aberta passa a ser trocada pela versão nova do banco.
+- Resultado do registro: no modo guiado, a tela de confirmação só aparece depois que o banco devolveu sucesso; o erro continua no aviso.
+- Check-in pelo painel: foto carimbada do Campo, GPS obrigatório, gravação por `lib/checkin.ts`.
+
+**Tela de detalhe** (só o necessário, sem decompor o arquivo)
+- Painel de Ações e botão genérico de avanço só para quem pode operar a escolta (vínculo ou gestão).
+- "Alterar" periodicidade só para gestão (`PODE_ALTERAR_PERIODICIDADE`). `salvarPeriodicidade` passou a ler o retorno.
+- Check-in pela `lib/checkin.ts`, com seletor de viatura. Antes ia sempre para `viaturas[0]`.
+- **KM rastreável**: o KM de saída e o de chegada vão também no JSON do ponto de controle da etapa, que já guarda autor, horário, etapa, viatura e foto. A coluna da viatura continua sendo a fonte dos relatórios; é gravada depois do ponto e do status, com checagem de linhas afetadas, e falha vira aviso em vez de erro que levaria a repetir a etapa. No wizard o KM vinha antes de tudo e sem conferência.
+- Aberturas de diálogo viraram funções nomeadas (`abrirParada`, `abrirChegadaBase`, `abrirFinalizacao`, `abrirAvancoGenerico`) para o link `?acao=` abrir o mesmo diálogo, com o mesmo reset de estado. O link só abre se a escolta estiver na etapa esperada e quem abriu puder operar; a URL é limpa na hora, para um refresh não reabrir.
+- Com `?volta=campo`, concluído o registro (mudança de etapa, exceto a entrada no pré-início, ou parada/check-in novo) a tela volta sozinha ao Painel Guiado. Botão "Voltar ao Painel Guiado" no topo.
+- Histórico da finalização dizia "Relatório gerado pelo supervisor" mesmo quando outro participante finalizava. Agora registra quem finalizou.
+
+**Outros**
+- `app/dashboard/layout.tsx`: Campo no menu para todos os perfis; barra inferior do operador no modo guiado com três itens (Painel, Escoltas, Avisos). `useAuth` chamado uma vez só.
+- `components/checkin-alert-provider.tsx`: regra de `lib/checkin.ts` e botão "Registrar Check-in".
+- `lib/permissions.ts`: `PODE_FINALIZAR_ESCOLTA` removida (nunca importada; a finalização nunca teve trava de perfil) e `PODE_ALTERAR_PERIODICIDADE` criada.
+- `lib/pontos-controle.ts`: campo `km` no JSON, lido de forma tolerante.
+
+### Revisão adversarial do código, 12 achados, todos tratados
+
+1. **Fotos na etapa ou escolta errada**: com a tela se atualizando sozinha, um registro aberto podia ver a etapa mudar (outro participante registrou antes) e gravar as fotos na etapa seguinte, ou trocar de escolta. Trava nova: se a escolta ou a etapa mudar com o registro aberto, ele fecha, descarta as fotos e avisa. A mudança causada pela própria gravação não dispara a trava.
+2. **Botão do alerta sem efeito dentro do Campo**: navegar para a mesma rota não remonta a página. O pedido agora vai por evento quando o usuário já está no Campo.
+3. **Etapa travada**: se o ponto foi gravado e o status falhou, a guarda de viatura repetida impedia a nova tentativa. Com todas as viaturas já registradas, o avanço conclui sem novo ponto e sem foto.
+4. **Check-in da escolta errada**: o pedido só abre se a escolta pedida estiver entre as que o usuário pode operar e na rua; senão, avisa.
+5. **Telegram**: o envio ao Telegram continua pela regra antiga (qualquer PARADA zera o prazo; escolta sem nenhuma não notifica). A regra nova vale para o aviso na tela. Mudar o envio fica para decisão de Pecanha. Limite antigo registrado: cada navegador aberto envia o próprio aviso.
+6. **Gestão**: o botão do alerta leva o operador no Modo Guiado ao check-in do painel; os demais perfis vão ao diálogo da tela de detalhe. "Voltar ao Painel Guiado" no detalhe só para quem está na escolta ou veio do painel.
+7. **Link perdido**: o detalhe espera o usuário carregar antes de consumir `?acao=`.
+8. **Retorno cedo**: a volta automática considera a ação pedida; um check-in no meio da chegada na base não devolve antes da hora.
+9. **Chegada na base sem KM na tela completa**: `retornando` saiu do avanço local do Campo; a tela completa ganhou o botão que abre o diálogo com KM, e o aviso de `na_base` ganhou o botão Finalizar Escolta.
+10. Check-in do Campo confere se a escolta está na rua.
+11. Caminho antigo de saída da base (`handleStartBase`, sem chamador hoje) também leva o KM ao ponto.
+12. Recarga sem piscar a tela no caminho "faltam viaturas".
+
+### Verificação
+
+- `tsc --noEmit` sem erro; `next lint` sem aviso novo; `next build` compila (com variáveis públicas fictícias, porque a VPS não tem as do Supabase).
+- Capturas do painel em 390 px de largura (tela inicial com check-in atrasado, registro de etapa com duas viaturas, confirmação, escolta agendada), por página temporária com dados fictícios, apagada antes do commit.
+- **Não testado com banco real.** O conector do Supabase não alcança o projeto, e a leitura de credenciais pela VPS não foi autorizada. Pendente: migration 193, o SQL de leitura `03_fase0_modo_guiado.sql`, e o teste com credencial real de operador num comboio de duas viaturas.
+
+### Riscos conhecidos
+
+1. Se a RLS de `pontos_controle` for por viatura (`sou_do_efetivo_veiculo`), o participante da viatura A não grava pela B, e a decisão 3 exige migration. O SQL da Fase 0 responde.
+2. Wizard de partida, checklist de entrega e parada ainda gravam só na primeira viatura (Caminho 2).
+3. Sem internet o registro não acontece, como antes.
+
+---
+
 ## 2026-09-21 - Operador sem vínculo de vigilante: reparo e trava (migration 193)
 
 ### O problema relatado por Pecanha

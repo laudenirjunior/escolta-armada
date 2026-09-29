@@ -1,6 +1,7 @@
 ﻿'use client'
 
 import { useEffect, useState, useRef, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import {
   MapPin, Camera, ClipboardList, CheckCircle2, AlertTriangle,
   Zap, X, Check, ChevronDown, ChevronRight,
@@ -14,11 +15,18 @@ import {
   FOTOS_POR_PONTO,
   rotuloStatus,
 } from '@/lib/fluxo-escolta'
-import { TEXTO_PADRAO_ETAPA, PLACEHOLDER, ehTextoPadrao } from '@/lib/textos-padrao'
+import { TEXTO_PADRAO_ETAPA, TEXTO_PADRAO_PONTO, PLACEHOLDER, ehTextoPadrao } from '@/lib/textos-padrao'
 import { serializarObservacao } from '@/lib/pontos-controle'
 import { aplicarCarimbo, linhasDoCarimbo } from '@/lib/carimbo-foto'
 import { useAuth } from '@/hooks/useAuth'
+import { useModoGuiado } from '@/hooks/useModoGuiado'
 import { AiTextButton } from '@/components/ui/ai-text-button'
+import { ehGestao, viaturaSugerida, type VinculoEscolta } from '@/lib/acesso-escolta'
+import {
+  STATUS_COM_CHECKIN, inicioOperacaoEm, minutosAteCheckin, registrarCheckin, ultimoCheckinEm,
+} from '@/lib/checkin'
+import { CONFIRMACAO_POR_DESTINO, proximaAcao, type AcaoDetalhe } from '@/lib/proximo-passo-operador'
+import { PainelGuiado, type Confirmacao, type PainelAberto, type Pendencia } from '@/components/campo-guiado/painel-guiado'
 
 const supabase = createClient()
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -76,14 +84,24 @@ interface EscoltaAtiva {
   origem_endereco: string
   destino_endereco: string
   data_hora_prevista: string
+  periodicidade_checkin_min?: number | null
   cliente: { nome_cliente: string; cor_destaque: string | null } | null
   escolta_veiculo_id?: string
   veiculo_placa?: string
   veiculo_modelo?: string
   papel?: string
-  // So o ramo administrativo preenche esta lista. O vigilante ja chega vinculado a uma
-  // viatura pelo efetivo, e para ele nao existe escolha a fazer.
+  // Todas as viaturas da escolta, para qualquer perfil. Antes so o ramo administrativo
+  // preenchia, e com isso a regra "a etapa so avanca quando todas as viaturas
+  // registrarem" era pulada para o operador: o primeiro do comboio avancava a etapa
+  // de todos e a outra viatura ficava sem ponto.
   viaturas?: ViaturaEscolta[]
+}
+
+interface PontoResumo {
+  data_hora: string
+  observacoes: string | null
+  escolta_veiculo_id: string
+  tipo_ponto_id: string
 }
 
 interface ChecklistItem {
@@ -184,10 +202,14 @@ const COR_AVANCO: Record<string, string> = {
 // 2. `na_base` sai pelo mesmo motivo: a finalizacao exige checklist de entrega,
 //    relatorio final e as 5 fotos de angulo. Deixar o botao aqui encerrava a escolta
 //    sem prova e sem gravar data_finalizacao.
+//
+// 3. `retornando` saiu em 2026-09-29: a chegada na base leva o KM final, que so o
+//    dialogo da tela de detalhe grava. Por aqui a escolta chegava a base sem KM, e o
+//    Modo Guiado ja mandava para o dialogo; as duas telas nao podiam divergir.
 const PROXIMO_STATUS: Record<string, string> = {
   ...Object.fromEntries(
     Object.entries(PROXIMO_STATUS_FLUXO)
-      .filter(([k, v]) => v !== null && k !== STATUS.NA_BASE)
+      .filter(([k, v]) => v !== null && k !== STATUS.NA_BASE && k !== STATUS.RETORNANDO)
       .map(([k, v]) => [k, (v as { status: string }).status])
   ),
 }
@@ -361,7 +383,7 @@ export default function CampoPage() {
   const [toast, setToast] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null)
 
   // Accordions
-  const [painelAberto, setPainelAberto] = useState<'checkpoint' | 'checklist' | 'ocorrencia' | null>(null)
+  const [painelAberto, setPainelAberto] = useState<PainelAberto>(null)
 
   // Fotos do checkpoint (avançar status). Lista, nunca foto única: a regra do fluxo
   // é de FOTOS_POR_PONTO.min a FOTOS_POR_PONTO.max por ponto de controle.
@@ -389,7 +411,47 @@ export default function CampoPage() {
   // Emergência
   const [emergConfirm, setEmergConfirm] = useState(false)
 
-  const isAdmin = ['administrador', 'gestor', 'supervisor', 'central'].includes((user?.perfil?.codigo ?? '') as any)
+  // ── Modo Guiado ───────────────────────────────────────────────────────────
+  const { ligado: modoGuiado, podeDesligar, definir: definirModoGuiado } = useModoGuiado()
+  const router = useRouter()
+  // Escoltas em que o usuario esta no efetivo, qualquer que seja o perfil.
+  const [vinculos, setVinculos] = useState<VinculoEscolta[]>([])
+  // Agendadas do efetivo, em estado proprio: NUNCA em escoltaAtiva. O PROXIMO_STATUS
+  // desta tela tem agendada -> em_pre_inicio, e o painel de checkpoint passaria a
+  // oferecer esse avanco sem passar pelo wizard.
+  const [agendadas, setAgendadas] = useState<EscoltaAtiva[]>([])
+  const [semVinculoCadastro, setSemVinculoCadastro] = useState(false)
+  const [pontosEscolta, setPontosEscolta] = useState<PontoResumo[]>([])
+  const [versaoDados, setVersaoDados] = useState(0)
+  const [agora, setAgora] = useState(() => Date.now())
+  // Tela de confirmacao do Modo Guiado. So e preenchida depois que a gravacao voltou
+  // com sucesso, nunca antes.
+  const [confirmacao, setConfirmacao] = useState<Confirmacao | null>(null)
+  // Check-in pelo Painel Guiado. Mesma regra da tela de detalhe: foto e GPS.
+  const [fotosCheckin, setFotosCheckin] = useState<FotoCaptura[]>([])
+  const [obsCheckin, setObsCheckin] = useState<string>(TEXTO_PADRAO_PONTO.checkin)
+  // Pedido de check-in vindo do alerta de atraso: pela URL (?escolta=&acao=checkin),
+  // quando o usuario estava em outra tela, ou por evento, quando ja estava aqui. So a
+  // URL nao bastava: navegar para a mesma rota com outra query nao remonta a pagina,
+  // e o botao do alerta nao fazia nada justamente na tela principal do operador.
+  const escoltaPreferidaRef = useRef<string | null>(null)
+  const [pedidoCheckin, setPedidoCheckin] = useState<string | null>(null)
+  useEffect(() => {
+    try {
+      const q = new URLSearchParams(window.location.search)
+      escoltaPreferidaRef.current = q.get('escolta')
+      if (q.get('acao') === 'checkin' && q.get('escolta')) setPedidoCheckin(q.get('escolta'))
+    } catch { /* sem parametro */ }
+    const aoPedir = (e: Event) => {
+      const id = (e as CustomEvent<{ escoltaId: string }>).detail?.escoltaId
+      if (id) setPedidoCheckin(id)
+    }
+    window.addEventListener('campo:registrar-checkin', aoPedir)
+    return () => window.removeEventListener('campo:registrar-checkin', aoPedir)
+  }, [])
+
+  // Perfil de gestao ve todas as escoltas ativas; o vinculo decide o resto.
+  const isAdmin = ehGestao(user?.perfil?.codigo)
 
   // ── Qual viatura recebe o ponto de controle ───────────────────────────────
   // Decisao de Pecanha em 2026-08-19: cada viatura tem o proprio ponto de controle,
@@ -401,99 +463,153 @@ export default function CampoPage() {
   // Com o seletor, o ponto diz a verdade sobre o que foi observado, e a outra viatura
   // recebe o dela quando alguem de fato a observar.
   //
-  // Para o vigilante nada disso vale: ele ja vem vinculado a uma viatura pelo efetivo, e
-  // `viaturas` nem e preenchida no ramo dele.
+  // Decisao de Pecanha em 2026-09-29: com duas ou mais viaturas, QUALQUER participante
+  // registra por QUALQUER viatura da mesma escolta. O seletor aparece para todos,
+  // ja apontando a viatura do proprio usuario quando ele esta numa; quem nao esta
+  // escolhe manualmente. Quem registrou fica em lancado_por.
   const viaturasDaEscolta = escoltaAtiva?.viaturas ?? []
-  const precisaEscolherViatura = isAdmin && viaturasDaEscolta.length > 1
+  const viaturaDoUsuario = viaturaSugerida(vinculos, escoltaAtiva?.id)
+  const precisaEscolherViatura = viaturasDaEscolta.length > 1
   const viaturaAlvo = precisaEscolherViatura
     ? viaturasDaEscolta.find(v => v.id === viaturaAlvoId) ?? null
     : null
-  // Com uma viatura so, ou no caminho do vigilante, segue valendo o vinculo que ja veio
-  // na consulta. Com mais de uma, nada e assumido enquanto a escolha nao for feita.
+  // Com uma viatura so nao ha escolha: e ela. Com mais de uma, nada e assumido
+  // enquanto a escolha nao for feita.
   const escoltaVeiculoIdAlvo = precisaEscolherViatura
     ? viaturaAlvo?.id ?? null
-    : escoltaAtiva?.escolta_veiculo_id ?? null
+    : viaturasDaEscolta[0]?.id ?? escoltaAtiva?.escolta_veiculo_id ?? null
   const placaAlvo = precisaEscolherViatura
     ? viaturaAlvo?.placa ?? null
-    : escoltaAtiva?.veiculo_placa ?? null
+    : viaturasDaEscolta[0]?.placa ?? escoltaAtiva?.veiculo_placa ?? null
 
   const showToast = (tipo: 'ok' | 'erro', texto: string) => {
     setToast({ tipo, texto })
     setTimeout(() => setToast(null), 4000)
   }
 
+  /**
+   * Fecho de um registro que DEU CERTO. Na tela completa segue o aviso de sempre; no
+   * Modo Guiado vira a tela de confirmacao, que nao some em 4 segundos. Chamado so
+   * depois que o banco devolveu sucesso, nunca antes.
+   */
+  const concluir = (tipoToast: 'ok' | 'erro', textoToast: string, c: Omit<Confirmacao, 'horario'>) => {
+    if (modoGuiado) {
+      setConfirmacao({
+        ...c,
+        horario: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }),
+      })
+    } else {
+      showToast(tipoToast, textoToast)
+    }
+  }
+
   // ── Carregar dados ────────────────────────────────────────────────────────
-  const carregar = useCallback(async () => {
+  const carregar = useCallback(async (silencioso = false) => {
     if (!user) return
-    setLoading(true)
+    // Recarga silenciosa (tempo real, volta ao app, relogio) nao pisca a tela inteira.
+    if (!silencioso) setLoading(true)
 
     const ATIVOS = ['em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando', 'na_base']
+    // A viatura entra na consulta porque sem `escolta_veiculo_id` o ponto de controle
+    // era descartado em silencio para administrador, gestor, supervisor e central: a
+    // escolta avancava de etapa e nao sobrava prova nenhuma.
+    const SELECT_ESCOLTA = 'id, codigo_escolta, status, origem_endereco, destino_endereco, data_hora_prevista, periodicidade_checkin_min, cliente:clientes(nome_cliente, cor_destaque), escolta_veiculos(id, veiculo:veiculos(placa, modelo))'
 
-    if (isAdmin) {
-      // A viatura entra na consulta porque sem `escolta_veiculo_id` o ponto de controle
-      // era descartado em silencio para administrador, gestor, supervisor e central: a
-      // escolta avancava de etapa e nao sobrava prova nenhuma.
-      const { data: esc } = await sb
-        .from('escoltas')
-        .select('id, codigo_escolta, status, origem_endereco, destino_endereco, data_hora_prevista, cliente:clientes(nome_cliente, cor_destaque), escolta_veiculos(id, veiculo:veiculos(placa, modelo))')
-        .in('status', ATIVOS)
-        .order('data_hora_prevista')
-
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const normalizar = (e: any, minhaViaturaId?: string | null): EscoltaAtiva => {
+      // Decisao de Pecanha em 2026-08-19: cada viatura tem o proprio ponto de
+      // controle, com foto e localizacao proprias. Por isso a tela carrega TODAS as
+      // viaturas da escolta, e nao mais so a primeira.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const lista: EscoltaAtiva[] = ((esc ?? []) as any[]).map((e: any) => {
-        // Decisao de Pecanha em 2026-08-19: cada viatura tem o proprio ponto de
-        // controle, com foto e localizacao proprias. Por isso a tela carrega TODAS as
-        // viaturas da escolta, e nao mais so a primeira. Quem e perfil administrativo
-        // escolhe no painel de checkpoint qual viatura recebe o registro.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const viaturas: ViaturaEscolta[] = ((e.escolta_veiculos ?? []) as any[]).map((v: any) => ({
-          id: v.id,
-          placa: v.veiculo?.placa ?? null,
-          modelo: v.veiculo?.modelo ?? null,
-        }))
-        const primeiraViatura = viaturas[0]
-        return {
-          ...e,
-          viaturas,
-          // Continua existindo para a escolta de viatura unica, onde nao ha escolha a
-          // fazer e nenhum seletor aparece.
-          escolta_veiculo_id: primeiraViatura?.id,
-          veiculo_placa: primeiraViatura?.placa ?? undefined,
-          veiculo_modelo: primeiraViatura?.modelo ?? undefined,
-        } as EscoltaAtiva
-      })
-      setTodasEscoltas(lista)
-      if (lista.length > 0 && !escoltaAtiva) setEscoltaAtiva(lista[0])
-    } else {
-      const { data: vig } = await sb
-        .from('vigilantes')
-        .select('id')
-        .eq('usuario_id', user.id)
-        .maybeSingle()
+      const viaturas: ViaturaEscolta[] = ((e.escolta_veiculos ?? []) as any[]).map((v: any) => ({
+        id: v.id,
+        placa: v.veiculo?.placa ?? null,
+        modelo: v.veiculo?.modelo ?? null,
+      }))
+      const principal = viaturas.find(v => v.id === minhaViaturaId) ?? viaturas[0]
+      const { escolta_veiculos: _descartado, ...resto } = e
+      void _descartado
+      return {
+        ...resto,
+        viaturas,
+        // A viatura do proprio usuario quando ele esta numa; senao a primeira. E a que
+        // ocorrencia, emergencia e checklist gravam, como antes.
+        escolta_veiculo_id: principal?.id,
+        veiculo_placa: principal?.placa ?? undefined,
+        veiculo_modelo: principal?.modelo ?? undefined,
+      } as EscoltaAtiva
+    }
 
-      if (!vig) { setLoading(false); return }
+    // 1. Vinculo primeiro, para QUALQUER perfil (decisao de 2026-09-29). Antes o ramo
+    // era escolhido pelo perfil: um supervisor escalado na escolta caia na visao de
+    // gestao e nunca era tratado como membro da equipe.
+    const { data: vig } = await sb
+      .from('vigilantes')
+      .select('id')
+      .eq('usuario_id', user.id)
+      .maybeSingle()
 
+    const meusVinculos: VinculoEscolta[] = []
+    const minhasAtivas: EscoltaAtiva[] = []
+    const minhasAgendadas: EscoltaAtiva[] = []
+    if (vig) {
       const { data: efetivo } = await sb
         .from('escolta_efetivo')
-        .select('escolta_id, escolta_veiculo_id, papel_na_escolta, escolta:escoltas(id,codigo_escolta,status,origem_endereco,destino_endereco,data_hora_prevista,cliente:clientes(nome_cliente,cor_destaque)), veiculo:escolta_veiculos(veiculo:veiculos(placa,modelo))')
+        .select(`escolta_id, escolta_veiculo_id, papel_na_escolta, escolta:escoltas(${SELECT_ESCOLTA})`)
         .eq('vigilante_id', vig.id)
-
+      const vistos = new Set<string>()
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const ativa = (efetivo ?? []).find((e: any) => ATIVOS.includes(e.escolta?.status ?? ''))
-      if (ativa) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const e = ativa.escolta as any
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const v = (ativa.veiculo as any)?.veiculo
-        setEscoltaAtiva({
-          ...e,
-          escolta_veiculo_id: ativa.escolta_veiculo_id,
-          veiculo_placa: v?.placa,
-          veiculo_modelo: v?.modelo,
-          papel: ativa.papel_na_escolta,
+      for (const linha of (efetivo ?? []) as any[]) {
+        const e = linha.escolta
+        if (!e) continue
+        meusVinculos.push({
+          escolta_id: e.id,
+          escolta_veiculo_id: linha.escolta_veiculo_id ?? null,
+          papel_na_escolta: linha.papel_na_escolta ?? null,
         })
+        if (vistos.has(e.id)) continue
+        vistos.add(e.id)
+        const norm = { ...normalizar(e, linha.escolta_veiculo_id), papel: linha.papel_na_escolta }
+        if (ATIVOS.includes(e.status)) minhasAtivas.push(norm)
+        else if (e.status === STATUS.AGENDADA) minhasAgendadas.push(norm)
       }
     }
+    setSemVinculoCadastro(!vig && !isAdmin)
+
+    // Com mais de uma escolta ativa, a que esta na rua vem primeiro. Antes era a
+    // primeira que o banco devolvesse, e uma escolta parada em na_base esperando a
+    // finalizacao podia esconder a que ja estava em pre-inicio.
+    const prioridade = (st: string) =>
+      st === STATUS.EM_PRE_INICIO ? 1 : st === STATUS.NA_BASE ? 2 : 0
+    const porPrevista = (a: EscoltaAtiva, b: EscoltaAtiva) =>
+      new Date(a.data_hora_prevista).getTime() - new Date(b.data_hora_prevista).getTime()
+    minhasAtivas.sort((a, b) => prioridade(a.status) - prioridade(b.status) || porPrevista(a, b))
+    minhasAgendadas.sort(porPrevista)
+
+    let lista = minhasAtivas
+    if (isAdmin) {
+      const { data: esc } = await sb
+        .from('escoltas')
+        .select(SELECT_ESCOLTA)
+        .in('status', ATIVOS)
+        .order('data_hora_prevista')
+      const minhas = new Set(minhasAtivas.map(e => e.id))
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      lista = [...minhasAtivas, ...((esc ?? []) as any[]).filter(e => !minhas.has(e.id)).map(e => normalizar(e))]
+    }
+
+    setVinculos(meusVinculos)
+    setAgendadas(minhasAgendadas)
+    setTodasEscoltas(lista)
+    // Troca o objeto pela versao nova do banco, mantendo a escolta que estava aberta.
+    // Antes a escolta aberta so era trocada quando estava nula: a etapa na tela ficava
+    // velha ate recarregar a pagina, e nunca voltava a nulo quando a escolta saia.
+    const preferida = escoltaPreferidaRef.current
+    escoltaPreferidaRef.current = null
+    setEscoltaAtiva(prev => {
+      const alvo = preferida ?? prev?.id
+      return lista.find(e => e.id === alvo) ?? lista[0] ?? null
+    })
 
     // Carrega os modelos com os itens embutidos. Quem escolhe qual modelo vale e o
     // efeito abaixo, pelo tipo que a etapa atual pede.
@@ -514,6 +630,7 @@ export default function CampoPage() {
       itens: (m.checklist_modelo_itens ?? []).filter((i: any) => i.ativo),
     })))
     setLoading(false)
+    setVersaoDados(v => v + 1)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user])
 
@@ -554,9 +671,94 @@ export default function CampoPage() {
     setObsAvanco(destino ? (TEXTO_PADRAO_ETAPA[destino] ?? '') : '')
   }, [painelAberto, escoltaAtiva?.status])
 
-  // Trocar de escolta zera a viatura escolhida. Sem isto, o id de uma viatura da escolta
-  // anterior continuaria selecionado e o proximo registro sairia para a escolta errada.
-  useEffect(() => { setViaturaAlvoId(null) }, [escoltaAtiva?.id])
+  // Trocar de escolta volta a viatura para a sugerida: a do proprio usuario, ou
+  // nenhuma. Sem isto, o id de uma viatura da escolta anterior continuaria
+  // selecionado e o proximo registro sairia para a escolta errada.
+  useEffect(() => { setViaturaAlvoId(viaturaDoUsuario) }, [escoltaAtiva?.id, viaturaDoUsuario])
+
+  // ── Pontos da escolta aberta: check-in e registro por viatura ────────────
+  const idsViaturas = viaturasDaEscolta.map(v => v.id).join(',')
+  useEffect(() => {
+    const ids = idsViaturas ? idsViaturas.split(',') : []
+    if (ids.length === 0) { setPontosEscolta([]); return }
+    let ativo = true
+    sb.from('pontos_controle')
+      .select('data_hora, observacoes, escolta_veiculo_id, tipo_ponto_id')
+      .in('escolta_veiculo_id', ids)
+      .then(({ data }: { data: PontoResumo[] | null }) => { if (ativo) setPontosEscolta(data ?? []) })
+    return () => { ativo = false }
+  }, [idsViaturas, versaoDados])
+
+  // ── Atualizacao sem recarregar a pagina ──────────────────────────────────
+  // Antes a tela so carregava ao abrir. Se o supervisor concluia o wizard ou a outra
+  // viatura registrava a etapa, o operador so descobria depois de tirar as fotos, com
+  // "Recarregue a pagina". Tres gatilhos, porque nenhum sozinho e confiavel no
+  // celular: tempo real, volta do app para a frente e um relogio de 60 s.
+  useEffect(() => {
+    const escoltaId = escoltaAtiva?.id
+    if (!escoltaId) return
+    const ids = idsViaturas ? idsViaturas.split(',') : []
+    let canal = sb.channel(`campo-${escoltaId}-${Date.now()}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'escoltas', filter: `id=eq.${escoltaId}` }, () => carregar(true))
+    if (ids.length > 0) {
+      canal = canal.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'pontos_controle', filter: `escolta_veiculo_id=in.(${ids.join(',')})` }, () => carregar(true))
+    }
+    canal.subscribe()
+    return () => { sb.removeChannel(canal) }
+  }, [escoltaAtiva?.id, idsViaturas, carregar])
+
+  useEffect(() => {
+    const aoVoltar = () => { if (document.visibilityState === 'visible') carregar(true) }
+    document.addEventListener('visibilitychange', aoVoltar)
+    const relogio = setInterval(() => { setAgora(Date.now()); carregar(true) }, 60_000)
+    return () => {
+      document.removeEventListener('visibilitychange', aoVoltar)
+      clearInterval(relogio)
+    }
+  }, [carregar])
+
+  // Atende o pedido de check-in: abre o registro da escolta PEDIDA, nunca de outra.
+  // Nada e gravado aqui. Se a escolta nao esta entre as que o usuario pode operar, ou
+  // ja saiu da rua, avisa em vez de abrir o check-in da primeira da lista.
+  useEffect(() => {
+    if (!pedidoCheckin || loading) return
+    const alvo = todasEscoltas.find(e => e.id === pedidoCheckin)
+    setPedidoCheckin(null)
+    if (window.location.search) router.replace('/dashboard/campo')
+    if (!alvo || !STATUS_COM_CHECKIN.includes(alvo.status)) {
+      showToast('erro', 'O check-in desta escolta não está disponível para você agora. Abra a escolta pela lista.')
+      return
+    }
+    setEscoltaAtiva(alvo)
+    setConfirmacao(null)
+    setPainelAberto('checkin')
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pedidoCheckin, loading, todasEscoltas])
+
+  // ── Trava do registro aberto ──────────────────────────────────────────────
+  // A tela agora se atualiza sozinha (tempo real e relogio). Se, com o registro de
+  // etapa ou de check-in aberto, a escolta mudar de etapa ou a tela trocar de
+  // escolta, as fotos ja tiradas iriam para a etapa seguinte ou para a escolta
+  // errada: a reconferencia do avancarStatus compara com o status que a propria
+  // atualizacao ja trouxe. Entao o registro fecha, as fotos sao descartadas e o
+  // usuario e avisado.
+  const contextoRegistroRef = useRef<{ id: string | undefined; status: string | undefined } | null>(null)
+  useEffect(() => {
+    const aberto = painelAberto === 'checkpoint' || painelAberto === 'checkin'
+    if (!aberto) { contextoRegistroRef.current = null; return }
+    const atual = { id: escoltaAtiva?.id, status: escoltaAtiva?.status }
+    const anterior = contextoRegistroRef.current
+    // Durante a propria gravacao a etapa muda por causa DELA (o tempo real traz o
+    // status novo antes do fim do envio). Nao e mudanca alheia: so acompanha.
+    if (!anterior || executando) { contextoRegistroRef.current = atual; return }
+    if (anterior.id === atual.id && anterior.status === atual.status) return
+    contextoRegistroRef.current = null
+    setPainelAberto(null)
+    setFotosCheckpoint(fs => { fs.forEach(f => URL.revokeObjectURL(f.preview)); return [] })
+    setFotosCheckin(fs => { fs.forEach(f => URL.revokeObjectURL(f.preview)); return [] })
+    showToast('erro', 'A etapa da escolta mudou enquanto você registrava: outro participante registrou antes. As fotos não foram enviadas. Confira a Próxima Ação.')
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [painelAberto, escoltaAtiva?.id, escoltaAtiva?.status, executando])
 
   // ── Helper: capturar foto com GPS + timestamp ─────────────────────────────
   const capturarFoto = async (file: File): Promise<FotoCaptura> => {
@@ -613,7 +815,11 @@ export default function CampoPage() {
 
   // ── Handlers de captura de foto ───────────────────────────────────────────
   const handleFotoCheckpoint = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const arquivos = Array.from(e.target.files ?? [])
+    await adicionarFotosCheckpoint(Array.from(e.target.files ?? []))
+  }
+
+  // Separada do evento do input para o Painel Guiado usar a mesma captura.
+  const adicionarFotosCheckpoint = async (arquivos: File[]) => {
     if (arquivos.length === 0) return
 
     const espaco = FOTOS_POR_PONTO.max - fotosCheckpoint.length
@@ -648,8 +854,45 @@ export default function CampoPage() {
   const handleFotoOcorrencia = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
     if (!f) return
-    const captura = await capturarFoto(f)
-    setFotoOcorrencia(captura)
+    await definirFotoOcorrencia(f)
+  }
+
+  const definirFotoOcorrencia = async (f: File) => {
+    setCapturandoFoto(true)
+    try {
+      const captura = await capturarFoto(f)
+      setFotoOcorrencia(atual => {
+        if (atual) URL.revokeObjectURL(atual.preview)
+        return captura
+      })
+    } finally {
+      setCapturandoFoto(false)
+    }
+  }
+
+  // ── Fotos do check-in (Painel Guiado) ─────────────────────────────────────
+  const adicionarFotosCheckin = async (arquivos: File[]) => {
+    const espaco = FOTOS_POR_PONTO.max - fotosCheckin.length
+    if (arquivos.length === 0 || espaco <= 0) return
+    setCapturandoFoto(true)
+    try {
+      const capturas = await Promise.all(arquivos.slice(0, espaco).map(capturarFoto))
+      setFotosCheckin(fs => {
+        const juntas = [...fs, ...capturas]
+        juntas.slice(FOTOS_POR_PONTO.max).forEach(f => URL.revokeObjectURL(f.preview))
+        return juntas.slice(0, FOTOS_POR_PONTO.max)
+      })
+    } finally {
+      setCapturandoFoto(false)
+    }
+  }
+
+  const removerFotoCheckin = (idx: number) => {
+    setFotosCheckin(fs => {
+      const alvo = fs[idx]
+      if (alvo) URL.revokeObjectURL(alvo.preview)
+      return fs.filter((_, i) => i !== idx)
+    })
   }
 
   const handleFotoChecklist = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -714,21 +957,36 @@ export default function CampoPage() {
       return
     }
 
+    // Todas as viaturas ja tem o ponto desta etapa, mas o status nao andou: o update
+    // falhou depois do insert (rede, trigger). O ponto nao se repete, porque nao se
+    // apaga; so o status e o historico sao gravados. Sem isto a guarda de viatura
+    // repetida, logo abaixo, travaria a escolta para sempre nesta tela.
+    const temPonto = (vid: string) => pontosEscolta.some(p => p.tipo_ponto_id === tipoPontoId && p.escolta_veiculo_id === vid)
+    const idsDaEscolta = viaturasDaEscolta.map(v => v.id)
+    const pontoJaCompleto = exigePonto && !!tipoPontoId && idsDaEscolta.length > 0 && idsDaEscolta.every(temPonto)
+
     // A foto so e exigida onde existe ponto de controle para referencia-la. Nas
     // etapas sem ponto a foto nao teria dono: subia para o bucket e criava linha
     // em `fotos` que nenhuma outra tabela aponta, virando lixo permanente.
-    if (exigePonto && fotosCheckpoint.length < FOTOS_POR_PONTO.min) {
+    if (exigePonto && !pontoJaCompleto && fotosCheckpoint.length < FOTOS_POR_PONTO.min) {
       showToast('erro', `Registre ao menos ${FOTOS_POR_PONTO.min} foto para o checkpoint.`)
       return
     }
     // Com mais de uma viatura na escolta, o ponto so sai depois que quem registra disser
     // qual viatura observou. Nao ha escolha padrao: cada viatura tem o proprio ponto.
-    if (precisaEscolherViatura && !viaturaAlvo) {
+    if (!pontoJaCompleto && precisaEscolherViatura && !viaturaAlvo) {
       showToast('erro', 'Escolha a viatura que recebe este ponto de controle.')
       return
     }
-    if (!escoltaVeiculoIdAlvo) {
+    if (!pontoJaCompleto && !escoltaVeiculoIdAlvo) {
       showToast('erro', 'Escolta sem viatura vinculada. Vincule a viatura antes de registrar o ponto.')
+      return
+    }
+    // Com qualquer participante podendo registrar por qualquer viatura, dois
+    // aparelhos podem mirar a mesma viatura. O segundo ponto seria permanente no
+    // relatorio do cliente: pontos_controle nao tem DELETE.
+    if (!pontoJaCompleto && exigePonto && tipoPontoId && escoltaVeiculoIdAlvo && temPonto(escoltaVeiculoIdAlvo)) {
+      showToast('erro', 'Esta viatura já registrou esta etapa. Escolha outra viatura ou aguarde.')
       return
     }
     if (!user?.id) {
@@ -756,7 +1014,7 @@ export default function CampoPage() {
       // deixaria arquivo no bucket e linha orfa em `fotos`.
       const fotoIds: string[] = []
       let fotoId: string | null = null
-      if (exigePonto) {
+      if (exigePonto && !pontoJaCompleto) {
         for (const captura of fotosCheckpoint) {
           const id = await uploadFoto(captura, TIPO_FOTO.PONTO_CONTROLE)
           if (id) fotoIds.push(id)
@@ -803,7 +1061,7 @@ export default function CampoPage() {
       // escolta avancava de etapa e a prova simplesmente nao existia. Se o ponto
       // falhar, o status nao anda; ponto orfao se reaproveita, status avancado sem
       // prova nao se desfaz.
-      if (exigePonto && tipoPontoId) {
+      if (exigePonto && tipoPontoId && !pontoJaCompleto) {
         const { error: pontoErr } = await sb.from('pontos_controle').insert({
           escolta_veiculo_id: escoltaVeiculoIdAlvo,
           tipo_ponto_id: tipoPontoId,
@@ -847,16 +1105,21 @@ export default function CampoPage() {
         const faltando = viaturasDaEscolta.filter(v => !comPonto.has(v.id))
         if (faltando.length > 0) {
           const placas = faltando.map(v => v.placa ?? 'sem placa').join(', ')
-          showToast(
+          concluir(
             'ok',
-            `Ponto registrado. A etapa avança quando as demais viaturas registrarem: ${placas}.`
+            `Ponto registrado. A etapa avança quando as demais viaturas registrarem: ${placas}.`,
+            {
+              titulo: placaAlvo ? `Registro da viatura ${placaAlvo} salvo` : 'Registro da viatura salvo',
+              detalhe: `A etapa avança quando as demais viaturas registrarem: ${placas}.`,
+              avisos,
+            }
           )
           limparFotosCheckpoint()
           setObsAvanco('')
-          setViaturaAlvoId(null)
+          setViaturaAlvoId(viaturaDoUsuario)
           setPainelAberto(null)
           setExecutando(false)
-          await carregar()
+          await carregar(true)
           return
         }
       }
@@ -987,9 +1250,9 @@ export default function CampoPage() {
 
       limparFotosCheckpoint()
       setObsAvanco('')
-      // Cada ponto de controle exige escolha propria de viatura: a escolha da etapa
-      // anterior nao pode valer como padrao silencioso da seguinte.
-      setViaturaAlvoId(null)
+      // A escolha da etapa anterior nao vale como padrao silencioso da seguinte: volta
+      // para a viatura do proprio usuario, ou para nenhuma.
+      setViaturaAlvoId(viaturaDoUsuario)
       setPainelAberto(null)
 
       const msgs: Record<string, string> = {
@@ -1006,8 +1269,13 @@ export default function CampoPage() {
         finalizada: 'Escolta finalizada com sucesso!',
       }
       const msgBase = msgs[proximo] ?? 'Status atualizado.'
-      if (avisos.length > 0) showToast('erro', `${msgBase} ${avisos.join(' ')}`)
-      else showToast('ok', msgBase)
+      concluir(
+        avisos.length > 0 ? 'erro' : 'ok',
+        avisos.length > 0 ? `${msgBase} ${avisos.join(' ')}` : msgBase,
+        { titulo: CONFIRMACAO_POR_DESTINO[proximo] ?? msgBase, avisos },
+      )
+      // Traz a etapa e os pontos novos do banco: a Proxima Acao depende deles.
+      carregar(true)
     } catch (err) {
       showToast('erro', err instanceof Error ? err.message : 'Erro ao registrar checkpoint.')
     } finally {
@@ -1159,14 +1427,106 @@ export default function CampoPage() {
       setDescOcorrencia('')
       limparFotoOcorrencia()
       setPainelAberto(null)
-      showToast(
+      concluir(
         gps ? 'ok' : 'erro',
         gps
           ? 'Ocorrência registrada com sucesso.'
-          : 'Ocorrência registrada. Posição não capturada: sem sinal de GPS.'
+          : 'Ocorrência registrada. Posição não capturada: sem sinal de GPS.',
+        {
+          titulo: 'Ocorrência registrada',
+          detalhe: 'A central foi avisada.',
+          avisos: gps ? [] : ['Posição não capturada: sem sinal de GPS.'],
+        }
       )
     } catch (err) {
       showToast('erro', err instanceof Error ? err.message : 'Erro ao registrar ocorrência.')
+    } finally {
+      setExecutando(false)
+    }
+  }
+
+  // ── Registrar check-in (Painel Guiado) ────────────────────────────────────
+  // A gravacao e a de lib/checkin.ts, a mesma que a tela de detalhe usa. Aqui ficam
+  // so as fotos, que no Campo saem carimbadas, e o aviso ao Telegram.
+  const registrarCheckinCampo = async () => {
+    if (!escoltaAtiva || !user?.id) return
+    if (!STATUS_COM_CHECKIN.includes(escoltaAtiva.status)) {
+      showToast('erro', 'O check-in só vale com a escolta na rua. Confira a etapa atual.')
+      setPainelAberto(null)
+      return
+    }
+    if (fotosCheckin.length < FOTOS_POR_PONTO.min) {
+      showToast('erro', `Tire ao menos ${FOTOS_POR_PONTO.min} foto para o check-in.`)
+      return
+    }
+    if (precisaEscolherViatura && !viaturaAlvo) {
+      showToast('erro', 'Escolha a viatura deste check-in.')
+      return
+    }
+    if (!escoltaVeiculoIdAlvo) {
+      showToast('erro', 'Escolta sem viatura vinculada. Avise a central.')
+      return
+    }
+
+    setExecutando(true)
+    try {
+      // O check-in existe para dizer onde a equipe esta: sem GPS ele nao sai, como
+      // sempre foi na tela de detalhe. E a unica gravacao desta tela que bloqueia.
+      let gps = fotosCheckin.find(f => f.gps)?.gps ?? null
+      if (!gps) {
+        try { gps = await obterGPS() } catch { gps = null }
+      }
+      if (!gps) {
+        showToast('erro', 'Sem localização. O check-in precisa do GPS: vá para um local aberto e tente de novo.')
+        return
+      }
+
+      const fotoIds: string[] = []
+      for (const captura of fotosCheckin) {
+        const id = await uploadFoto(captura, TIPO_FOTO.PONTO_CONTROLE)
+        if (id) fotoIds.push(id)
+      }
+      if (fotoIds.length === 0) throw new Error('Não foi possível enviar as fotos do check-in. Tente novamente.')
+
+      await registrarCheckin(sb, {
+        escoltaVeiculoId: escoltaVeiculoIdAlvo,
+        fotoIds,
+        gps,
+        observacao: obsCheckin,
+        userId: user.id,
+      })
+
+      // Telegram depois da gravacao, sem esperar: o check-in ja esta salvo.
+      let fotoTgUrl: string | null = null
+      const { data: fotoRow } = await sb.from('fotos').select('caminho_arquivo').eq('id', fotoIds[0]).maybeSingle()
+      if (fotoRow?.caminho_arquivo) {
+        fotoTgUrl = sb.storage.from('fotos').getPublicUrl(fotoRow.caminho_arquivo)?.data?.publicUrl ?? null
+      }
+      fetch('/api/telegram', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tipo: 'ponto_controle',
+          titulo: 'Check-in Periódico',
+          descricao: ehTextoPadrao(obsCheckin, TEXTO_PADRAO_PONTO.checkin) ? undefined : obsCheckin.trim() || undefined,
+          escolta_id: escoltaAtiva.id,
+          escolta_codigo: escoltaAtiva.codigo_escolta,
+          cliente: escoltaAtiva.cliente?.nome_cliente,
+          status_atual: rotuloStatus(escoltaAtiva.status),
+          veiculo: placaAlvo ?? undefined,
+          foto_url: fotoTgUrl,
+          data_hora: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+        }),
+      }).catch(() => {})
+
+      setFotosCheckin(fs => { fs.forEach(f => URL.revokeObjectURL(f.preview)); return [] })
+      setObsCheckin(TEXTO_PADRAO_PONTO.checkin)
+      setViaturaAlvoId(viaturaDoUsuario)
+      setPainelAberto(null)
+      concluir('ok', 'Check-in registrado.', { titulo: 'Check-in registrado', avisos: [] })
+      carregar(true)
+    } catch (err) {
+      showToast('erro', err instanceof Error ? err.message : 'Erro ao registrar o check-in.')
     } finally {
       setExecutando(false)
     }
@@ -1232,11 +1592,16 @@ export default function CampoPage() {
       }).catch(() => {})
 
       setEmergConfirm(false)
-      showToast(
+      concluir(
         'ok',
         gps
           ? 'EMERGÊNCIA REGISTRADA! Central acionada com sua posição.'
-          : 'EMERGÊNCIA REGISTRADA! Central acionada. Sem sinal de GPS: informe sua posição por rádio ou telefone.'
+          : 'EMERGÊNCIA REGISTRADA! Central acionada. Sem sinal de GPS: informe sua posição por rádio ou telefone.',
+        {
+          titulo: 'Emergência acionada',
+          detalhe: gps ? 'A central recebeu o aviso com a sua posição.' : 'A central recebeu o aviso.',
+          avisos: gps ? [] : ['Sem sinal de GPS: informe sua posição por rádio ou telefone.'],
+        }
       )
     } catch (err) {
       showToast('erro', err instanceof Error ? err.message : 'Erro ao acionar emergência.')
@@ -1262,10 +1627,153 @@ export default function CampoPage() {
   const podeAvancar = !!proximoStatus
   // Mesma regra da validacao: onde nao ha ponto de controle, a foto nao e exigida.
   // Sem isto o botao ficaria travado para sempre nessas etapas.
-  const exigeFotoCheckpoint = !!proximoStatus && !SEM_PONTO_DE_CONTROLE.includes(proximoStatus)
+  // Todas as viaturas ja registraram a etapa, mas ela nao avancou (o status falhou
+  // depois do ponto). O avanco conclui sem foto nova: o ponto ja existe e nao se repete.
+  const tipoPontoProximo = proximoStatus ? STATUS_TO_TIPO_PONTO[proximoStatus] : undefined
+  const etapaSoFaltaStatus = !!tipoPontoProximo && viaturasDaEscolta.length > 0 &&
+    viaturasDaEscolta.every(v => pontosEscolta.some(p => p.tipo_ponto_id === tipoPontoProximo && p.escolta_veiculo_id === v.id))
+  const exigeFotoCheckpoint = !!proximoStatus && !SEM_PONTO_DE_CONTROLE.includes(proximoStatus) && !etapaSoFaltaStatus
   const mostrarChecklist = ['em_pre_inicio', 'na_base'].includes(status)
   const mostrarOcorrencia = ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando'].includes(status)
   const checklistRespondidos = checklistItems.filter(i => i.resposta !== null).length
+
+  // ── Modo Guiado: Proxima Acao e Pendencias da Escolta ─────────────────────
+  const minutosCheckin = escoltaAtiva
+    ? minutosAteCheckin({
+        periodicidadeMin: escoltaAtiva.periodicidade_checkin_min,
+        status,
+        ultimoCheckin: ultimoCheckinEm(pontosEscolta),
+        inicioOperacao: inicioOperacaoEm(pontosEscolta),
+        dataHoraPrevista: escoltaAtiva.data_hora_prevista,
+        agora,
+      })
+    : null
+  const proxima = escoltaAtiva ? proximaAcao(status, { minutosAteCheckin: minutosCheckin }) : null
+  // Viaturas que ja registraram a etapa que o botao principal registra.
+  const tipoPontoDaAcao = proximoStatus ? STATUS_TO_TIPO_PONTO[proximoStatus] : undefined
+  const viaturasJaRegistradas = tipoPontoDaAcao
+    ? viaturasDaEscolta
+        .filter(v => pontosEscolta.some(p => p.tipo_ponto_id === tipoPontoDaAcao && p.escolta_veiculo_id === v.id))
+        .map(v => v.id)
+    : []
+  const viaturasFaltando = viaturasJaRegistradas.length > 0
+    ? viaturasDaEscolta.filter(v => !viaturasJaRegistradas.includes(v.id))
+    : []
+  const pendencias: Pendencia[] = []
+  if (minutosCheckin !== null && minutosCheckin <= 0) {
+    pendencias.push({
+      nivel: 'alerta',
+      texto: minutosCheckin === 0 ? 'Check-in vence agora' : `Check-in atrasado há ${Math.abs(minutosCheckin)} min`,
+    })
+  } else if (minutosCheckin !== null && minutosCheckin <= 5) {
+    pendencias.push({ nivel: 'atencao', texto: `Check-in vence em ${minutosCheckin} min` })
+  }
+  if (etapaSoFaltaStatus) {
+    pendencias.push({ nivel: 'atencao', texto: 'O registro desta etapa foi salvo, mas a etapa não avançou. Toque na Próxima Ação para concluir.' })
+  }
+  if (viaturasFaltando.length > 0) {
+    pendencias.push({
+      nivel: 'atencao',
+      texto: `Aguardando registro da viatura ${viaturasFaltando.map(v => v.placa ?? 'sem placa').join(', ')}`,
+    })
+  }
+
+  /** Abre um fluxo do Painel Guiado ja com a viatura sugerida. */
+  const abrirPainelGuiado = (painel: PainelAberto) => {
+    if (painel === 'checkpoint' || painel === 'checkin') {
+      // A do proprio usuario, se ele esta numa e ela ainda nao registrou a etapa;
+      // senao a primeira que falta; senao nenhuma, e a escolha e manual.
+      const minhaLivre = viaturaDoUsuario && !(painel === 'checkpoint' && viaturasJaRegistradas.includes(viaturaDoUsuario))
+      setViaturaAlvoId(minhaLivre ? viaturaDoUsuario : painel === 'checkpoint' ? viaturasFaltando[0]?.id ?? null : null)
+    }
+    setPainelAberto(painel)
+  }
+
+  /** Leva ao dialogo existente na tela de detalhe; ao concluir, ela devolve para ca. */
+  const abrirDetalhe = (acao?: AcaoDetalhe, escoltaId?: string) => {
+    const id = escoltaId ?? escoltaAtiva?.id
+    if (!id) return
+    const q = new URLSearchParams({ volta: 'campo' })
+    if (acao && acao !== 'wizard') q.set('acao', acao)
+    router.push(`/dashboard/escoltas/${id}?${q.toString()}`)
+  }
+
+  if (modoGuiado) {
+    return (
+      <div className="pb-4 px-1 md:px-0">
+        {/* No Modo Guiado o aviso de sucesso e a tela de confirmacao; erro continua no toast. */}
+        <Toast msg={toast?.tipo === 'erro' ? toast : null} />
+        <PainelGuiado
+          escolta={escoltaAtiva ? {
+            id: escoltaAtiva.id,
+            codigo: escoltaAtiva.codigo_escolta,
+            cliente: escoltaAtiva.cliente?.nome_cliente ?? null,
+            cor: escoltaAtiva.cliente?.cor_destaque ?? null,
+            status,
+            origem: escoltaAtiva.origem_endereco,
+            destino: escoltaAtiva.destino_endereco,
+            prevista: escoltaAtiva.data_hora_prevista,
+          } : null}
+          escoltasParaEscolher={todasEscoltas.map(e => ({ id: e.id, codigo: e.codigo_escolta, cliente: e.cliente?.nome_cliente ?? null }))}
+          onSelecionarEscolta={(id) => {
+            const e = todasEscoltas.find(t => t.id === id)
+            if (e) { setEscoltaAtiva(e); setPainelAberto(null) }
+          }}
+          agendadas={agendadas.map(a => ({ id: a.id, codigo: a.codigo_escolta, cliente: a.cliente?.nome_cliente ?? null, prevista: a.data_hora_prevista }))}
+          semVinculoCadastro={semVinculoCadastro}
+          proxima={proxima}
+          acaoEtapa={escoltaAtiva
+            ? (() => { const a = proximaAcao(status); return etapaSoFaltaStatus ? { ...a, exigeFoto: false } : a })()
+            : null}
+          pendencias={pendencias}
+          checkinDisponivel={STATUS_COM_CHECKIN.includes(status)}
+          paradaDisponivel={STATUS_COM_CHECKIN.includes(status)}
+          painel={painelAberto}
+          onAbrirPainel={abrirPainelGuiado}
+          // Com a etapa so faltando o status, nao ha viatura a escolher.
+          viaturas={etapaSoFaltaStatus ? [] : viaturasDaEscolta}
+          viaturaAlvoId={viaturaAlvoId}
+          onEscolherViatura={setViaturaAlvoId}
+          viaturasJaRegistradas={viaturasJaRegistradas}
+          fotosEtapa={fotosCheckpoint}
+          onAdicionarFotosEtapa={adicionarFotosCheckpoint}
+          onRemoverFotoEtapa={removerFotoCheckpoint}
+          obsEtapa={obsAvanco}
+          onObsEtapa={setObsAvanco}
+          onConfirmarEtapa={avancarStatus}
+          fotosCheckin={fotosCheckin}
+          onAdicionarFotosCheckin={adicionarFotosCheckin}
+          onRemoverFotoCheckin={removerFotoCheckin}
+          obsCheckin={obsCheckin}
+          onObsCheckin={setObsCheckin}
+          onConfirmarCheckin={registrarCheckinCampo}
+          tiposOcorrencia={tiposOcorrencia}
+          tipoOcId={tipoOcId}
+          onTipoOc={setTipoOcId}
+          descOc={descOcorrencia}
+          onDescOc={setDescOcorrencia}
+          placeholderOc={PLACEHOLDER.descOcorrencia}
+          fotoOc={fotoOcorrencia}
+          onFotoOc={definirFotoOcorrencia}
+          onLimparFotoOc={limparFotoOcorrencia}
+          onConfirmarOcorrencia={registrarOcorrencia}
+          emergConfirm={emergConfirm}
+          onEmergIniciar={() => setEmergConfirm(true)}
+          onEmergCancelar={() => setEmergConfirm(false)}
+          onEmergConfirmar={acionarEmergencia}
+          executando={executando}
+          capturandoFoto={capturandoFoto}
+          confirmacao={confirmacao}
+          onFecharConfirmacao={() => setConfirmacao(null)}
+          onAbrirDetalhe={abrirDetalhe}
+          onVerEscoltas={() => router.push('/dashboard/escoltas')}
+          podeDesligar={podeDesligar}
+          onDesligarModo={() => { setConfirmacao(null); definirModoGuiado(false) }}
+          carimbo={formatarCarimbo}
+        />
+      </div>
+    )
+  }
 
   return (
     <div className="max-w-xl mx-auto space-y-4 pb-12 px-4 md:px-0">
@@ -1273,6 +1781,14 @@ export default function CampoPage() {
 
       {/* ── Header ── */}
       <div>
+        <button
+          type="button"
+          onClick={() => definirModoGuiado(true)}
+          className="w-full mb-3 flex items-center justify-center gap-2 font-bold text-sm rounded"
+          style={{ minHeight: '48px', backgroundColor: '#1A294A', color: '#fff' }}
+        >
+          Voltar ao Modo Guiado <ChevronRight size={16} />
+        </button>
         <h1 className="page-title">Campo</h1>
         <p className="page-subtitle flex items-center gap-1.5">
           <User size={12}/> {user?.nome_completo?.split(' ').slice(0, 2).join(' ')} · {user?.perfil?.nome_exibicao}
@@ -1280,7 +1796,7 @@ export default function CampoPage() {
       </div>
 
       {/* ── Seletor de escolta (admin) ── */}
-      {isAdmin && todasEscoltas.length > 0 && (
+      {(todasEscoltas.length > 1 || (isAdmin && todasEscoltas.length > 0)) && (
         <div className="card-light p-3">
           <p className="text-[10px] font-black text-[#6B7E8A] uppercase tracking-widest mb-2">Selecionar Escolta</p>
           <div className="flex flex-wrap gap-2">
@@ -1445,12 +1961,28 @@ export default function CampoPage() {
                   <div>
                     <p className="text-sm font-bold" style={{ color: '#1E2D35' }}>Viatura recolhida na base</p>
                     <p className="text-xs mt-1 leading-relaxed" style={{ color: '#6B7E8A' }}>
-                      A finalização da escolta é feita pelo supervisor, na tela de detalhe,
-                      com o checklist de entrega, o relatório final e as fotos da viatura.
-                      Avise a central que a viatura chegou.
+                      A finalização é feita na tela de detalhe, com o checklist de entrega,
+                      o relatório final e as fotos da viatura, por qualquer participante da
+                      escolta ou pela gestão.
                     </p>
+                    <button type="button" onClick={() => abrirDetalhe('finalizar')} className="btn-primary mt-3 w-full" style={{ minHeight: '48px' }}>
+                      Finalizar Escolta
+                    </button>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* ── Chegada na base: so pelo dialogo da tela de detalhe, que grava o KM final ── */}
+            {status === STATUS.RETORNANDO && (
+              <div className="card-light p-4" style={{ border: '1.5px solid rgba(74,144,164,0.3)' }}>
+                <p className="text-sm font-bold" style={{ color: '#1E2D35' }}>Retorno à Base</p>
+                <p className="text-xs mt-1 leading-relaxed" style={{ color: '#6B7E8A' }}>
+                  A chegada na base registra as fotos e o KM final de cada viatura, na tela de detalhe.
+                </p>
+                <button type="button" onClick={() => abrirDetalhe('chegada_base')} className="btn-primary mt-3 w-full" style={{ minHeight: '48px' }}>
+                  Registrar Chegada na Base
+                </button>
               </div>
             )}
 
@@ -1490,9 +2022,9 @@ export default function CampoPage() {
                     <input ref={fotoCheckpointRef} type="file" accept="image/*" capture="environment"
                       className="hidden" onChange={handleFotoCheckpoint} />
 
-                    {/* Seletor de viatura. So aparece quando ha mais de uma viatura na
-                        escolta e quem registra e perfil administrativo: com uma viatura
-                        so, e no caminho do vigilante, nao ha escolha a fazer. */}
+                    {/* Seletor de viatura. Aparece para qualquer perfil quando ha mais de
+                        uma viatura na escolta, ja apontando a do proprio usuario. Com uma
+                        viatura so nao ha escolha a fazer. */}
                     {precisaEscolherViatura && (
                       <div className="space-y-2">
                         <label className="block text-[11px] font-black uppercase tracking-widest" style={{ color: '#6B7E8A' }}>
@@ -1589,7 +2121,7 @@ export default function CampoPage() {
 
                     <button
                       onClick={avancarStatus}
-                      disabled={executando || capturandoFoto || (exigeFotoCheckpoint && fotosCheckpoint.length < FOTOS_POR_PONTO.min) || (precisaEscolherViatura && !viaturaAlvo)}
+                      disabled={executando || capturandoFoto || (exigeFotoCheckpoint && fotosCheckpoint.length < FOTOS_POR_PONTO.min) || (!etapaSoFaltaStatus && precisaEscolherViatura && !viaturaAlvo)}
                       className="w-full rounded text-white font-black text-sm uppercase tracking-wider flex items-center justify-center gap-2 transition-all active:scale-[0.98] disabled:opacity-50"
                       style={{ backgroundColor: botaoAvanco.cor, minHeight: '56px', padding: '0 16px' }}
                     >

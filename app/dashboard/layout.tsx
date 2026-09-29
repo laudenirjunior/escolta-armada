@@ -14,6 +14,7 @@ import { TelegramNotificacoesProvider } from '@/components/telegram-notificacoes
 import { CheckinAlertProvider } from '@/components/checkin-alert-provider'
 import { InstalarAppProvider } from '@/components/instalar-app-provider'
 import { useAuth } from '@/hooks/useAuth'
+import { ModoGuiadoProvider, useModoGuiado } from '@/hooks/useModoGuiado'
 import { createClient } from '@/lib/supabase/client'
 import type { Perfil } from '@/types'
 
@@ -32,7 +33,9 @@ const NAV: { section: string; items: NavItem[] }[] = [
     items: [
       { label: 'Painel',        href: '/dashboard',               icon: <LayoutDashboard size={16} />, perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
       { label: 'Escoltas',      href: '/dashboard/escoltas',       icon: <Shield size={16} />,          perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
-      { label: 'Campo',         href: '/dashboard/campo',          icon: <Radio size={16} />,           perfis: ['operador'] as Perfil[] },
+      // Campo para todos os perfis desde 2026-09-29: quem esta vinculado a uma escolta
+      // registra por ela, seja qual for o perfil (lib/acesso-escolta.ts).
+      { label: 'Campo',         href: '/dashboard/campo',          icon: <Radio size={16} />,           perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
       { label: 'Mapa',          href: '/dashboard/mapa',           icon: <Map size={16} />,             perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
       { label: 'Notificações',  href: '/dashboard/notificacoes',   icon: <Bell size={16} />,            perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
     ],
@@ -67,13 +70,34 @@ const NAV: { section: string; items: NavItem[] }[] = [
 const BOTTOM_NAV_ITEMS: { label: string; href: string; icon: React.ReactNode; perfis: Perfil[] }[] = [
   { label: 'Painel',     href: '/dashboard',             icon: <LayoutDashboard size={20} />, perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
   { label: 'Escoltas',   href: '/dashboard/escoltas',    icon: <Shield size={20} />,          perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
-  { label: 'Campo',      href: '/dashboard/campo',       icon: <Radio size={20} />,           perfis: ['operador'] as Perfil[] },
+  { label: 'Campo',      href: '/dashboard/campo',       icon: <Radio size={20} />,           perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
   { label: 'Avisos',     href: '/dashboard/notificacoes', icon: <Bell size={20} />,           perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
   { label: 'Mapa',       href: '/dashboard/mapa',        icon: <Map size={20} />,             perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
 ]
 
+// Barra inferior do operador no Modo Guiado: so o que ele usa em campo. Painel leva
+// direto ao Painel Operacional Guiado, que e a tela Campo.
+const BOTTOM_NAV_GUIADO: { label: string; href: string; icon: React.ReactNode }[] = [
+  { label: 'Painel',   href: '/dashboard/campo',        icon: <Radio size={22} /> },
+  { label: 'Escoltas', href: '/dashboard/escoltas',     icon: <Shield size={22} /> },
+  { label: 'Avisos',   href: '/dashboard/notificacoes', icon: <Bell size={22} /> },
+]
+
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const { user, loading, isAuthenticated, logout, precisaTrocarSenha } = useAuth()
+  // Uma chamada so: useAuth guarda estado proprio, e chamar de novo no componente
+  // interno repetiria a consulta de sessao e de perfil.
+  const auth = useAuth()
+  return (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    <ModoGuiadoProvider usuarioId={auth.user?.id ?? null} metadados={(auth.user as any)?.metadados}>
+      <DashboardLayoutInterno auth={auth}>{children}</DashboardLayoutInterno>
+    </ModoGuiadoProvider>
+  )
+}
+
+function DashboardLayoutInterno({ children, auth }: { children: React.ReactNode; auth: ReturnType<typeof useAuth> }) {
+  const { user, loading, isAuthenticated, logout, precisaTrocarSenha } = auth
+  const { ligado: modoGuiado } = useModoGuiado()
   const router = useRouter()
   const pathname = usePathname()
   const [notifCount, setNotifCount] = useState(0)
@@ -139,7 +163,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     </SidebarContent>
   )
 
-  const bottomNavItems = BOTTOM_NAV_ITEMS.filter(i => perfil && i.perfis.includes(perfil))
+  const bottomNavItems = perfil === 'operador' && modoGuiado
+    ? BOTTOM_NAV_GUIADO
+    : BOTTOM_NAV_ITEMS.filter(i => perfil && i.perfis.includes(perfil))
 
   return (
     <div
@@ -179,7 +205,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </Sidebar>
 
         <TelegramNotificacoesProvider />
-        <CheckinAlertProvider />
+        <CheckinAlertProvider perfil={perfil} />
         <InstalarAppProvider />
 
         {/* Conteúdo principal: folga no mobile para não ficar atrás da bottom nav, mais a área segura do iPhone */}

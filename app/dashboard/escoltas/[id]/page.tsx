@@ -18,7 +18,11 @@ import {
   PODE_AVANCAR_ESCOLTA,
   PODE_CANCELAR_ESCOLTA,
   PODE_VER_FINANCEIRO,
+  PODE_ALTERAR_PERIODICIDADE,
 } from '@/lib/permissions'
+import { podeOperarEscolta } from '@/lib/acesso-escolta'
+import { minutosAteCheckin as calcularMinutosAteCheckin, inicioOperacaoEm, registrarCheckin, TIPO_CHECKIN } from '@/lib/checkin'
+import { useModoGuiado } from '@/hooks/useModoGuiado'
 import {
   LABELS_STATUS,
   CLASSE_BADGE_STATUS,
@@ -77,7 +81,9 @@ interface EfetivoItem {
   papel_na_escolta: string
   confirmado: boolean
   valor_pago_vigilante: number | null
-  vigilante: { nome_completo: string } | null
+  // usuario_id e o que liga o vigilante a um login: e por ele que a tela sabe se quem
+  // esta usando pertence a esta escolta (lib/acesso-escolta.ts).
+  vigilante: { nome_completo: string; usuario_id?: string | null } | null
 }
 
 interface HistoricoItem {
@@ -660,6 +666,8 @@ export default function EscoltaDetalhePage() {
   // Aviso proprio, e nao `erro`: carregar() zera `erro` no recarregamento seguinte, e a
   // ausencia de posicao precisa continuar visivel depois que o dialogo fecha.
   const [avisoSemGps, setAvisoSemGps] = useState(false)
+  // KM que ficou no ponto de controle mas nao entrou na coluna da viatura.
+  const [avisoKm, setAvisoKm] = useState<string | null>(null)
 
   // Dialogs de Ações do Operador
   const [dialogStartBase, setDialogStartBase] = useState(false)
@@ -681,6 +689,15 @@ export default function EscoltaDetalhePage() {
   const [obsParada, setObsParada] = useState('')
   const [fotosParada, setFotosParada] = useState<File[]>([])
   const [paradas, setParadas] = useState<ParadaItem[]>([])
+  // Primeiro ponto da escolta: referencia do check-in enquanto nao houver nenhum.
+  const [inicioOperacao, setInicioOperacao] = useState<string | null>(null)
+  // Viatura em que o proprio usuario esta escalado, se estiver. Decisao de 2026-09-29:
+  // qualquer participante registra por qualquer viatura da escolta; a dele e so a
+  // sugestao inicial do seletor.
+  const minhaViaturaId = viaturas.find(v => v.efetivo.some(e => !!user?.id && e.vigilante?.usuario_id === user.id))?.id ?? null
+  const vinculadoAEscolta = !!minhaViaturaId
+  // Viatura do check-in. Antes o check-in ia sempre para viaturas[0].
+  const [viaturaCheckinId, setViaturaCheckinId] = useState<string>('')
   const [paradaSelecionada, setParadaSelecionada] = useState<ParadaItem | null>(null)
 
   // Check-in periódico
@@ -821,7 +838,7 @@ export default function EscoltaDetalhePage() {
     const { data: efet } = viaturaIds.length > 0
       ? await sb
           .from('escolta_efetivo')
-          .select(`id, vigilante_id, papel_na_escolta, confirmado, valor_pago_vigilante, escolta_veiculo_id, vigilante:vigilantes(nome_completo)`)
+          .select(`id, vigilante_id, papel_na_escolta, confirmado, valor_pago_vigilante, escolta_veiculo_id, vigilante:vigilantes(nome_completo, usuario_id)`)
           .in('escolta_veiculo_id', viaturaIds)
       : { data: null }
 
@@ -1030,6 +1047,9 @@ export default function EscoltaDetalhePage() {
     tl.sort((a, b) => new Date(b.data_hora).getTime() - new Date(a.data_hora).getTime())
     setTimeline(tl)
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setInicioOperacao(inicioOperacaoEm(((pts ?? []) as any[]).map((p: any) => ({ data_hora: p.data_hora }))))
+
     // ── Paradas registradas ────────────────────────────────────────────────────
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const paradasFiltradas = (pts ?? []).filter((p: any) => {
@@ -1064,23 +1084,27 @@ export default function EscoltaDetalhePage() {
   useEffect(() => { carregar() }, [carregar])
 
   // ── Countdown para próximo check-in ──────────────────────────────────────────
+  // A regra e a de lib/checkin.ts, a mesma do alerta global e do Painel Guiado.
   useEffect(() => {
-    if (!escolta?.periodicidade_checkin_min || !['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando'].includes(escolta.status)) {
-      setMinutosAteCheckin(null)
-      return
-    }
+    if (!escolta) { setMinutosAteCheckin(null); return }
     const calcular = () => {
-      const ultimoCheckin = paradas
-        .filter(p => p.tipo === 'reporte_periodico')
-        .sort((a, b) => new Date(b.data_hora).getTime() - new Date(a.data_hora).getTime())[0]
-      const referencia = ultimoCheckin ? new Date(ultimoCheckin.data_hora) : new Date(escolta.data_hora_prevista)
-      const diff = escolta.periodicidade_checkin_min! * 60 * 1000 - (Date.now() - referencia.getTime())
-      setMinutosAteCheckin(Math.floor(diff / 60000))
+      const ultimo = paradas
+        .filter(p => p.tipo === TIPO_CHECKIN)
+        .map(p => p.data_hora)
+        .sort()
+        .pop() ?? null
+      setMinutosAteCheckin(calcularMinutosAteCheckin({
+        periodicidadeMin: escolta.periodicidade_checkin_min,
+        status: escolta.status,
+        ultimoCheckin: ultimo,
+        inicioOperacao,
+        dataHoraPrevista: escolta.data_hora_prevista,
+      }))
     }
     calcular()
     const t = setInterval(calcular, 30000)
     return () => clearInterval(t)
-  }, [escolta, paradas])
+  }, [escolta, paradas, inicioOperacao])
 
   // ── Avançar status ───────────────────────────────────────────────────────────
   const avancarStatus = async () => {
@@ -1276,8 +1300,7 @@ export default function EscoltaDetalhePage() {
         }
       }
 
-      // 4. Atualizar KM saída de cada viatura
-      await gravarKmViaturas('quilometragem_saida', kmPartida)
+      // 4. O KM de saida vai no ponto (passo 5) e depois na coluna (passo 6b).
 
       // 5. Registrar Ponto de Controle (Saída) de CADA viatura, ANTES do status: ponto
       // sem transicao e recuperavel por conferencia, status avancado sem ponto trava a
@@ -1292,6 +1315,7 @@ export default function EscoltaDetalhePage() {
         tipoLabel: 'Saída da Base',
         observacao: obsPartida,
         pos,
+        km: kmPartida,
       })
 
       // 6. Atualizar status escolta
@@ -1302,6 +1326,10 @@ export default function EscoltaDetalhePage() {
         .select('id')
       if (escErr) throw new Error(escErr.message)
       if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
+
+      // 6b. KM de saida na coluna da viatura, depois do ponto (que ja o guarda) e do
+      // status. Antes vinha antes de tudo e sem conferir se o banco aceitou.
+      await gravarKmViaturas('quilometragem_saida', kmPartida)
 
       // 7. Histórico de status
       await sb.from('escolta_status_historico').insert({
@@ -1608,6 +1636,8 @@ export default function EscoltaDetalhePage() {
       sem_sinal_gps: boolean
     }
     endereco?: string | null
+    /** KM por viatura, so na saida e na chegada na base. Vai para o ponto de auditoria. */
+    km?: KmPorViatura
   }): Promise<string | null> => {
     const { pos } = params
     const enviadas: { viatura: ViaturaDetalhe; fotoIds: string[] }[] = []
@@ -1648,6 +1678,9 @@ export default function EscoltaDetalhePage() {
         observacao: params.observacao,
         fotoIds,
         endereco: params.endereco ?? null,
+        // O ponto ja guarda quem, quando, a etapa e a viatura: com o KM junto, ele e o
+        // registro de auditoria do hodometro. A coluna da viatura so guarda o ultimo.
+        km: params.km?.[viatura.id] ? Number(params.km[viatura.id]) : null,
       }),
       sincronizado: true,
     }))
@@ -1660,20 +1693,34 @@ export default function EscoltaDetalhePage() {
     return enviadas[0]?.fotoIds[0] ?? null
   }
 
-  /** KM por viatura: antes so a primeira do comboio recebia. Viatura sem valor fica intacta. */
+  /**
+   * KM por viatura na coluna que os relatorios leem. Viatura sem valor fica intacta.
+   *
+   * Roda DEPOIS do ponto e do status: o KM ja esta salvo no ponto de controle, entao
+   * uma falha aqui vira aviso, nao erro que faria o usuario repetir a etapa e gravar
+   * um segundo ponto, que nao pode ser apagado. Le as linhas afetadas: UPDATE negado
+   * pela RLS volta sem erro e sem linha.
+   */
   const gravarKmViaturas = async (
     campo: 'quilometragem_saida' | 'quilometragem_retorno',
     km: KmPorViatura,
-  ) => {
+  ): Promise<boolean> => {
+    const falharam: string[] = []
     for (const v of viaturas) {
       const valor = km[v.id]
       if (!valor) continue
-      const { error } = await sb
+      const { data, error } = await sb
         .from('escolta_veiculos')
         .update({ [campo]: Number(valor) })
         .eq('id', v.id)
-      if (error) throw new Error(error.message)
+        .select('id')
+      if (error || !data || data.length === 0) falharam.push(rotuloViatura(v))
     }
+    if (falharam.length > 0) {
+      setAvisoKm(`O KM ficou salvo no registro da etapa, mas não foi gravado na viatura ${falharam.join(', ')}. Avise a central.`)
+      return false
+    }
+    return true
   }
 
   // ── 1. Iniciar Operação (Sair da Base) ────────────────────────────────────────
@@ -1699,6 +1746,7 @@ export default function EscoltaDetalhePage() {
         tipoLabel: 'Saída da Base',
         observacao: obsStartBase,
         pos,
+        km: kmStartBase,
       })
 
       const { data: atualizadas, error: escErr } = await sb
@@ -1834,6 +1882,8 @@ export default function EscoltaDetalhePage() {
     setFotosCheckin([])
     // Reaplicado a cada abertura: sem isto o campo volta vazio no segundo check-in.
     setObsCheckin(TEXTO_PADRAO_PONTO.checkin)
+    // Com uma viatura, e ela. Com mais, a do usuario; quem nao esta numa escolhe.
+    setViaturaCheckinId(viaturas.length === 1 ? viaturas[0].id : minhaViaturaId ?? '')
     setDialogCheckin(true)
     setGpsCheckinLoading(true)
     try {
@@ -1955,7 +2005,13 @@ export default function EscoltaDetalhePage() {
   const salvarPeriodicidade = async () => {
     if (!escolta) return
     const mins = periodicidadeEdit === '' ? null : Number(periodicidadeEdit)
-    await sb.from('escoltas').update({ periodicidade_checkin_min: mins }).eq('id', escolta.id)
+    // O retorno era ignorado: UPDATE negado volta sem erro e sem linha, e a tela
+    // fechava a edicao como se tivesse salvo.
+    const { data, error } = await sb.from('escoltas').update({ periodicidade_checkin_min: mins }).eq('id', escolta.id).select('id')
+    if (error || !data || data.length === 0) {
+      setErro(error?.message ?? 'A periodicidade não foi alterada. Confira sua permissão.')
+      return
+    }
     setEditandoPeriodicidade(false)
     carregar()
   }
@@ -1968,6 +2024,7 @@ export default function EscoltaDetalhePage() {
       return
     }
     if (!gpsCheckin) { setErro('Aguardando localização GPS. Tente novamente.'); return }
+    if (!viaturaCheckinId) { setErro('Escolha a viatura deste check-in.'); return }
     setLoading(true)
     try {
       const fotoIds = await uploadFotosPonto(
@@ -1975,28 +2032,16 @@ export default function EscoltaDetalhePage() {
       )
       const fotoId: string | null = fotoIds[0] ?? null
 
-      // Mesma decisao da parada: o check-in periodico e do comboio, nao da viatura, e
-      // fica num ponto so. Decisao a confirmar com Pecanha.
-      const { error } = await sb.from('pontos_controle').insert({
-        escolta_veiculo_id: viaturas[0].id,
-        tipo_ponto_id: TIPO_PONTO_IDS.PARADA,
-        data_hora: new Date().toISOString(),
-        latitude: gpsCheckin.lat,
-        longitude: gpsCheckin.lng,
-        precisao_metros: gpsCheckin.precisao,
-        sem_sinal_gps: false,
-        foto_id: fotoId,
-        lancado_por: user?.id ?? null,
-        observacoes: serializarObservacao({
-          tipo: 'reporte_periodico',
-          tipoLabel: 'Reporte Periódico',
-          observacao: obsCheckin,
-          fotoIds,
-          endereco: gpsCheckin.endereco,
-        }),
-        sincronizado: true,
+      // Gravacao unica em lib/checkin.ts, a mesma do Painel Guiado. O check-in e um
+      // ponto so, na viatura escolhida; antes ia sempre para viaturas[0].
+      await registrarCheckin(sb, {
+        escoltaVeiculoId: viaturaCheckinId,
+        fotoIds,
+        gps: { lat: gpsCheckin.lat, lng: gpsCheckin.lng, precisao: gpsCheckin.precisao },
+        observacao: obsCheckin,
+        endereco: gpsCheckin.endereco,
+        userId: user?.id ?? null,
       })
-      if (error) throw new Error(error.message)
 
       notificarTelegram({
         titulo: 'Check-in Periódico',
@@ -2368,6 +2413,7 @@ export default function EscoltaDetalhePage() {
         tipoLabel: 'Chegada na Base',
         observacao: obsChegadaBase,
         pos,
+        km: kmChegadaBase,
       })
 
       const { data: atualizadas, error: escErr } = await sb
@@ -2663,7 +2709,9 @@ export default function EscoltaDetalhePage() {
         escolta_id: escolta.id,
         status_anterior: escolta.status,
         status_novo: 'finalizada',
-        observacao: `Escolta finalizada. Relatório gerado pelo supervisor.`,
+        // Antes dizia "gerado pelo supervisor" mesmo quando quem finalizava era outro
+        // participante. O autor ja vai em alterado_por.
+        observacao: `Escolta finalizada. Relatório final registrado por ${user?.nome_completo ?? 'usuário do sistema'}.`,
         alterado_por: user?.id ?? null,
       })
 
@@ -2682,6 +2730,131 @@ export default function EscoltaDetalhePage() {
     }
   }
 
+  // ── Abertura dos dialogos ─────────────────────────────────────────────────
+  // Funcoes nomeadas, e nao closures dentro do botao, para o Painel Guiado abrir o
+  // MESMO dialogo pelo link (?acao=). Cada uma zera o estado do formulario como o
+  // botao sempre zerou; abrir so o booleano mostraria fotos e textos velhos.
+  const abrirParada = () => {
+    setErro(null)
+    setGpsParada(null)
+    setGpsParadaLoading(true)
+    // A justificativa da parada abre VAZIA de proposito: o texto sugerido
+    // entra por clique, porque aqui a unica barreira e o campo nao estar vazio.
+    setObsParada('')
+    setFotosParada([])
+    setDialogParada(true)
+    obterGPS()
+      .then(async ({ lat, lng, precisao }) => {
+        const endereco = await reverseGeocode(lat, lng)
+        setGpsParada({ lat, lng, precisao, endereco })
+        setGpsParadaLoading(false)
+      })
+      .catch(() => setGpsParadaLoading(false))
+  }
+
+  const abrirChegadaBase = () => {
+    setErro(null)
+    setObsChegadaBase(TEXTO_PADRAO_PONTO.chegadaBase)
+    setFotosChegadaBase({})
+    setKmChegadaBase({})
+    setDialogChegadaBase(true)
+  }
+
+  const abrirFinalizacao = () => {
+    if (!escolta) return
+
+    setErro(null)
+    setChecklistFinal(Object.fromEntries(ITENS_CHECKLIST_ENTREGA.map(i => [i.key, { resposta: null, obs: '' }])))
+    // O CameraInput guarda a lista em estado interno e e desmontado ao
+    // fechar o dialogo. Sem zerar aqui, reabrir mostra os widgets vazios
+    // com o cabecalho verde e o contador em 5 de 5, e envia as fotos velhas.
+    setFotosViaturaFinal(Object.fromEntries(FOTOS_VIATURA_DEF.map(fv => [fv.key, null])))
+    // Relatorio ja preenchido com os dados reais da escolta, editavel.
+    // Decisao de Pecanha: folha em branco no fim da operacao atrasa o
+    // fechamento e produz relatorio pior do que um modelo para completar.
+    setRelatorioFinal(modeloRelatorioFinal({
+      codigo: escolta.codigo_escolta,
+      cliente: escolta.cliente?.nome_cliente,
+      origem: escolta.origem_endereco,
+      destino: escolta.destino_endereco,
+      inicio: timeline.find(t => t.tipo === 'status')?.data_hora ?? escolta.data_hora_prevista,
+      fim: new Date().toISOString(),
+      equipe: viaturas.flatMap(v => v.efetivo.map(e => e.vigilante?.nome_completo ?? '')).filter(Boolean),
+      viaturas: viaturas.map(v => v.veiculo?.placa ?? '').filter(Boolean),
+      ocorrencias: ocorrencias.length,
+      paradas: paradas.length,
+    }))
+    setDialogFinalizacao(true)
+    setFinalizacaoAbertoEm(new Date().toISOString())
+  }
+
+  const abrirAvancoGenerico = () => {
+    const prox = escolta ? NEXT_STATUS[escolta.status] : null
+    // Mesma guarda do botao: etapa com ponto de controle so pelo dialogo dedicado.
+    if (!prox || exigeDialogoDedicado(prox.status)) return
+    setErro(null)
+    setMotivoAvanco(TEXTO_PADRAO_ETAPA[prox.status] ?? '')
+    setDialogAvanco(true)
+  }
+
+  // ── Vindo do Painel Operacional Guiado (?volta=campo&acao=...) ───────────
+  const { ligado: modoGuiado } = useModoGuiado()
+  const [voltaCampo, setVoltaCampo] = useState(false)
+  const linkConsumidoRef = useRef(false)
+  const estadoAoAbrirRef = useRef<{ status: string; paradas: number; acao: string | null } | null>(null)
+  useEffect(() => {
+    // Espera tambem o usuario: useAuth desta pagina e uma instancia propria, e sem ele
+    // podeOperarEscolta daria falso e o link se perderia sem abrir nada.
+    if (linkConsumidoRef.current || loading || !escolta || !user) return
+    linkConsumidoRef.current = true
+    let q: URLSearchParams
+    try { q = new URLSearchParams(window.location.search) } catch { return }
+    const acao = q.get('acao')
+    if (q.get('volta') === 'campo') {
+      setVoltaCampo(true)
+      estadoAoAbrirRef.current = { status: escolta.status, paradas: paradas.length, acao }
+    }
+    // Abre o dialogo so se a escolta ainda esta na etapa que o link pressupoe e se
+    // quem abriu pode operar a escolta. Nada e gravado aqui: gravar continua sendo o
+    // botao de confirmar do dialogo.
+    const naRua = ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando']
+    const esperado: Record<string, string[]> = {
+      pre_inicio: ['agendada'],
+      parada: naRua,
+      checkin: naRua,
+      chegada_base: ['retornando'],
+      finalizar: ['na_base'],
+    }
+    const abrir: Record<string, () => void> = {
+      pre_inicio: abrirAvancoGenerico,
+      parada: abrirParada,
+      checkin: abrirDialogCheckin,
+      chegada_base: abrirChegadaBase,
+      finalizar: abrirFinalizacao,
+    }
+    if (acao && esperado[acao]?.includes(escolta.status) && podeOperarEscolta(user?.perfil?.codigo, vinculadoAEscolta)) {
+      abrir[acao]?.()
+    }
+    // Limpa a URL: um refresh nao pode reabrir o dialogo. Registro de etapa nao se
+    // apaga, e reabrir e o primeiro passo para gravar duas vezes.
+    router.replace(`/dashboard/escoltas/${escolta.id}`)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, escolta, user])
+
+  // Concluida a acao PEDIDA, volta sozinho ao Painel Guiado. Parada e check-in contam
+  // pelo registro novo; as demais, pela mudanca de etapa (entrar no pre-inicio nao
+  // conta: o wizard ainda vem pela frente). Um check-in feito no meio de uma chegada na
+  // base nao devolve o usuario antes da hora.
+  useEffect(() => {
+    const inicial = estadoAoAbrirRef.current
+    if (!voltaCampo || !inicial || !escolta) return
+    const porRegistro = inicial.acao === 'parada' || inicial.acao === 'checkin'
+    const concluiu = porRegistro
+      ? paradas.length > inicial.paradas
+      : escolta.status !== inicial.status && escolta.status !== 'em_pre_inicio'
+    if (concluiu) router.push('/dashboard/campo')
+  }, [voltaCampo, escolta, paradas.length, router])
+
   if (!escolta) {
     return (
       <div className="card-light p-12 text-center">
@@ -2696,6 +2869,10 @@ export default function EscoltaDetalhePage() {
   }
 
   const perfil = (user?.perfil?.codigo ?? '') as any
+  // Acoes operacionais: quem esta no efetivo desta escolta, qualquer perfil, ou a
+  // gestao. Antes o Painel de Acoes aparecia para qualquer um que abrisse a escolta,
+  // com botoes que a RLS recusaria.
+  const podeOperar = podeOperarEscolta(perfil, vinculadoAEscolta)
   const isSupervisorOrOperador = ['supervisor', 'operador'].includes(perfil)
   const isUnstarted = ['rascunho', 'agendada', 'em_pre_inicio'].includes(escolta.status)
 
@@ -3017,6 +3194,18 @@ export default function EscoltaDetalhePage() {
   return (
     <div className="space-y-5">
 
+      {/* ── Retorno ao Painel Operacional Guiado ── */}
+      {(voltaCampo || (modoGuiado && vinculadoAEscolta)) && (
+        <button
+          type="button"
+          onClick={() => router.push('/dashboard/campo')}
+          className="w-full flex items-center justify-center gap-2 font-bold text-white"
+          style={{ minHeight: '52px', fontSize: '15px', backgroundColor: '#1A294A', borderRadius: '4px' }}
+        >
+          <ArrowLeft size={18} /> Voltar ao Painel Guiado
+        </button>
+      )}
+
       {/* ── Painel de Designação de Responsabilidade ── */}
       {['rascunho', 'agendada'].includes(escolta.status) && (
         <div className="card-light p-5 space-y-4 border-l-4 border-amber-500">
@@ -3096,13 +3285,9 @@ export default function EscoltaDetalhePage() {
                       <XCircle size={14} /> Cancelar
                     </button>
                   )}
-                  {PODE_AVANCAR.includes(perfil) && proximoGenerico && (
+                  {PODE_AVANCAR.includes(perfil) && podeOperar && proximoGenerico && (
                     <button
-                      onClick={() => {
-                        setErro(null)
-                        setMotivoAvanco(TEXTO_PADRAO_ETAPA[proximoGenerico.status] ?? '')
-                        setDialogAvanco(true)
-                      }}
+                      onClick={abrirAvancoGenerico}
                       className="text-white font-black text-[10px] uppercase tracking-widest px-5 py-3 md:py-2 flex items-center justify-center gap-1.5 transition-all active:scale-95"
                       style={{ backgroundColor: '#1E7C52', borderRadius: '1px', boxShadow: '0 2px 8px rgba(30,124,82,0.35)' }}
                       onMouseEnter={e => { (e.currentTarget as HTMLElement).style.backgroundColor = '#166040' }}
@@ -3224,7 +3409,7 @@ export default function EscoltaDetalhePage() {
       </div>
 
       {/* ── PAINEL DE AÇÕES DO OPERADOR ── */}
-      {!isFinalizado && (
+      {!isFinalizado && podeOperar && (
         <div className="card-light p-5 space-y-4">
           <div className="flex items-center justify-between border-b pb-3" style={{ borderColor: '#E2E8EC' }}>
             <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>
@@ -3232,6 +3417,17 @@ export default function EscoltaDetalhePage() {
             </h3>
             <span className="badge-info">Operação em Andamento</span>
           </div>
+
+          {avisoKm && (
+            <div className="flex items-start gap-2 p-3" style={{ backgroundColor: '#FEF6E7', border: '1.5px solid #E9C46A' }}>
+              <AlertTriangle size={14} style={{ color: '#A07212', flexShrink: 0, marginTop: 1 }} />
+              <p className="flex-1 text-xs font-semibold" style={{ color: '#7A5A0E' }}>{avisoKm}</p>
+              <button type="button" onClick={() => setAvisoKm(null)}
+                style={{ fontSize: '10px', fontWeight: 900, color: '#A07212', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                Ciente
+              </button>
+            </div>
+          )}
 
           {/* Ponto gravado sem posicao: aviso, nunca bloqueio */}
           {avisoSemGps && (
@@ -3273,10 +3469,13 @@ export default function EscoltaDetalhePage() {
                   <span style={{ fontSize: '11px', fontWeight: 600, color: '#0E1A33' }}>
                     {escolta.periodicidade_checkin_min ? `A cada ${escolta.periodicidade_checkin_min} min` : 'Desativado'}
                   </span>
-                  <button onClick={() => { setPeriodicidadeEdit(escolta.periodicidade_checkin_min ? String(escolta.periodicidade_checkin_min) : ''); setEditandoPeriodicidade(true) }}
-                    style={{ fontSize: '10px', color: '#1E7C52', textDecoration: 'underline' }}>
-                    Alterar
-                  </button>
+                  {/* Periodicidade e planejamento: so a gestao altera (PODE_ALTERAR_PERIODICIDADE). */}
+                  {PODE_ALTERAR_PERIODICIDADE.includes(perfil) && (
+                    <button onClick={() => { setPeriodicidadeEdit(escolta.periodicidade_checkin_min ? String(escolta.periodicidade_checkin_min) : ''); setEditandoPeriodicidade(true) }}
+                      style={{ fontSize: '10px', color: '#1E7C52', textDecoration: 'underline' }}>
+                      Alterar
+                    </button>
+                  )}
                   {minutosAteCheckin !== null && (
                     <span className="px-2 py-0.5 rounded font-bold" style={{
                       fontSize: '9px',
@@ -3311,23 +3510,7 @@ export default function EscoltaDetalhePage() {
 
             {/* 2. Registrar Parada */}
             {['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando'].includes(escolta.status) && (
-              <button onClick={() => {
-                setErro(null)
-                setGpsParada(null)
-                setGpsParadaLoading(true)
-                // A justificativa da parada abre VAZIA de proposito: o texto sugerido
-                // entra por clique, porque aqui a unica barreira e o campo nao estar vazio.
-                setObsParada('')
-                setFotosParada([])
-                setDialogParada(true)
-                obterGPS()
-                  .then(async ({ lat, lng, precisao }) => {
-                    const endereco = await reverseGeocode(lat, lng)
-                    setGpsParada({ lat, lng, precisao, endereco })
-                    setGpsParadaLoading(false)
-                  })
-                  .catch(() => setGpsParadaLoading(false))
-              }}
+              <button onClick={abrirParada}
                 className="h-11 md:h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 active:scale-95 transition-all"
                 style={{ backgroundColor: '#FBF3DE', color: '#8B6914', border: '1.5px solid rgba(139,105,20,0.25)' }}
                 onMouseEnter={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#F5E8B8'}
@@ -3420,13 +3603,7 @@ export default function EscoltaDetalhePage() {
 
             {/* 6. Chegada na Base */}
             {escolta.status === 'retornando' && (
-              <button onClick={() => {
-                setErro(null)
-                setObsChegadaBase(TEXTO_PADRAO_PONTO.chegadaBase)
-                setFotosChegadaBase({})
-                setKmChegadaBase({})
-                setDialogChegadaBase(true)
-              }}
+              <button onClick={abrirChegadaBase}
                 className="h-11 md:h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 text-white active:scale-95 transition-all"
                 style={{ backgroundColor: '#1A294A', boxShadow: '0 2px 8px rgba(26,41,74,0.25)' }}
                 onMouseEnter={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#253562'}
@@ -3437,31 +3614,7 @@ export default function EscoltaDetalhePage() {
 
             {/* 7. Finalizar Escolta */}
             {escolta.status === 'na_base' && (
-              <button onClick={() => {
-                setErro(null)
-                setChecklistFinal(Object.fromEntries(ITENS_CHECKLIST_ENTREGA.map(i => [i.key, { resposta: null, obs: '' }])))
-                // O CameraInput guarda a lista em estado interno e e desmontado ao
-                // fechar o dialogo. Sem zerar aqui, reabrir mostra os widgets vazios
-                // com o cabecalho verde e o contador em 5 de 5, e envia as fotos velhas.
-                setFotosViaturaFinal(Object.fromEntries(FOTOS_VIATURA_DEF.map(fv => [fv.key, null])))
-                // Relatorio ja preenchido com os dados reais da escolta, editavel.
-                // Decisao de Pecanha: folha em branco no fim da operacao atrasa o
-                // fechamento e produz relatorio pior do que um modelo para completar.
-                setRelatorioFinal(modeloRelatorioFinal({
-                  codigo: escolta.codigo_escolta,
-                  cliente: escolta.cliente?.nome_cliente,
-                  origem: escolta.origem_endereco,
-                  destino: escolta.destino_endereco,
-                  inicio: timeline.find(t => t.tipo === 'status')?.data_hora ?? escolta.data_hora_prevista,
-                  fim: new Date().toISOString(),
-                  equipe: viaturas.flatMap(v => v.efetivo.map(e => e.vigilante?.nome_completo ?? '')).filter(Boolean),
-                  viaturas: viaturas.map(v => v.veiculo?.placa ?? '').filter(Boolean),
-                  ocorrencias: ocorrencias.length,
-                  paradas: paradas.length,
-                }))
-                setDialogFinalizacao(true)
-                setFinalizacaoAbertoEm(new Date().toISOString())
-              }}
+              <button onClick={abrirFinalizacao}
                 className="h-11 md:h-9 px-5 font-black text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 text-white active:scale-95 transition-all"
                 style={{ backgroundColor: '#1E7C52', boxShadow: '0 2px 8px rgba(30,124,82,0.3)' }}
                 onMouseEnter={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#166040'}
@@ -4670,6 +4823,23 @@ export default function EscoltaDetalhePage() {
                 </div>
               </div>
 
+              {/* Viatura do check-in: so aparece com mais de uma */}
+              {viaturas.length > 1 && (
+                <div>
+                  <label htmlFor="viatura-checkin" className="block text-xs font-semibold mb-1.5 text-[#5A6A80]">Viatura deste check-in *</label>
+                  <select
+                    id="viatura-checkin"
+                    value={viaturaCheckinId}
+                    onChange={(e) => setViaturaCheckinId(e.target.value)}
+                    className="select-light w-full"
+                    style={{ minHeight: '44px' }}
+                  >
+                    <option value="">Escolha a viatura...</option>
+                    {viaturas.map(v => <option key={v.id} value={v.id}>{rotuloViatura(v)}</option>)}
+                  </select>
+                </div>
+              )}
+
               {/* Foto */}
               <div>
                 <label className="block text-xs font-semibold mb-1.5 text-[#5A6A80]">
@@ -4697,7 +4867,7 @@ export default function EscoltaDetalhePage() {
               <button onClick={() => { setDialogCheckin(false); setErro(null) }} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleCheckin}
-                disabled={loading || gpsCheckinLoading || !gpsCheckin || fotosCheckin.length < FOTOS_POR_PONTO.min}
+                disabled={loading || gpsCheckinLoading || !gpsCheckin || !viaturaCheckinId || fotosCheckin.length < FOTOS_POR_PONTO.min}
                 className="h-11 sm:h-9 px-5 font-black text-[10px] uppercase tracking-widest text-white active:scale-95 transition-all disabled:opacity-50 w-full sm:w-auto"
                 style={{ backgroundColor: '#1E7C52' }}
               >

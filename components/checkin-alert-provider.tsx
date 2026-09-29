@@ -1,8 +1,13 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Bell, X } from 'lucide-react'
+import { Bell, Radio, X } from 'lucide-react'
+import {
+  STATUS_COM_CHECKIN, TIPO_PONTO_PARADA_ID, inicioOperacaoEm, minutosAteCheckin, ultimoCheckinEm,
+} from '@/lib/checkin'
+import { useModoGuiado } from '@/hooks/useModoGuiado'
 
 const sb = createClient() as any
 
@@ -13,17 +18,37 @@ interface AlertaCheckin {
   minutos_atraso: number
 }
 
-export function CheckinAlertProvider() {
+export function CheckinAlertProvider({ perfil }: { perfil?: string | null }) {
   const alertasEnviadosRef = useRef<Set<string>>(new Set())
   const [alertas, setAlertas] = useState<AlertaCheckin[]>([])
+  const router = useRouter()
+  const pathname = usePathname()
+  const { ligado: modoGuiado } = useModoGuiado()
+
+  // O alerta nao so avisa: leva direto ao registro. O operador no Modo Guiado vai ao
+  // check-in do Painel; os demais, ao dialogo da tela de detalhe, onde a gestao ve a
+  // escolta inteira antes de registrar. Ja estando no Campo, navegar para a mesma
+  // rota nao remonta a pagina, entao o pedido vai por evento.
+  const registrar = (escoltaId: string) => {
+    setAlertas(prev => prev.filter(x => x.escolta_id !== escoltaId))
+    if (perfil === 'operador' && modoGuiado) {
+      if (pathname === '/dashboard/campo') {
+        window.dispatchEvent(new CustomEvent('campo:registrar-checkin', { detail: { escoltaId } }))
+      } else {
+        router.push(`/dashboard/campo?escolta=${escoltaId}&acao=checkin`)
+      }
+      return
+    }
+    router.push(`/dashboard/escoltas/${escoltaId}?acao=checkin`)
+  }
 
   useEffect(() => {
     const verificar = async () => {
       const { data: escoltas } = await sb
         .from('escoltas')
-        .select('id, codigo_escolta, periodicidade_checkin_min, cliente:clientes(nome_cliente), status')
+        .select('id, codigo_escolta, periodicidade_checkin_min, data_hora_prevista, cliente:clientes(nome_cliente), status')
         .not('periodicidade_checkin_min', 'is', null)
-        .in('status', ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando'])
+        .in('status', STATUS_COM_CHECKIN)
 
       if (!escoltas?.length) return
 
@@ -39,23 +64,41 @@ export function CheckinAlertProvider() {
         const viaturaIds = (viaturas ?? []).map((v: any) => v.id)
         if (!viaturaIds.length) continue
 
-        const { data: ultimoPonto } = await sb
+        // Regra unica de lib/checkin.ts, a mesma da tela de detalhe e do Painel Guiado.
+        // Antes contava qualquer PARADA como check-in e ignorava a escolta que ainda nao
+        // tinha nenhum.
+        const { data: pontos } = await sb
           .from('pontos_controle')
-          .select('data_hora')
+          .select('data_hora, observacoes, tipo_ponto_id')
           .in('escolta_veiculo_id', viaturaIds)
-          .eq('tipo_ponto_id', 'e1601f15-5ef9-44e8-abd0-17f65b3aa760') // PARADA
-          .order('data_hora', { ascending: false })
-          .limit(1)
-          .maybeSingle()
 
-        const referencia = ultimoPonto ? new Date(ultimoPonto.data_hora) : null
-        if (!referencia) continue
-
-        const msDecorrido = Date.now() - referencia.getTime()
-        const msLimite = esc.periodicidade_checkin_min * 60 * 1000
-        const minutosAtraso = Math.floor((msDecorrido - msLimite) / 60000)
+        const lista = (pontos ?? []) as { data_hora: string; observacoes: string | null; tipo_ponto_id: string }[]
+        const minutos = minutosAteCheckin({
+          periodicidadeMin: esc.periodicidade_checkin_min,
+          status: esc.status,
+          ultimoCheckin: ultimoCheckinEm(lista.filter(p => p.tipo_ponto_id === TIPO_PONTO_PARADA_ID)),
+          inicioOperacao: inicioOperacaoEm(lista),
+          dataHoraPrevista: esc.data_hora_prevista,
+        })
+        if (minutos === null) continue
+        const minutosAtraso = -minutos
 
         if (minutosAtraso < 1) continue
+
+        // Telegram so pela regra ANTIGA, ate Pecanha aprovar a mudanca: qualquer
+        // PARADA zera o prazo e escolta sem nenhuma nao notifica. A regra nova
+        // passaria a notificar o Telegram em casos novos; na tela o aviso ja segue a
+        // regra nova. Cada navegador aberto envia o proprio aviso (limite antigo,
+        // registrado em docs/12).
+        const ultimaParada = lista
+          .filter(p => p.tipo_ponto_id === TIPO_PONTO_PARADA_ID)
+          .map(p => p.data_hora)
+          .sort()
+          .pop()
+        const atrasoRegraAntiga = ultimaParada
+          ? Math.floor((Date.now() - new Date(ultimaParada).getTime() - esc.periodicidade_checkin_min * 60000) / 60000)
+          : null
+        const notificarTelegram = atrasoRegraAntiga !== null && atrasoRegraAntiga >= 1
 
         // Janela de alerta: evita spam — alerta a cada 5 min de atraso
         const janelaAlerta = `${esc.id}-${Math.floor(minutosAtraso / 5)}`
@@ -87,13 +130,13 @@ export function CheckinAlertProvider() {
           em_transito_destino: 'Trânsito p/ Destino',
           no_destino: 'No Destino', retornando: 'Em Retorno',
         }
-        fetch('/api/telegram', {
+        if (notificarTelegram) fetch('/api/telegram', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             tipo: 'alerta_checkin',
-            titulo: `Alerta: Check-in em Atraso (${minutosAtraso} min)`,
-            descricao: `A escolta não realizou check-in há ${minutosAtraso} minuto${minutosAtraso > 1 ? 's' : ''}. Periodicidade configurada: a cada ${esc.periodicidade_checkin_min} min.`,
+            titulo: `Alerta: Check-in em Atraso (${atrasoRegraAntiga} min)`,
+            descricao: `A escolta não realizou check-in há ${atrasoRegraAntiga} minuto${(atrasoRegraAntiga ?? 0) > 1 ? 's' : ''}. Periodicidade configurada: a cada ${esc.periodicidade_checkin_min} min.`,
             escolta_id: esc.id,
             escolta_codigo: esc.codigo_escolta,
             cliente: esc.cliente?.nome_cliente,
@@ -141,15 +184,24 @@ export function CheckinAlertProvider() {
             <p style={{ fontSize: '12px', fontWeight: 600, color: '#0E1A33', marginTop: '2px' }}>
               {a.codigo} — {a.cliente}
             </p>
-            <p style={{ fontSize: '11px', color: '#5A6A80', marginTop: '2px' }}>
-              Sem check-in há {a.minutos_atraso} min
+            <p style={{ fontSize: '13px', color: '#5A6A80', marginTop: '2px' }}>
+              Check-in atrasado há {a.minutos_atraso} min
             </p>
+            <button
+              type="button"
+              onClick={() => registrar(a.escolta_id)}
+              className="w-full flex items-center justify-center gap-2 font-black uppercase text-white"
+              style={{ marginTop: '8px', minHeight: '48px', fontSize: '14px', backgroundColor: '#B83832', borderRadius: '4px' }}
+            >
+              <Radio size={16} /> Registrar Check-in
+            </button>
           </div>
           <button
             onClick={() => setAlertas(prev => prev.filter(x => x.escolta_id !== a.escolta_id))}
-            style={{ padding: '2px', color: '#A8B8C2', flexShrink: 0 }}
+            aria-label="Fechar aviso"
+            style={{ padding: '6px', color: '#A8B8C2', flexShrink: 0 }}
           >
-            <X size={13} />
+            <X size={16} />
           </button>
         </div>
       ))}
