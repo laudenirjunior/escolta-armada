@@ -87,11 +87,11 @@ Pecanha aplicou a migration 193 e rodou as leituras no SQL Editor. Correção an
 
 Resultado da leitura: `escolta_veiculos` (ALL) e `escoltas` (UPDATE) usam `sou_do_efetivo`, a escolta inteira. `pontos_controle` INSERT (`pontos_insert`) usa `sou_do_efetivo_veiculo`, só a própria viatura. Consequência que já existia em produção: numa escolta com duas viaturas, a tela de detalhe grava os pontos das duas num insert só, e para o operador a linha da outra viatura era recusada, derrubando o lote; só a gestão conseguia registrar.
 
-**Migration 194** (`194_ponto_por_qualquer_viatura.sql`), aditiva: `pontos_insert_mesma_escolta` (grava em qualquer viatura de escolta em que o usuário está no efetivo, só com `lancado_por` igual a ele) e `pontos_select_mesma_escolta` (lê os pontos das outras viaturas da mesma escolta; sem isso a conferência "todas as viaturas registraram" nunca fecharia para o operador). Testada num Postgres 17 local com dados sintéticos: antes, outra viatura e lote de duas recusados; depois, os dois passam, e viatura de outra escolta e registro no nome de outra pessoa continuam recusados. **Pendente: aplicar no SQL Editor.**
+**Migration 194** (`194_ponto_por_qualquer_viatura.sql`), aditiva: `pontos_insert_mesma_escolta` (grava em qualquer viatura de escolta em que o usuário está no efetivo, só com `lancado_por` igual a ele) e `pontos_select_mesma_escolta` (lê os pontos das outras viaturas da mesma escolta; sem isso a conferência "todas as viaturas registraram" nunca fecharia para o operador). Testada num Postgres 17 local com dados sintéticos: antes, outra viatura e lote de duas recusados; depois, os dois passam, e viatura de outra escolta e registro no nome de outra pessoa continuam recusados. **Aplicada por Pecanha no SQL Editor em 29/09**; a conferência listou as cinco policies esperadas.
 
 ### Riscos conhecidos
 
-1. Até a 194 ser aplicada, o participante da viatura A não grava pela B.
+1. Falta o teste com credencial real de operador num comboio de duas viaturas.
 2. Wizard de partida, checklist de entrega e parada ainda gravam só na primeira viatura (Caminho 2).
 3. Sem internet o registro não acontece, como antes.
 
