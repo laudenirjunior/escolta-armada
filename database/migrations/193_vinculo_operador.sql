@@ -125,7 +125,8 @@ with alvo as (
   select u.id as usuario_id,
     (select v.id from vigilantes v
       where regexp_replace(v.cpf, '\D', '', 'g') = regexp_replace(u.cpf, '\D', '', 'g')
-        and v.usuario_id is null) as vigilante_id,
+        and v.usuario_id is null
+      limit 1) as vigilante_id,  -- limit 1: com dois livres a subconsulta abortava o script; o n = 1 abaixo descarta o caso
     (select count(*) from vigilantes v
       where regexp_replace(v.cpf, '\D', '', 'g') = regexp_replace(u.cpf, '\D', '', 'g')
         and v.usuario_id is null) as n
