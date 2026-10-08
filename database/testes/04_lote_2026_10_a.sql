@@ -108,8 +108,13 @@ BEGIN
     RAISE NOTICE 'FALHOU: operador repassou a notificacao a outro usuario';
   EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: notificacao repassada';
   END;
-  UPDATE public.notificacoes SET lida = true;
-  IF FOUND THEN RAISE NOTICE 'PASSOU: destinatario marca a propria notificacao como lida';
+  -- Com a 211 (onda J) não há mais UPDATE direto: o destinatário marca pela RPC.
+  IF has_table_privilege('authenticated', 'public.notificacoes', 'UPDATE') THEN
+    UPDATE public.notificacoes SET lida = true;
+  ELSE
+    PERFORM public.marcar_aviso_lido(id) FROM public.notificacoes;
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.notificacoes WHERE lida) THEN RAISE NOTICE 'PASSOU: destinatario marca a propria notificacao como lida';
   ELSE RAISE NOTICE 'FALHOU: destinatario nao marcou como lida'; END IF;
 END $$;
 ROLLBACK;
