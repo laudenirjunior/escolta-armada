@@ -964,7 +964,8 @@ function FormularioEscolta() {
                   className={inputCls} style={inputStyle}
                 >
                   <option value="">Sem check-in obrigatório</option>
-                  {[10,15,20,30,45,60,90,120].map(m => (
+                  {Array.from(new Set([10, 15, 20, 30, 45, 60, 90, 120, ...(periodicidadeCheckin ? [Number(periodicidadeCheckin)] : [])]))
+                    .sort((a, b) => a - b).map(m => (
                     <option key={m} value={String(m)}>A cada {m} minutos</option>
                   ))}
                 </select>

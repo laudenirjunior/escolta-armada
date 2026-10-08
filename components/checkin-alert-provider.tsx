@@ -25,6 +25,8 @@ export function CheckinAlertProvider({ perfil }: { perfil?: string | null }) {
   // em alertas_dispensados, e vale até mudar o estado da escolta.
   const alertasEnviadosRef = useRef<Set<string>>(new Set())
   const meuUsuarioIdRef = useRef<string | null>(null)
+  // Última leitura boa das dispensas: erro de rede numa rodada não faz aviso fechado voltar.
+  const dispensadosRef = useRef<Map<string, string>>(new Map())
   const [alertas, setAlertas] = useState<AlertaCheckin[]>([])
   const router = useRouter()
   const pathname = usePathname()
@@ -58,12 +60,15 @@ export function CheckinAlertProvider({ perfil }: { perfil?: string | null }) {
       if (!escoltas?.length) { setAlertas([]); return }
 
       // Avisos fechados por este usuário, com a assinatura do estado em que foram fechados.
-      const { data: dispensados } = await sb
+      const { data: dispensados, error: erroDispensados } = await sb
         .from('alertas_dispensados')
         .select('escolta_id, assinatura')
         .eq('tipo', 'checkin')
-      const dispensadoEm = new Map<string, string>(
-        (dispensados ?? []).map((d: { escolta_id: string; assinatura: string }) => [d.escolta_id, d.assinatura]))
+      if (!erroDispensados) {
+        dispensadosRef.current = new Map<string, string>(
+          (dispensados ?? []).map((d: { escolta_id: string; assinatura: string }) => [d.escolta_id, d.assinatura]))
+      }
+      const dispensadoEm = dispensadosRef.current
 
       const novosAlertas: AlertaCheckin[] = []
 
@@ -179,6 +184,7 @@ export function CheckinAlertProvider({ perfil }: { perfil?: string | null }) {
   // O X grava a dispensa no banco; o aviso só volta com mudança real de estado.
   const dispensar = async (a: AlertaCheckin) => {
     setAlertas(prev => prev.filter(x => x.escolta_id !== a.escolta_id))
+    dispensadosRef.current.set(a.escolta_id, a.assinatura)
     if (!meuUsuarioIdRef.current) {
       const { data } = await sb.rpc('get_meu_usuario_id')
       meuUsuarioIdRef.current = (data as string | null) ?? null

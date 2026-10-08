@@ -1,5 +1,8 @@
 -- 201_checkin_desligado.sql
--- Lote 2026-10, onda B (M4). Idempotente. Bloco 1 (antes do deploy; compatível com o código atual).
+-- Lote 2026-10, onda B (M4). Idempotente. Bloco 1 (antes do deploy; compatível com o código atual)
+-- e DE NOVO no bloco 2, depois do push da onda B: até o deploy, o formulário antigo ainda
+-- grava 30 min em escolta nova ou editada. A segunda aplicação zera o que entrou nessa janela.
+-- Não reaplicar depois disso sem conferir os clientes religados (metadados.checkin_periodico_min).
 --
 -- Por quê (decisão 3 de Peçanha, 08/10/2026): o check-in periódico fica desligado por
 -- padrão; a coluna e a lógica de lib/checkin.ts continuam, para religar por cliente.
@@ -40,6 +43,7 @@ COMMENT ON TABLE public.alertas_dispensados IS
   'Lote 2026-10: aviso fechado pelo usuário. Vale enquanto a assinatura do estado da escolta (status | referência do prazo | periodicidade) for a mesma.';
 ALTER TABLE public.alertas_dispensados ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.alertas_dispensados FROM anon;
+REVOKE ALL ON public.alertas_dispensados FROM authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.alertas_dispensados TO authenticated;
 DROP POLICY IF EXISTS alertas_dispensados_proprio ON public.alertas_dispensados;
 CREATE POLICY alertas_dispensados_proprio ON public.alertas_dispensados FOR ALL TO authenticated
