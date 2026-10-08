@@ -162,7 +162,7 @@ Botão **Nova Escolta**, dentro de Escoltas. O assistente tem **três fases** no
 
 ### Fase 01: Dados da Escolta
 
-Bloco **Identificação da Missão**. Aqui entram **Cliente Contratante**, **Data** e **Hora de Partida**, **Endereço de Origem** e **Endereço de Destino** (escolhidos de uma lista de sugestões, não digitados livres), os complementos de cada endereço, observações e a **periodicidade de check-in em rota**. Um bloco de **Dados Financeiros** (valor cobrado, outros custos, observação) aparece só para Supervisor e acima.
+Bloco **Identificação da Missão**. Aqui entram **Cliente Contratante**, **Data** e **Hora de Partida**, **Endereço de Origem** e **Endereço de Destino** (escolhidos de uma lista de sugestões, não digitados livres), os complementos de cada endereço e observações. Desde o lote de outubro de 2026, o check-in periódico em rota vem **desligado** e o campo de periodicidade não aparece; ele só volta para o cliente que tiver o check-in religado no cadastro (ver B6). Um bloco de **Dados Financeiros** (valor cobrado, outros custos, observação) aparece só para Supervisor e acima.
 
 `[PRINT P11]`
 
@@ -234,7 +234,7 @@ Além da tela de detalhe, o Supervisor tem duas telas de monitoramento.
 
   `[PRINT P23]`
 
-O sistema também dispara um **alerta de check-in atrasado** quando uma escolta passa da periodicidade sem reportar. O atraso não passa despercebido.
+Quando o check-in periódico está ligado para a escolta, o sistema dispara um **alerta de check-in atrasado** se a escolta passa da periodicidade sem reportar. Fechar o aviso no X vale para quem fechou, naquela escolta, até haver mudança real: um novo check-in, uma nova etapa ou outra periodicidade. Recarregar a página ou passar mais tempo não faz o aviso voltar.
 
 `[PRINT P24]`
 
@@ -274,7 +274,7 @@ Regras que valem no painel:
 - **Duas ou mais viaturas**: o painel pede a viatura do registro, já marcando a sua. Dá para trocar e registrar por outra viatura da mesma escolta. A etapa só avança quando todas as viaturas registram; enquanto isso aparece "Aguardando registro da viatura ...".
 - **Confirmação**: depois de cada registro aparece uma tela verde com o horário e a Próxima Ação. Ela só aparece se o registro foi de fato gravado.
 - **Pré-início, chegada na base, finalização e parada** abrem a tela da escolta no diálogo certo. Ao concluir, o sistema volta sozinho para o painel.
-- **Check-in atrasado** vira a Próxima Ação, em vermelho. O aviso de atraso tem o botão **Registrar Check-in**, que abre o registro direto.
+- **Check-in atrasado** (só quando o check-in periódico está ligado para a escolta) vira a Próxima Ação, em vermelho. O aviso de atraso tem o botão **Registrar Check-in**, que abre o registro direto.
 - **Ver tela completa**, no rodapé, desliga o Modo Guiado neste aparelho. O botão **Voltar ao Modo Guiado**, no topo da tela completa, liga de novo.
 
 ## B1. A tela de Campo
@@ -341,7 +341,8 @@ Em dois momentos aparece um checklist: o **Pré-Saída** (na preparação) e o *
 
 Durante o trajeto, o Operador mantém o pulso da operação. Estas duas ações ficam no **Painel de Ações do Operador**, na tela de detalhe da escolta.
 
-- **Check-in:** a periodicidade é configurável (de 10 a 120 minutos). Quando vence, o botão fica vermelho e avisa "CHECK-IN ATRASADO". O diálogo pede **foto (mínimo 1)** e usa o **GPS**. Aqui, ao contrário do checkpoint, **o botão de confirmar fica bloqueado sem GPS e sem foto**.
+- **Check-in periódico desligado por padrão (outubro de 2026):** as fotos de cada etapa já registram a posição. O botão **Registrar Check-in** continua em Outras Ações para quem quiser reportar a posição entre etapas. Para religar o check-in obrigatório de um cliente, é preciso gravar `checkin_periodico_min` (em minutos) nos metadados do cliente, hoje só pelo SQL Editor (não há tela para isso); aí o campo volta ao formulário de escolta desse cliente.
+- **Check-in, quando ligado:** a periodicidade é configurável (de 10 a 120 minutos). Quando vence, o botão fica vermelho e avisa "CHECK-IN ATRASADO". O diálogo pede **foto (mínimo 1)** e usa o **GPS**. Aqui, ao contrário do checkpoint, **o botão de confirmar fica bloqueado sem GPS e sem foto**.
 - **Registrar Parada:** para qualquer parada não prevista (abastecimento, refeição, blitz, manutenção, entre outras). Pede o tipo, **foto** e **justificativa**, ambos obrigatórios.
 
 `[PRINT P33]`

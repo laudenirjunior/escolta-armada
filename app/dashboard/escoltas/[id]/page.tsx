@@ -21,7 +21,7 @@ import {
   PODE_ALTERAR_PERIODICIDADE,
 } from '@/lib/permissions'
 import { podeOperarEscolta } from '@/lib/acesso-escolta'
-import { minutosAteCheckin as calcularMinutosAteCheckin, inicioOperacaoEm, registrarCheckin, TIPO_CHECKIN } from '@/lib/checkin'
+import { minutosAteCheckin as calcularMinutosAteCheckin, inicioOperacaoEm, registrarCheckin, TIPO_CHECKIN, periodicidadePadraoDoCliente } from '@/lib/checkin'
 import { useModoGuiado } from '@/hooks/useModoGuiado'
 import {
   LABELS_STATUS,
@@ -42,6 +42,7 @@ import {
   modeloRelatorioFinal,
 } from '@/lib/textos-padrao'
 import { serializarObservacao, lerObservacao, fotoIdsDoPonto } from '@/lib/pontos-controle'
+import { urlsAssinadas, urlDoMapa, urlAssinada } from '@/lib/fotos-url'
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -57,7 +58,7 @@ interface EscoltaDetalhe {
   checklist_pendente_no_inicio: boolean
   criada_por: string
   criado_em: string
-  cliente: { id: string; nome_cliente: string; cor_destaque: string; telefone: string } | null
+  cliente: { id: string; nome_cliente: string; cor_destaque: string; telefone: string; metadados?: Record<string, unknown> | null } | null
   valor_cobrado: number | null
   outros_custos: number | null
   observacao_financeira: string | null
@@ -798,7 +799,7 @@ export default function EscoltaDetalhePage() {
         checklist_pendente_no_inicio, criada_por, criado_em,
         valor_cobrado, outros_custos, observacao_financeira,
         periodicidade_checkin_min,
-        cliente:clientes(id, nome_cliente, cor_destaque, telefone)
+        cliente:clientes(id, nome_cliente, cor_destaque, telefone, metadados)
       `)
       .eq('id', id)
       .maybeSingle()
@@ -892,10 +893,10 @@ export default function EscoltaDetalhePage() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const getFotoUrl = (foto: any) => {
       if (!foto) return null
-      const path = foto.caminho_arquivo as string
-      if (path.startsWith('http://') || path.startsWith('https://')) return path
-      return supabase.storage.from('fotos').getPublicUrl(path).data.publicUrl
+      // Lote 2026-10: bucket privado; a URL vem do lote assinado logo abaixo.
+      return urlDoMapa(urlsFotos, foto.caminho_arquivo as string)
     }
+    const urlsFotos: Record<string, string> = {}
 
     // ── Fotos dos pontos de controle, em lote ─────────────────────────────────
     // A coleta antes era feita so para os pontos filtrados como parada, entao as
@@ -915,6 +916,17 @@ export default function EscoltaDetalhePage() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       fotosData?.forEach((f: any) => { fotoPathMap[f.id] = f.caminho_arquivo })
     }
+
+    // Uma chamada só para assinar todas as fotos da tela (pontos, presenças, checklists).
+    Object.assign(urlsFotos, await urlsAssinadas(sb, [
+      ...Object.values(fotoPathMap),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...(pts ?? []).map((p: any) => p.foto?.caminho_arquivo),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...(pres ?? []).map((p: any) => p.foto?.caminho_arquivo),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...(chks ?? []).flatMap((c: any) => (c.respostas ?? []).map((r: any) => r.foto?.caminho_arquivo)),
+    ]))
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const urlsDoPonto = (p: any): string[] => {
@@ -1079,7 +1091,7 @@ export default function EscoltaDetalhePage() {
     })
     setParadas(paradasProcessadas)
     setLoading(false)
-  }, [id, sb, supabase])
+  }, [id, sb])
 
   useEffect(() => { carregar() }, [carregar])
 
@@ -1910,8 +1922,8 @@ export default function EscoltaDetalhePage() {
       if (params.fotoId) {
         const { data: f } = await sb.from('fotos').select('caminho_arquivo').eq('id', params.fotoId).maybeSingle()
         if (f?.caminho_arquivo) {
-          const { data: pub } = sb.storage.from('fotos').getPublicUrl(f.caminho_arquivo)
-          fotoUrl = pub?.publicUrl ?? null
+          // Lote 2026-10: URL assinada; o Telegram baixa a foto na hora do envio.
+          fotoUrl = await urlAssinada(sb, f.caminho_arquivo)
         }
       }
       const viatIds = viaturas.map(v => v.id)
@@ -2468,10 +2480,13 @@ export default function EscoltaDetalhePage() {
         .map(e => `${e.vigilante?.nome_completo ?? '—'}${e.papel_na_escolta ? ` (${e.papel_na_escolta})` : ''}`)
 
       // Última foto de qualquer ponto de controle (mais recente)
-      const ultimaFotoUrl = [...paradas]
+      // Lote 2026-10: a URL guardada na tela pode ter vencido (validade de 1 hora);
+      // assina de novo, a partir do caminho, na hora do envio.
+      const ultimaFotoGuardada = [...paradas]
         .sort((a, b) => new Date(b.data_hora).getTime() - new Date(a.data_hora).getTime())
         .find(p => p.fotoUrls.length > 0)
         ?.fotoUrls[0] ?? null
+      const ultimaFotoUrl = ultimaFotoGuardada ? await urlAssinada(sb, ultimaFotoGuardada) : null
 
       // Duração: desde o primeiro status em_andamento
       const inicioAndamento = [...historico]
@@ -3470,7 +3485,10 @@ export default function EscoltaDetalhePage() {
                     {escolta.periodicidade_checkin_min ? `A cada ${escolta.periodicidade_checkin_min} min` : 'Desativado'}
                   </span>
                   {/* Periodicidade e planejamento: so a gestao altera (PODE_ALTERAR_PERIODICIDADE). */}
-                  {PODE_ALTERAR_PERIODICIDADE.includes(perfil) && (
+                  {/* Lote 2026-10 (M4): check-in desligado por padrão; "Alterar" só aparece se a
+                      escolta já tem periodicidade ou se o cliente foi religado (metadados). */}
+                  {PODE_ALTERAR_PERIODICIDADE.includes(perfil)
+                    && (escolta.periodicidade_checkin_min != null || periodicidadePadraoDoCliente(escolta.cliente?.metadados) != null) && (
                     <button onClick={() => { setPeriodicidadeEdit(escolta.periodicidade_checkin_min ? String(escolta.periodicidade_checkin_min) : ''); setEditandoPeriodicidade(true) }}
                       style={{ fontSize: '10px', color: '#1E7C52', textDecoration: 'underline' }}>
                       Alterar
