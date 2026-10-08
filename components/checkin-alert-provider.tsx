@@ -16,10 +16,17 @@ interface AlertaCheckin {
   codigo: string
   cliente: string
   minutos_atraso: number
+  /** Estado da escolta quando o aviso foi gerado (status | referência do prazo | periodicidade). */
+  assinatura: string
 }
 
 export function CheckinAlertProvider({ perfil }: { perfil?: string | null }) {
+  // Trava do Telegram, separada da trava visual (lote 2026-10). A visual fica no banco,
+  // em alertas_dispensados, e vale até mudar o estado da escolta.
   const alertasEnviadosRef = useRef<Set<string>>(new Set())
+  const meuUsuarioIdRef = useRef<string | null>(null)
+  // Última leitura boa das dispensas: erro de rede numa rodada não faz aviso fechado voltar.
+  const dispensadosRef = useRef<Map<string, string>>(new Map())
   const [alertas, setAlertas] = useState<AlertaCheckin[]>([])
   const router = useRouter()
   const pathname = usePathname()
@@ -50,7 +57,19 @@ export function CheckinAlertProvider({ perfil }: { perfil?: string | null }) {
         .not('periodicidade_checkin_min', 'is', null)
         .in('status', STATUS_COM_CHECKIN)
 
-      if (!escoltas?.length) return
+      if (!escoltas?.length) { setAlertas([]); return }
+      const { data: bancoAtivo } = await sb.rpc('avisos_pelo_banco_ativos')
+
+      // Avisos fechados por este usuário, com a assinatura do estado em que foram fechados.
+      const { data: dispensados, error: erroDispensados } = await sb
+        .from('alertas_dispensados')
+        .select('escolta_id, assinatura')
+        .eq('tipo', 'checkin')
+      if (!erroDispensados) {
+        dispensadosRef.current = new Map<string, string>(
+          (dispensados ?? []).map((d: { escolta_id: string; assinatura: string }) => [d.escolta_id, d.assinatura]))
+      }
+      const dispensadoEm = dispensadosRef.current
 
       const novosAlertas: AlertaCheckin[] = []
 
@@ -73,13 +92,17 @@ export function CheckinAlertProvider({ perfil }: { perfil?: string | null }) {
           .in('escolta_veiculo_id', viaturaIds)
 
         const lista = (pontos ?? []) as { data_hora: string; observacoes: string | null; tipo_ponto_id: string }[]
+        const ultimoCheckin = ultimoCheckinEm(lista.filter(p => p.tipo_ponto_id === TIPO_PONTO_PARADA_ID))
+        const inicioOperacao = inicioOperacaoEm(lista)
         const minutos = minutosAteCheckin({
           periodicidadeMin: esc.periodicidade_checkin_min,
           status: esc.status,
-          ultimoCheckin: ultimoCheckinEm(lista.filter(p => p.tipo_ponto_id === TIPO_PONTO_PARADA_ID)),
-          inicioOperacao: inicioOperacaoEm(lista),
+          ultimoCheckin,
+          inicioOperacao,
           dataHoraPrevista: esc.data_hora_prevista,
         })
+        // Mudança real de estado = novo check-in, novo status ou nova periodicidade.
+        const assinatura = `${esc.status}|${ultimoCheckin ?? inicioOperacao ?? esc.data_hora_prevista}|${esc.periodicidade_checkin_min}`
         if (minutos === null) continue
         const minutosAtraso = -minutos
 
@@ -100,17 +123,31 @@ export function CheckinAlertProvider({ perfil }: { perfil?: string | null }) {
           : null
         const notificarTelegram = atrasoRegraAntiga !== null && atrasoRegraAntiga >= 1
 
-        // Janela de alerta: evita spam — alerta a cada 5 min de atraso
+        // Aviso na tela: some enquanto o usuário o tiver fechado neste mesmo estado.
+        if (dispensadoEm.get(esc.id) !== assinatura) {
+          novosAlertas.push({
+            escolta_id: esc.id,
+            codigo: esc.codigo_escolta ?? '-',
+            cliente: esc.cliente?.nome_cliente ?? '-',
+            minutos_atraso: minutosAtraso,
+            assinatura,
+          })
+        }
+
+        // Lote 2026-10 (onda F): com o envio pelo banco ativo, o navegador só pede o
+        // enfileiramento; a chave única por prazo vencido faz sair uma mensagem só, não
+        // importa quantas abas estejam abertas. Sem ele, fica a trava antiga desta aba.
+        if (bancoAtivo) {
+          if (!alertasEnviadosRef.current.has(`fila-${esc.id}`)) {
+            alertasEnviadosRef.current.add(`fila-${esc.id}`)
+            sb.rpc('enfileirar_alerta_checkin', { p_escolta_id: esc.id })
+              .then(() => alertasEnviadosRef.current.delete(`fila-${esc.id}`))
+          }
+          continue
+        }
         const janelaAlerta = `${esc.id}-${Math.floor(minutosAtraso / 5)}`
         if (alertasEnviadosRef.current.has(janelaAlerta)) continue
         alertasEnviadosRef.current.add(janelaAlerta)
-
-        novosAlertas.push({
-          escolta_id: esc.id,
-          codigo: esc.codigo_escolta ?? '—',
-          cliente: esc.cliente?.nome_cliente ?? '—',
-          minutos_atraso: minutosAtraso,
-        })
 
         // Notificar Telegram — efetivos via escolta_veiculos para filtro correto
         const efetivos: string[] = viaturaIds.length > 0
@@ -147,18 +184,28 @@ export function CheckinAlertProvider({ perfil }: { perfil?: string | null }) {
         }).catch(() => {})
       }
 
-      if (novosAlertas.length > 0) {
-        setAlertas(prev => {
-          const idsExistentes = new Set(prev.map(a => a.escolta_id))
-          return [...prev, ...novosAlertas.filter(a => !idsExistentes.has(a.escolta_id))]
-        })
-      }
+      setAlertas(novosAlertas)
     }
 
     verificar()
     const interval = setInterval(verificar, 60000)
     return () => clearInterval(interval)
   }, [])
+
+  // O X grava a dispensa no banco; o aviso só volta com mudança real de estado.
+  const dispensar = async (a: AlertaCheckin) => {
+    setAlertas(prev => prev.filter(x => x.escolta_id !== a.escolta_id))
+    dispensadosRef.current.set(a.escolta_id, a.assinatura)
+    if (!meuUsuarioIdRef.current) {
+      const { data } = await sb.rpc('get_meu_usuario_id')
+      meuUsuarioIdRef.current = (data as string | null) ?? null
+    }
+    if (!meuUsuarioIdRef.current) return
+    const { data, error } = await sb.from('alertas_dispensados')
+      .upsert({ usuario_id: meuUsuarioIdRef.current, escolta_id: a.escolta_id, tipo: 'checkin', assinatura: a.assinatura, dispensado_em: new Date().toISOString() })
+      .select('escolta_id')
+    if (error || !data?.length) console.warn('[checkin] dispensa do aviso nao foi gravada', error?.message)
+  }
 
   if (!alertas.length) return null
 
@@ -197,7 +244,7 @@ export function CheckinAlertProvider({ perfil }: { perfil?: string | null }) {
             </button>
           </div>
           <button
-            onClick={() => setAlertas(prev => prev.filter(x => x.escolta_id !== a.escolta_id))}
+            onClick={() => dispensar(a)}
             aria-label="Fechar aviso"
             style={{ padding: '6px', color: '#A8B8C2', flexShrink: 0 }}
           >

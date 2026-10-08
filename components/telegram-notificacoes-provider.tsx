@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { urlAssinada } from '@/lib/fotos-url'
 
 const sb = createClient() as any
 
@@ -18,6 +19,10 @@ export function TelegramNotificacoesProvider() {
       { event: 'INSERT', schema: 'public', table: 'presencas' },
       async (ev: any) => {
         const row = ev.new
+        // Lote 2026-10 (onda F): uma mensagem por presença, não uma por navegador aberto.
+        // A reserva fica no banco; só o primeiro navegador recebe true e envia, com a foto.
+        const { data: reservado, error: erroReserva } = await sb.rpc('reservar_aviso_presenca', { p_presenca_id: row.id })
+        if (!erroReserva && !reservado) return
         const { data } = await sb
           .from('presencas')
           .select(`
@@ -34,8 +39,8 @@ export function TelegramNotificacoesProvider() {
 
         let fotoUrl: string | null = null
         if (data.foto?.caminho_arquivo) {
-          const { data: pub } = sb.storage.from('fotos').getPublicUrl(data.foto.caminho_arquivo)
-          fotoUrl = pub?.publicUrl ?? null
+          // Lote 2026-10: URL assinada; o Telegram baixa a foto na hora do envio.
+          fotoUrl = await urlAssinada(sb, data.foto.caminho_arquivo)
         }
 
         const { data: viatRowsPres } = await sb

@@ -27,6 +27,8 @@ import {
 } from '@/lib/checkin'
 import { CONFIRMACAO_POR_DESTINO, proximaAcao, type AcaoDetalhe } from '@/lib/proximo-passo-operador'
 import { PainelGuiado, type Confirmacao, type PainelAberto, type Pendencia } from '@/components/campo-guiado/painel-guiado'
+import { urlAssinada } from '@/lib/fotos-url'
+import { enderecoPorExtenso } from '@/lib/geocodificacao'
 
 const supabase = createClient()
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1056,115 +1058,61 @@ export default function CampoPage() {
         return
       }
 
-      // Ponto de controle ANTES do status, e sem condicao que o torne opcional.
-      // Antes o insert vinha depois e so acontecia se houvesse GPS e viatura: a
-      // escolta avancava de etapa e a prova simplesmente nao existia. Se o ponto
-      // falhar, o status nao anda; ponto orfao se reaproveita, status avancado sem
-      // prova nao se desfaz.
-      if (exigePonto && tipoPontoId && !pontoJaCompleto) {
-        const { error: pontoErr } = await sb.from('pontos_controle').insert({
-          escolta_veiculo_id: escoltaVeiculoIdAlvo,
-          tipo_ponto_id: tipoPontoId,
-          data_hora: fotosCheckpoint[0]?.timestamp ?? new Date().toISOString(),
-          latitude: gps?.lat ?? null,
-          longitude: gps?.lng ?? null,
-          precisao_metros: gps?.precisao ?? null,
-          sem_sinal_gps: semSinalGps,
-          foto_id: fotoId,
-          observacoes: serializarObservacao({ observacao: obsAvanco, fotoIds }),
-          lancado_por: user.id,
-          sincronizado: true,
-          criado_offline: false,
-        })
-        if (pontoErr) {
-          showToast('erro', pontoErr.message ?? 'Não foi possível registrar o ponto de controle.')
-          setExecutando(false)
-          return
-        }
-      }
-
-      // O status so avanca quando TODAS as viaturas da escolta tiverem ponto nesta
-      // etapa. Sem isso a decisao de "um registro por viatura" nao se sustentaria aqui:
-      // o primeiro registro avancaria a etapa, o botao sumiria, e a segunda viatura
-      // ficaria para sempre sem o ponto daquela etapa.
-      //
-      // Com uma viatura so, que e quase toda escolta, a primeira ja e a ultima e nada
-      // muda em relacao ao comportamento anterior.
-      if (exigePonto && tipoPontoId && viaturasDaEscolta.length > 1) {
-        const { data: pontosDaEtapa, error: contagemErr } = await sb
-          .from('pontos_controle')
-          .select('escolta_veiculo_id')
-          .eq('tipo_ponto_id', tipoPontoId)
-          .in('escolta_veiculo_id', viaturasDaEscolta.map(v => v.id))
-        if (contagemErr) {
-          showToast('erro', contagemErr.message ?? 'Não foi possível conferir os registros das viaturas.')
-          setExecutando(false)
-          return
-        }
-        const comPonto = new Set((pontosDaEtapa ?? []).map((p: { escolta_veiculo_id: string }) => p.escolta_veiculo_id))
-        const faltando = viaturasDaEscolta.filter(v => !comPonto.has(v.id))
-        if (faltando.length > 0) {
-          const placas = faltando.map(v => v.placa ?? 'sem placa').join(', ')
-          concluir(
-            'ok',
-            `Ponto registrado. A etapa avança quando as demais viaturas registrarem: ${placas}.`,
-            {
-              titulo: placaAlvo ? `Registro da viatura ${placaAlvo} salvo` : 'Registro da viatura salvo',
-              detalhe: `A etapa avança quando as demais viaturas registrarem: ${placas}.`,
-              avisos,
-            }
-          )
-          limparFotosCheckpoint()
-          setObsAvanco('')
-          setViaturaAlvoId(viaturaDoUsuario)
-          setPainelAberto(null)
-          setExecutando(false)
-          await carregar(true)
-          return
-        }
-      }
-
-      // Atualiza status da escolta.
-      // Ler o erro aqui nao e detalhe: a trigger do banco recusa transicao
-      // invalida, e sem esta checagem o codigo seguia gravando ponto de
-      // controle e historico de uma transicao que nunca aconteceu.
-      const { data: escoltasAtualizadas, error: statusErr } = await sb
-        .from('escoltas')
-        .update({ status: proximo })
-        .eq('id', escoltaAtiva.id)
-        .eq('status', statusAtual)
-        .select('id')
-      if (statusErr) {
-        showToast('erro', statusErr.message ?? 'Não foi possível avançar o status.')
-        setExecutando(false)
-        return
-      }
-      // Sem o `select`, o PostgREST devolve erro nulo quando o filtro de status nao
-      // casa linha nenhuma, e a tela anunciaria uma transicao que nao aconteceu.
-      // Com o ponto de controle ja gravado acima, isso deixaria um ponto a mais no
-      // relatorio: exatamente a regressao que este projeto ja teve.
-      if (!escoltasAtualizadas || escoltasAtualizadas.length === 0) {
-        // Corrida perdida por milissegundos, depois da conferencia acima. O ponto de
-        // controle ja esta gravado e nao pode ser removido daqui, entao a mensagem
-        // avisa em vez de mandar repetir, que criaria um segundo ponto.
-        showToast('erro', 'A etapa foi avançada em outra tela enquanto este registro era enviado. O ponto de controle ficou salvo. Recarregue a página e confira a etapa antes de registrar de novo.')
-        setExecutando(false)
-        return
-      }
-
-      // Histórico de status
-      const { error: histErr } = await sb.from('escolta_status_historico').insert({
-        escolta_id: escoltaAtiva.id,
-        status_anterior: statusAtual,
-        status_novo: proximo,
-        alterado_por: user.id,
-        data_hora: new Date().toISOString(),
+      // Lote 2026-10 (onda F): ponto, conferência do comboio, status e histórico numa só
+      // transação (registrar_etapa_escolta). Antes eram quatro chamadas: o ponto ficava
+      // gravado quando o status era recusado, e o histórico podia faltar sem ninguém saber.
+      // O status só avança quando TODAS as viaturas da escolta tiverem ponto nesta etapa;
+      // a conferência agora é feita no banco, junto da gravação.
+      const pontosEtapa = (exigePonto && tipoPontoId && !pontoJaCompleto) ? [{
+        escolta_veiculo_id: escoltaVeiculoIdAlvo,
+        tipo_ponto_id: tipoPontoId,
+        data_hora: fotosCheckpoint[0]?.timestamp ?? new Date().toISOString(),
         latitude: gps?.lat ?? null,
         longitude: gps?.lng ?? null,
-        observacao: obsAvanco.trim() || null,
+        precisao_metros: gps?.precisao ?? null,
+        sem_sinal_gps: semSinalGps,
+        foto_id: fotoId,
+        observacoes: serializarObservacao({ observacao: obsAvanco, fotoIds }),
+        lancado_por: user.id,
+        sincronizado: true,
+        criado_offline: false,
+      }] : []
+      const { data: etapa, error: etapaErr } = await sb.rpc('registrar_etapa_escolta', {
+        p_escolta_id: escoltaAtiva.id,
+        p_pontos: pontosEtapa,
+        p_status_atual: statusAtual,
+        p_status_novo: proximo,
+        p_observacao: obsAvanco.trim() || null,
+        p_latitude: gps?.lat ?? null,
+        p_longitude: gps?.lng ?? null,
+        p_tipo_ponto_todas: (exigePonto && tipoPontoId && viaturasDaEscolta.length > 1) ? tipoPontoId : null,
       })
-      // O status ja mudou: aqui nao cabe abortar, cabe nao mentir que deu tudo certo.
-      if (histErr) avisos.push('Histórico não registrado: ' + (histErr.message ?? 'erro desconhecido'))
+      if (etapaErr) {
+        showToast('erro', etapaErr.message === 'ERRO_SEM_TRANSICAO'
+          ? 'A etapa foi avançada em outra tela enquanto este registro era enviado. Nada foi gravado desta vez. Recarregue a página e confira a etapa antes de registrar de novo.'
+          : (etapaErr.message ?? 'Não foi possível registrar a etapa.'))
+        setExecutando(false)
+        return
+      }
+      if (!etapa?.avancou) {
+        const placas = ((etapa?.faltando ?? []) as string[]).join(', ')
+        concluir(
+          'ok',
+          `Ponto registrado. A etapa avança quando as demais viaturas registrarem: ${placas}.`,
+          {
+            titulo: placaAlvo ? `Registro da viatura ${placaAlvo} salvo` : 'Registro da viatura salvo',
+            detalhe: `A etapa avança quando as demais viaturas registrarem: ${placas}.`,
+            avisos,
+          }
+        )
+        limparFotosCheckpoint()
+        setObsAvanco('')
+        setViaturaAlvoId(viaturaDoUsuario)
+        setPainelAberto(null)
+        setExecutando(false)
+        await carregar(true)
+        return
+      }
 
       // Notificar Telegram — sempre dispara após qualquer avanço de status.
       // Faltava em_transito_retorno nos dois mapas: a mensagem que chega ao cliente
@@ -1198,8 +1146,8 @@ export default function CampoPage() {
       if (fotoId) {
         const { data: fotoData } = await sb.from('fotos').select('caminho_arquivo').eq('id', fotoId).maybeSingle()
         if (fotoData?.caminho_arquivo) {
-          const { data: pub } = sb.storage.from('fotos').getPublicUrl(fotoData.caminho_arquivo)
-          fotoTgUrl = pub?.publicUrl ?? null
+          // Lote 2026-10: URL assinada; o Telegram baixa a foto na hora do envio.
+          fotoTgUrl = await urlAssinada(sb, fotoData.caminho_arquivo)
         }
       }
 
@@ -1387,8 +1335,7 @@ export default function CampoPage() {
       if (fotoId) {
         const { data: fRow } = await sb.from('fotos').select('caminho_arquivo').eq('id', fotoId).maybeSingle()
         if (fRow?.caminho_arquivo) {
-          const { data: pub } = sb.storage.from('fotos').getPublicUrl(fRow.caminho_arquivo)
-          fotoTgUrl = pub?.publicUrl ?? null
+          fotoTgUrl = await urlAssinada(sb, fRow.caminho_arquivo)
         }
       }
       const { data: viatRowsOc } = await sb
@@ -1494,13 +1441,15 @@ export default function CampoPage() {
         gps,
         observacao: obsCheckin,
         userId: user.id,
+        // Lote 2026-10 (onda F): endereço por extenso, como na tela de detalhe.
+        endereco: await enderecoPorExtenso(gps.lat, gps.lng),
       })
 
       // Telegram depois da gravacao, sem esperar: o check-in ja esta salvo.
       let fotoTgUrl: string | null = null
       const { data: fotoRow } = await sb.from('fotos').select('caminho_arquivo').eq('id', fotoIds[0]).maybeSingle()
       if (fotoRow?.caminho_arquivo) {
-        fotoTgUrl = sb.storage.from('fotos').getPublicUrl(fotoRow.caminho_arquivo)?.data?.publicUrl ?? null
+        fotoTgUrl = await urlAssinada(sb, fotoRow.caminho_arquivo)
       }
       fetch('/api/telegram', {
         method: 'POST',

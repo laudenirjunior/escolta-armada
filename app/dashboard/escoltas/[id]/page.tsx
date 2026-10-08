@@ -21,7 +21,7 @@ import {
   PODE_ALTERAR_PERIODICIDADE,
 } from '@/lib/permissions'
 import { podeOperarEscolta } from '@/lib/acesso-escolta'
-import { minutosAteCheckin as calcularMinutosAteCheckin, inicioOperacaoEm, registrarCheckin, TIPO_CHECKIN } from '@/lib/checkin'
+import { minutosAteCheckin as calcularMinutosAteCheckin, inicioOperacaoEm, registrarCheckin, TIPO_CHECKIN, periodicidadePadraoDoCliente } from '@/lib/checkin'
 import { useModoGuiado } from '@/hooks/useModoGuiado'
 import {
   LABELS_STATUS,
@@ -42,6 +42,10 @@ import {
   modeloRelatorioFinal,
 } from '@/lib/textos-padrao'
 import { serializarObservacao, lerObservacao, fotoIdsDoPonto } from '@/lib/pontos-controle'
+import { urlsAssinadas, urlDoMapa, urlAssinada } from '@/lib/fotos-url'
+import { carregarLocaisAtivos } from '@/lib/locais'
+import { CombustivelViaturas } from '@/components/escolta/combustivel-viaturas'
+import { rotuloDoPonto } from '@/lib/rotulo-ponto'
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -57,7 +61,7 @@ interface EscoltaDetalhe {
   checklist_pendente_no_inicio: boolean
   criada_por: string
   criado_em: string
-  cliente: { id: string; nome_cliente: string; cor_destaque: string; telefone: string } | null
+  cliente: { id: string; nome_cliente: string; cor_destaque: string; telefone: string; metadados?: Record<string, unknown> | null } | null
   valor_cobrado: number | null
   outros_custos: number | null
   observacao_financeira: string | null
@@ -133,6 +137,8 @@ interface TimelineItem {
   descricao: string | null
   usuario: string | null
   coordenadas?: { lat: number; lng: number } | null
+  /** Lote 2026-10 (M1): local salvo próximo ou endereço reverso marcado como aproximado. */
+  rotulo?: string | null
   foto_url?: string | null
   /** Todas as fotos do evento. `foto_url` continua sendo a primeira, por compatibilidade. */
   foto_urls?: string[]
@@ -798,7 +804,7 @@ export default function EscoltaDetalhePage() {
         checklist_pendente_no_inicio, criada_por, criado_em,
         valor_cobrado, outros_custos, observacao_financeira,
         periodicidade_checkin_min,
-        cliente:clientes(id, nome_cliente, cor_destaque, telefone)
+        cliente:clientes(id, nome_cliente, cor_destaque, telefone, metadados)
       `)
       .eq('id', id)
       .maybeSingle()
@@ -869,7 +875,7 @@ export default function EscoltaDetalhePage() {
     const { data: pts } = viaturaIds.length > 0
       ? await sb
           .from('pontos_controle')
-          .select(`id, escolta_veiculo_id, data_hora, latitude, longitude, sem_sinal_gps, lancado_por, observacoes, tipo:dom_tipos_ponto(codigo, nome_exibicao), foto:fotos(id, caminho_arquivo), autor:usuarios!lancado_por(nome_completo)`)
+          .select(`id, escolta_veiculo_id, data_hora, latitude, longitude, precisao_metros, sem_sinal_gps, lancado_por, observacoes, tipo:dom_tipos_ponto(codigo, nome_exibicao), foto:fotos(id, caminho_arquivo), autor:usuarios!lancado_por(nome_completo)`)
           .in('escolta_veiculo_id', viaturaIds)
       : { data: null }
 
@@ -892,10 +898,10 @@ export default function EscoltaDetalhePage() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const getFotoUrl = (foto: any) => {
       if (!foto) return null
-      const path = foto.caminho_arquivo as string
-      if (path.startsWith('http://') || path.startsWith('https://')) return path
-      return supabase.storage.from('fotos').getPublicUrl(path).data.publicUrl
+      // Lote 2026-10: bucket privado; a URL vem do lote assinado logo abaixo.
+      return urlDoMapa(urlsFotos, foto.caminho_arquivo as string)
     }
+    const urlsFotos: Record<string, string> = {}
 
     // ── Fotos dos pontos de controle, em lote ─────────────────────────────────
     // A coleta antes era feita so para os pontos filtrados como parada, entao as
@@ -916,6 +922,17 @@ export default function EscoltaDetalhePage() {
       fotosData?.forEach((f: any) => { fotoPathMap[f.id] = f.caminho_arquivo })
     }
 
+    // Uma chamada só para assinar todas as fotos da tela (pontos, presenças, checklists).
+    Object.assign(urlsFotos, await urlsAssinadas(sb, [
+      ...Object.values(fotoPathMap),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...(pts ?? []).map((p: any) => p.foto?.caminho_arquivo),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...(pres ?? []).map((p: any) => p.foto?.caminho_arquivo),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...(chks ?? []).flatMap((c: any) => (c.respostas ?? []).map((r: any) => r.foto?.caminho_arquivo)),
+    ]))
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const urlsDoPonto = (p: any): string[] => {
       const urls = fotoIdsDoPonto({ foto_id: p.foto?.id ?? null, observacoes: p.observacoes })
@@ -932,6 +949,7 @@ export default function EscoltaDetalhePage() {
     }
 
     const tl: TimelineItem[] = []
+    const locaisAtivos = await carregarLocaisAtivos(sb)
 
     histNorm.forEach((h) => {
       tl.push({
@@ -959,6 +977,7 @@ export default function EscoltaDetalhePage() {
         descricao: info.observacao,
         usuario: p.autor?.nome_completo ?? 'Operador',
         coordenadas: p.latitude && p.longitude ? { lat: Number(p.latitude), lng: Number(p.longitude) } : null,
+        rotulo: rotuloDoPonto({ latitude: p.latitude, longitude: p.longitude, precisao_metros: p.precisao_metros, endereco: info.endereco }, locaisAtivos),
         foto_url: fotosPonto[0] ?? null,
         foto_urls: fotosPonto,
         extra: { sem_sinal_gps: p.sem_sinal_gps === true },
@@ -1079,7 +1098,7 @@ export default function EscoltaDetalhePage() {
     })
     setParadas(paradasProcessadas)
     setLoading(false)
-  }, [id, sb, supabase])
+  }, [id, sb])
 
   useEffect(() => { carregar() }, [carregar])
 
@@ -1120,35 +1139,22 @@ export default function EscoltaDetalhePage() {
     setAvancando(true)
     setErro(null)
 
-    const { data: atualizadas, error } = await sb
-      .from('escoltas')
-      .update({ status: proximo.status })
-      .eq('id', escolta.id)
-      .eq('status', escolta.status)
-      .select('id')
+    // Lote 2026-10 (onda F): status e histórico numa transação (registrar_etapa_escolta).
+    const { error } = await sb.rpc('registrar_etapa_escolta', {
+      p_escolta_id: escolta.id,
+      p_status_atual: escolta.status,
+      p_status_novo: proximo.status,
+      p_observacao: motivoAvanco.trim() || null,
+    })
 
     if (error) {
-      setErro(error.message ?? 'Erro ao avançar status.')
+      setErro(error.message === 'ERRO_SEM_TRANSICAO'
+        ? 'A escolta mudou de status em outro dispositivo. Recarregue a página e tente de novo.'
+        : (error.message ?? 'Erro ao avançar status.'))
       setAvancando(false)
+      if (error.message === 'ERRO_SEM_TRANSICAO') carregar()
       return
     }
-
-    // O PostgREST devolve sucesso com zero linhas quando a pre-condicao ou a RLS
-    // barram. Sem esta checagem a tela anunciava exito sem transicao nenhuma.
-    if (!atualizadas || atualizadas.length === 0) {
-      setErro('A escolta mudou de status em outro dispositivo. Recarregue a página e tente de novo.')
-      setAvancando(false)
-      carregar()
-      return
-    }
-
-    await sb.from('escolta_status_historico').insert({
-      escolta_id: escolta.id,
-      status_anterior: escolta.status,
-      status_novo: proximo.status,
-      observacao: motivoAvanco.trim() || null,
-      alterado_por: user?.id ?? null,
-    })
 
     // Notificar Telegram sobre mudança de status
     const statusLabel = STATUS_INFO[proximo.status]?.label ?? proximo.status
@@ -1316,29 +1322,16 @@ export default function EscoltaDetalhePage() {
         observacao: obsPartida,
         pos,
         km: kmPartida,
+        transicao: { statusNovo: 'em_andamento', observacao: obsPartida.trim() },
       })
 
       // 6. Atualizar status escolta
-      const { data: atualizadas, error: escErr } = await sb.from('escoltas')
-        .update({ status: 'em_andamento' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
       // 6b. KM de saida na coluna da viatura, depois do ponto (que ja o guarda) e do
       // status. Antes vinha antes de tudo e sem conferir se o banco aceitou.
       await gravarKmViaturas('quilometragem_saida', kmPartida)
 
-      // 7. Histórico de status
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'em_andamento',
-        observacao: obsPartida.trim(),
-        alterado_por: user?.id ?? null,
-      })
 
       // 8. Notificar Telegram — Checklist inicial concluído / Escolta iniciada
       const matConformes = Object.values(checkMateriais).filter(Boolean).length
@@ -1376,19 +1369,15 @@ export default function EscoltaDetalhePage() {
     setCancelando(true)
     setErro(null)
     try {
-      const { error } = await sb
-        .from('escoltas')
-        .update({ status: 'cancelada', observacao_fechamento: motivoCancelamento.trim() })
-        .eq('id', escolta!.id)
-      if (error) throw new Error(error.message)
-
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta!.id,
-        status_anterior: escolta!.status,
-        status_novo: 'cancelada',
-        observacao: `Cancelamento: ${motivoCancelamento.trim()}`,
-        alterado_por: user?.id ?? null,
+      // Lote 2026-10 (onda F): status e histórico numa transação (registrar_etapa_escolta).
+      const { error } = await sb.rpc('registrar_etapa_escolta', {
+        p_escolta_id: escolta!.id,
+        p_status_atual: escolta!.status,
+        p_status_novo: 'cancelada',
+        p_observacao: `Cancelamento: ${motivoCancelamento.trim()}`,
+        p_observacao_fechamento: motivoCancelamento.trim(),
       })
+      if (error) throw new Error(error.message === 'ERRO_SEM_TRANSICAO' ? 'A escolta mudou de status em outro dispositivo. Recarregue a página.' : error.message)
 
       setDialogCancelar(false)
       setMotivoCancelamento('')
@@ -1410,19 +1399,15 @@ export default function EscoltaDetalhePage() {
     try {
       const novaDataHora = new Date(`${novaDataReagendamento}T${novaHoraReagendamento}:00`).toISOString()
 
-      const { error } = await sb
-        .from('escoltas')
-        .update({ status: 'agendada', data_hora_prevista: novaDataHora, observacao_fechamento: null })
-        .eq('id', escolta!.id)
-      if (error) throw new Error(error.message)
-
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta!.id,
-        status_anterior: escolta!.status,
-        status_novo: 'agendada',
-        observacao: `Reagendamento para ${new Date(novaDataHora).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}. Motivo: ${motivoReagendamento.trim()}`,
-        alterado_por: user?.id ?? null,
+      // Lote 2026-10 (onda F): status, nova data e histórico numa transação.
+      const { error } = await sb.rpc('registrar_etapa_escolta', {
+        p_escolta_id: escolta!.id,
+        p_status_atual: escolta!.status,
+        p_status_novo: 'agendada',
+        p_observacao: `Reagendamento para ${new Date(novaDataHora).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' }).replace(',', '')}. Motivo: ${motivoReagendamento.trim()}`,
+        p_data_hora_prevista: novaDataHora,
       })
+      if (error) throw new Error(error.message === 'ERRO_SEM_TRANSICAO' ? 'A escolta mudou de status em outro dispositivo. Recarregue a página.' : error.message)
 
       setDialogCancelar(false)
       setMotivoReagendamento('')
@@ -1507,8 +1492,9 @@ export default function EscoltaDetalhePage() {
     if (error) throw new Error(error.message)
     if (!data || data.status !== statusEsperado) throw new Error(ERRO_ETAPA_MUDOU)
   }
-  const ERRO_SEM_TRANSICAO =
-    'O registro do ponto de controle foi salvo, mas o status da escolta não mudou aqui. A etapa pode já ter sido avançada em outra tela ou por outra pessoa. Recarregue a página e confira a etapa atual antes de tentar de novo.'
+  // Lote 2026-10: com a gravacao atomica, transicao recusada nao deixa ponto nem historico.
+  const ERRO_TRANSICAO_NADA_GRAVADO =
+    'A etapa já tinha sido avançada em outra tela ou por outra pessoa. O ponto, o status e o histórico desta etapa não foram gravados. Recarregue a página e confira a etapa atual antes de registrar de novo.'
 
   /**
    * Posicao a gravar no ponto de controle, no unico formato que o CHECK
@@ -1638,6 +1624,11 @@ export default function EscoltaDetalhePage() {
     endereco?: string | null
     /** KM por viatura, so na saida e na chegada na base. Vai para o ponto de auditoria. */
     km?: KmPorViatura
+    /**
+     * Lote 2026-10 (onda F): status e historico gravados na MESMA transacao dos pontos,
+     * pela RPC registrar_etapa_escolta. Se a transicao falhar, nada fica gravado.
+     */
+    transicao?: { statusNovo: string; observacao: string | null }
   }): Promise<string | null> => {
     const { pos } = params
     const enviadas: { viatura: ViaturaDetalhe; fotoIds: string[] }[] = []
@@ -1685,7 +1676,18 @@ export default function EscoltaDetalhePage() {
       sincronizado: true,
     }))
 
-    if (linhas.length > 0) {
+    if (params.transicao) {
+      const { error } = await sb.rpc('registrar_etapa_escolta', {
+        p_escolta_id: params.escoltaId,
+        p_pontos: linhas,
+        p_status_atual: params.statusEsperado,
+        p_status_novo: params.transicao.statusNovo,
+        p_observacao: params.transicao.observacao,
+        p_latitude: pos.latitude,
+        p_longitude: pos.longitude,
+      })
+      if (error) throw new Error(error.message === 'ERRO_SEM_TRANSICAO' ? ERRO_TRANSICAO_NADA_GRAVADO : error.message)
+    } else if (linhas.length > 0) {
       const { error } = await sb.from('pontos_controle').insert(linhas)
       if (error) throw new Error(error.message)
     }
@@ -1747,30 +1749,14 @@ export default function EscoltaDetalhePage() {
         observacao: obsStartBase,
         pos,
         km: kmStartBase,
+        transicao: { statusNovo: 'em_andamento', observacao: comporObservacao(obsStartBase) ?? 'Saída da base confirmada.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'em_andamento' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
       // Atualizar KM de saída de cada viatura vinculada
       await gravarKmViaturas('quilometragem_saida', kmStartBase)
 
-      // Registrar Histórico de Status
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'em_andamento',
-        observacao: comporObservacao(obsStartBase) ?? 'Saída da base confirmada.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
 
       notificarTelegram({
         titulo: 'Saída da Base',
@@ -1910,8 +1896,8 @@ export default function EscoltaDetalhePage() {
       if (params.fotoId) {
         const { data: f } = await sb.from('fotos').select('caminho_arquivo').eq('id', params.fotoId).maybeSingle()
         if (f?.caminho_arquivo) {
-          const { data: pub } = sb.storage.from('fotos').getPublicUrl(f.caminho_arquivo)
-          fotoUrl = pub?.publicUrl ?? null
+          // Lote 2026-10: URL assinada; o Telegram baixa a foto na hora do envio.
+          fotoUrl = await urlAssinada(sb, f.caminho_arquivo)
         }
       }
       const viatIds = viaturas.map(v => v.id)
@@ -2089,27 +2075,10 @@ export default function EscoltaDetalhePage() {
         tipoLabel: 'Chegada na Origem',
         observacao: observacaoOrigem,
         pos,
+        transicao: { statusNovo: 'na_origem', observacao: observacaoOrigem ?? 'Chegada na origem confirmada.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'na_origem' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
-
-      // Registrar Histórico
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'na_origem',
-        observacao: observacaoOrigem ?? 'Chegada na origem confirmada.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
       notificarTelegram({
         titulo: 'Chegada na Origem',
@@ -2151,27 +2120,10 @@ export default function EscoltaDetalhePage() {
         tipoLabel: 'Trânsito ao Destino',
         observacao: obsTransitoDestino,
         pos,
+        transicao: { statusNovo: 'em_transito_destino', observacao: comporObservacao(obsTransitoDestino) ?? 'Trânsito ao destino iniciado.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'em_transito_destino' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
-
-      // Registrar Histórico
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'em_transito_destino',
-        observacao: comporObservacao(obsTransitoDestino) ?? 'Trânsito ao destino iniciado.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
       notificarTelegram({
         titulo: 'Trânsito ao Destino Iniciado',
@@ -2212,27 +2164,10 @@ export default function EscoltaDetalhePage() {
         tipoLabel: 'Chegada no Destino',
         observacao: obsDestino,
         pos,
+        transicao: { statusNovo: 'no_destino', observacao: comporObservacao(obsDestino) ?? 'Chegada no destino confirmada.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'no_destino' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
-
-      // Registrar Histórico
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'no_destino',
-        observacao: comporObservacao(obsDestino) ?? 'Chegada no destino confirmada.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
       notificarTelegram({
         titulo: 'Chegada no Destino',
@@ -2275,26 +2210,10 @@ export default function EscoltaDetalhePage() {
         tipoLabel: 'Trânsito para o Retorno',
         observacao: obsTransitoRetorno,
         pos,
+        transicao: { statusNovo: 'em_transito_retorno', observacao: comporObservacao(obsTransitoRetorno) ?? 'Trânsito de retorno iniciado.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'em_transito_retorno' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
-
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'em_transito_retorno',
-        observacao: comporObservacao(obsTransitoRetorno) ?? 'Trânsito de retorno iniciado.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
       notificarTelegram({
         titulo: 'Trânsito de Retorno Iniciado',
@@ -2335,27 +2254,10 @@ export default function EscoltaDetalhePage() {
         tipoLabel: 'Retorno',
         observacao: obsRetorno,
         pos,
+        transicao: { statusNovo: 'retornando', observacao: comporObservacao(obsRetorno) ?? 'Retorno iniciado.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'retornando' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
-
-      // Registrar Histórico
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'retornando',
-        observacao: comporObservacao(obsRetorno) ?? 'Retorno iniciado.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
       notificarTelegram({
         titulo: 'Retorno Iniciado',
@@ -2414,30 +2316,14 @@ export default function EscoltaDetalhePage() {
         observacao: obsChegadaBase,
         pos,
         km: kmChegadaBase,
+        transicao: { statusNovo: 'na_base', observacao: comporObservacao(obsChegadaBase) ?? 'Chegada na base confirmada.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'na_base' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
       // Atualizar KM de retorno de cada viatura
       await gravarKmViaturas('quilometragem_retorno', kmChegadaBase)
 
-      // Registrar Histórico
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'na_base',
-        observacao: comporObservacao(obsChegadaBase) ?? 'Chegada na base confirmada.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
 
       notificarTelegram({
         titulo: 'Chegada na Base',
@@ -2468,10 +2354,13 @@ export default function EscoltaDetalhePage() {
         .map(e => `${e.vigilante?.nome_completo ?? '—'}${e.papel_na_escolta ? ` (${e.papel_na_escolta})` : ''}`)
 
       // Última foto de qualquer ponto de controle (mais recente)
-      const ultimaFotoUrl = [...paradas]
+      // Lote 2026-10: a URL guardada na tela pode ter vencido (validade de 1 hora);
+      // assina de novo, a partir do caminho, na hora do envio.
+      const ultimaFotoGuardada = [...paradas]
         .sort((a, b) => new Date(b.data_hora).getTime() - new Date(a.data_hora).getTime())
         .find(p => p.fotoUrls.length > 0)
         ?.fotoUrls[0] ?? null
+      const ultimaFotoUrl = ultimaFotoGuardada ? await urlAssinada(sb, ultimaFotoGuardada) : null
 
       // Duração: desde o primeiro status em_andamento
       const inicioAndamento = [...historico]
@@ -2689,31 +2578,22 @@ export default function EscoltaDetalhePage() {
       }
 
       // 2. Atualizar status da escolta para finalizada
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({
-          status: 'finalizada',
-          observacao_fechamento: relatorioFinal.trim(),
-          data_finalizacao: new Date().toISOString()
-        })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) {
-        throw new Error('O status da escolta mudou em outro dispositivo ou a regra do banco recusou a finalização. Recarregue a página e repita a etapa.')
-      }
-
-      // 3. Registrar Histórico de Status
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'finalizada',
-        // Antes dizia "gerado pelo supervisor" mesmo quando quem finalizava era outro
-        // participante. O autor ja vai em alterado_por.
-        observacao: `Escolta finalizada. Relatório final registrado por ${user?.nome_completo ?? 'usuário do sistema'}.`,
-        alterado_por: user?.id ?? null,
+      // 2 e 3. Status, relatório final e histórico numa transação (registrar_etapa_escolta,
+      // lote 2026-10). O autor vai em alterado_por, pela sessão.
+      const { error: escErr } = await sb.rpc('registrar_etapa_escolta', {
+        p_escolta_id: escolta.id,
+        p_status_atual: escolta.status,
+        p_status_novo: 'finalizada',
+        p_observacao: `Escolta finalizada. Relatório final registrado por ${user?.nome_completo ?? 'usuário do sistema'}.`,
+        p_observacao_fechamento: relatorioFinal.trim(),
+        p_latitude: pos.latitude,
+        p_longitude: pos.longitude,
       })
+      if (escErr) {
+        throw new Error(escErr.message === 'ERRO_SEM_TRANSICAO'
+          ? 'O status da escolta mudou em outro dispositivo ou a regra do banco recusou a finalização. Recarregue a página e repita a etapa.'
+          : escErr.message)
+      }
 
       // 4. Enviar relatório executivo completo ao Telegram
       enviarRelatorioFinalTelegram()
@@ -3470,7 +3350,10 @@ export default function EscoltaDetalhePage() {
                     {escolta.periodicidade_checkin_min ? `A cada ${escolta.periodicidade_checkin_min} min` : 'Desativado'}
                   </span>
                   {/* Periodicidade e planejamento: so a gestao altera (PODE_ALTERAR_PERIODICIDADE). */}
-                  {PODE_ALTERAR_PERIODICIDADE.includes(perfil) && (
+                  {/* Lote 2026-10 (M4): check-in desligado por padrão; "Alterar" só aparece se a
+                      escolta já tem periodicidade ou se o cliente foi religado (metadados). */}
+                  {PODE_ALTERAR_PERIODICIDADE.includes(perfil)
+                    && (escolta.periodicidade_checkin_min != null || periodicidadePadraoDoCliente(escolta.cliente?.metadados) != null) && (
                     <button onClick={() => { setPeriodicidadeEdit(escolta.periodicidade_checkin_min ? String(escolta.periodicidade_checkin_min) : ''); setEditandoPeriodicidade(true) }}
                       style={{ fontSize: '10px', color: '#1E7C52', textDecoration: 'underline' }}>
                       Alterar
@@ -4087,13 +3970,14 @@ export default function EscoltaDetalhePage() {
                     {v.quilometragem_retorno != null ? `${v.quilometragem_retorno.toLocaleString('pt-BR')} km` : '—'}
                   </p>
                 </div>
-                {v.abastecimento_litros != null && (
+                {/* Lote 2026-10 (M3): combustível é dado financeiro; só quem vê o Financeiro. */}
+                {verFinanceiroDet && v.abastecimento_litros != null && (
                   <div>
                     <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#A8B8C2' }}>Abastecimento</p>
                     <p className="text-sm font-medium mt-0.5" style={{ color: '#1E2D35' }}>{v.abastecimento_litros} L</p>
                   </div>
                 )}
-                {v.abastecimento_valor != null && (
+                {verFinanceiroDet && v.abastecimento_valor != null && (
                   <div>
                     <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#A8B8C2' }}>Combustível</p>
                     <p className="text-sm font-medium mt-0.5" style={{ color: '#1E2D35' }}>
@@ -4161,6 +4045,11 @@ export default function EscoltaDetalhePage() {
                 </div>
               ))}
             </div>
+
+            {/* Lote 2026-10 (M3): lançamento do combustível por viatura. */}
+            <CombustivelViaturas
+              viaturas={viaturas.map(v => ({ id: v.id, rotulo: rotuloViatura(v), litros: v.abastecimento_litros, valor: v.abastecimento_valor }))}
+              onSalvo={() => carregar()} />
 
             {/* Breakdown */}
             <div className="card-light overflow-hidden">
@@ -4365,6 +4254,7 @@ export default function EscoltaDetalhePage() {
                 {item.coordenadas && (
                   <div>
                     <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#A8B8C2', marginBottom: '6px' }}>Localização GPS</p>
+                    {item.rotulo && <p style={{ fontSize: '12px', color: '#0E1A33', marginBottom: '6px' }}>{item.rotulo}</p>}
                     <a href={`https://www.google.com/maps/search/?api=1&query=${item.coordenadas.lat},${item.coordenadas.lng}`}
                       target="_blank" rel="noopener noreferrer"
                       className="flex items-center gap-2 h-9 px-4 text-white font-black text-[10px] uppercase tracking-widest w-fit"

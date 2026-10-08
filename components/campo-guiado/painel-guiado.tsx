@@ -22,6 +22,8 @@ import {
 } from 'lucide-react'
 import { FOTOS_POR_PONTO } from '@/lib/fluxo-escolta'
 import { TOTAL_ETAPAS, type AcaoDetalhe, type ProximaAcao } from '@/lib/proximo-passo-operador'
+import { EstouNaBase } from './estou-na-base'
+import { AvisosMural } from '@/components/escolta/avisos-mural'
 
 // ─── Paleta Navy (app/globals.css), sem migrar paleta ─────────────────────────
 const COR = {
@@ -404,6 +406,7 @@ export function PainelGuiado(p: PainelGuiadoProps) {
     return (
       <div className="max-w-xl mx-auto space-y-4">
         <h1 className="font-black" style={{ fontSize: '22px', color: COR.texto }}>Painel Operacional Guiado</h1>
+        <AvisosMural />
         {p.semVinculoCadastro ? (
           <Cartao borda="#E9C46A">
             <p className="font-black" style={{ fontSize: '18px', color: COR.texto }}>Seu cadastro não está ligado a um vigilante</p>
@@ -420,6 +423,7 @@ export function PainelGuiado(p: PainelGuiadoProps) {
                 {a.codigo ? ` · ${a.codigo}` : ''}
               </p>
               <p style={{ fontSize: '16px', color: COR.texto }}>Com a equipe na base, inicie o pré-início da escolta.</p>
+              <EstouNaBase escoltaId={a.id} />
               <BotaoPrincipal onClick={() => p.onAbrirDetalhe('pre_inicio', a.id)} icone={<ChevronRight size={22} />}>
                 Iniciar Pré-início da Escolta
               </BotaoPrincipal>

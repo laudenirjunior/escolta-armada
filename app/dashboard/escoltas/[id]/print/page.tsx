@@ -5,6 +5,9 @@ import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { lerObservacao, fotoIdsDoPonto } from '@/lib/pontos-controle'
 import { STATUS, LABELS_STATUS, TIPO_PONTO_POR_STATUS } from '@/lib/fluxo-escolta'
+import { urlsAssinadas, urlDoMapa, VALIDADE_IMPRESSAO_S } from '@/lib/fotos-url'
+import { carregarLocaisAtivos } from '@/lib/locais'
+import { rotuloDoPonto } from '@/lib/rotulo-ponto'
 
 const sb = createClient() as any
 
@@ -55,6 +58,8 @@ interface PrintData {
     latitude: number | null
     longitude: number | null
     sem_sinal_gps: boolean
+    /** Lote 2026-10 (M1): local salvo próximo ou endereço aproximado. */
+    rotulo: string | null
   }>
   ocorrencias: Array<{ tipo: string; descricao: string; data_hora: string; autor: string; fotoUrl: string | null }>
   checklists: Array<{ tipo: string; data_conclusao: string; autor: string; conformes: number; total: number }>
@@ -201,7 +206,7 @@ export default function EscoltaPrintPage() {
         // Pontos de controle
         const { data: pts } = viatIds.length > 0
           ? await sb.from('pontos_controle')
-              .select('data_hora, foto_id, observacoes, latitude, longitude, sem_sinal_gps, tipo:dom_tipos_ponto(codigo, nome_exibicao), autor:usuarios!lancado_por(nome_completo)')
+              .select('data_hora, foto_id, observacoes, latitude, longitude, precisao_metros, sem_sinal_gps, tipo:dom_tipos_ponto(codigo, nome_exibicao), autor:usuarios!lancado_por(nome_completo)')
               .in('escolta_veiculo_id', viatIds)
               .order('data_hora', { ascending: true })
           : { data: [] }
@@ -215,16 +220,16 @@ export default function EscoltaPrintPage() {
           ? await sb.from('fotos').select('id, caminho_arquivo').in('id', idsFoto)
           : { data: [] }
 
+        // Lote 2026-10: bucket privado. URLs assinadas em lote, com validade para imprimir.
+        const assinadasPontos = await urlsAssinadas(
+          sb, ((fotosData ?? []) as Array<{ caminho_arquivo: string }>).map(f => f.caminho_arquivo), VALIDADE_IMPRESSAO_S)
         const urlPorFotoId = new Map<string, string>()
         for (const f of (fotosData ?? []) as Array<{ id: string; caminho_arquivo: string }>) {
-          const path = f.caminho_arquivo
-          if (!path) continue
-          const url = path.startsWith('http')
-            ? path
-            : sb.storage.from('fotos').getPublicUrl(path).data?.publicUrl ?? null
+          const url = urlDoMapa(assinadasPontos, f.caminho_arquivo)
           if (url) urlPorFotoId.set(f.id, url)
         }
 
+        const locaisAtivos = await carregarLocaisAtivos(sb)
         const pontos = (pts ?? []).map((p: any, i: number) => {
           const lido = lerObservacao(p.observacoes)
           return {
@@ -242,6 +247,7 @@ export default function EscoltaPrintPage() {
             latitude: p.latitude ?? null,
             longitude: p.longitude ?? null,
             sem_sinal_gps: p.sem_sinal_gps ?? false,
+            rotulo: rotuloDoPonto({ latitude: p.latitude, longitude: p.longitude, precisao_metros: p.precisao_metros, endereco: lido.endereco }, locaisAtivos),
           }
         })
 
@@ -252,13 +258,10 @@ export default function EscoltaPrintPage() {
           .eq('escolta_id', id)
           .order('data_hora', { ascending: true })
 
+        const assinadasOcorr = await urlsAssinadas(
+          sb, (ocorrs ?? []).map((o: any) => o.foto?.caminho_arquivo as string | undefined), VALIDADE_IMPRESSAO_S)
         const ocorrencias = await Promise.all((ocorrs ?? []).map(async (o: any) => {
-          let fotoUrl: string | null = null
-          if (o.foto?.caminho_arquivo) {
-            const path = o.foto.caminho_arquivo as string
-            fotoUrl = path.startsWith('http') ? path
-              : sb.storage.from('fotos').getPublicUrl(path).data?.publicUrl ?? null
-          }
+          const fotoUrl: string | null = urlDoMapa(assinadasOcorr, o.foto?.caminho_arquivo)
           return {
             tipo: o.tipo?.nome ?? 'Ocorrência',
             descricao: o.descricao ?? '',
@@ -759,6 +762,7 @@ export default function EscoltaPrintPage() {
                   }}>
                     {fmtGps(p)}
                   </span>
+                  {p.rotulo && <span style={{ display: 'block', color: '#1E2D35', marginTop: '2px' }}>{p.rotulo}</span>}
                 </div>
 
                 {p.observacao && (
