@@ -77,17 +77,22 @@ export function DialogoAssumirEscolta({
     setEtapa('carregando')
     setErro(null)
     try {
-      const [{ data: info, error: e1 }, { data: vigs, error: e2 }, { data: veics }, { data: cfg }] = await Promise.all([
+      const [{ data: info, error: e1 }, { data: vigs, error: e2 }, { data: veics }, { data: cfg }, { error: semTravas }] = await Promise.all([
         sb.rpc('equipe_escalada', { p_escolta_id: escoltaId }),
         sb.rpc('vigilantes_para_escala'),
         sb.from('veiculos').select('id, placa, modelo').eq('status', 'ativo').order('placa'),
         sb.from('configuracoes_mural').select('aprovacao_tempo_limite_min').maybeSingle(),
+        sb.rpc('mural_travas_ativas'),
       ])
       if (cfg?.aprovacao_tempo_limite_min) setTempoLimiteMin(cfg.aprovacao_tempo_limite_min)
       if (e1) throw new Error(e1.message)
       if (e2) throw new Error(e2.message)
 
       const equipe: Membro[] = info?.equipe ?? []
+      // Defesa extra: sem as travas no banco, substituir equipe trocaria na hora.
+      if (equipe.length > 0 && semTravas) {
+        throw new Error('Atualização em andamento: a substituição de equipe volta em instantes. Tente de novo mais tarde.')
+      }
       setEquipeAtual(equipe)
       setViaturaAtual(info?.viaturas?.[0] ?? null)
       setVigilantes(vigs ?? [])

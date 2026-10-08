@@ -41,7 +41,7 @@ export function AvisosMural({ intervaloMs = 30_000 }: { intervaloMs?: number }) 
             <p className="text-xs font-black uppercase tracking-wider" style={{ color: '#8A5A10' }}>{a.titulo}</p>
             <p className="text-sm mt-1" style={{ color: '#1E2D35' }}>{a.texto}</p>
             <p className="text-[10px] mt-1" style={{ color: '#6B7E8A' }}>
-              {new Date(a.criado_em).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
+              {new Date(a.criado_em).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }).replace(',', '')}
             </p>
           </div>
           <button type="button" onClick={() => ciente(a.id)} className="flex items-center gap-1 text-xs font-bold px-3"

@@ -114,12 +114,14 @@ export async function POST(req: NextRequest) {
 
     let texto: string
 
-    if (texto_completo) {
+    // Destino central (avisos do mural) não aceita texto livre: só os campos escapados.
+    if (texto_completo && !paraCentral) {
       // Mensagem pré-formatada (ex: relatório de finalização)
       texto = texto_completo
     } else {
       const emoji = EMOJI[tipo] ?? EMOJI.default
-      const agora = data_hora ?? new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+      // Padrão DD/MM/AAAA HH:MM (Brasília), sem vírgula nem segundos.
+      const agora = data_hora ?? new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }).replace(',', '')
       const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
 
       texto = `${emoji} <b>${escaparHtml(String(titulo ?? ""))}</b>\n\n`

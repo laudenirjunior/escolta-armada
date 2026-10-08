@@ -156,6 +156,19 @@ export default function EscoltasPage() {
     return () => clearInterval(t)
   }, [escoltas])
 
+  // Sem as travas no banco (entre o deploy e a migration 204), puxar não passa pelo
+  // diálogo de assumir: a assumir_escolta antiga trocaria a equipe na hora. A
+  // puxar_escolta recusa escolta com equipe também na versão antiga.
+  const puxar = async (e: EscoltaRow) => {
+    if (travasAtivas) { abrirAssumir(e); return }
+    setPuxando(e.id)
+    setAvisoMural(null)
+    const { error } = await sb.rpc('puxar_escolta', { p_escolta_id: e.id })
+    setAvisoMural(error ? { tipo: 'erro', texto: error.message ?? 'Não foi possível puxar a escolta.' } : { tipo: 'ok', texto: 'Escolta puxada. Você é o comandante.' })
+    setPuxando(null)
+    await carregar()
+  }
+
   const estouNaBase = async (id: string) => {
     setPuxando(id)
     setAvisoMural(null)
@@ -326,7 +339,7 @@ export default function EscoltasPage() {
                         {ehOperador && e.status === 'agendada' && (
                           <AcaoMural compacto semEquipe={semEquipeIds.includes(e.id)} souComandante={souComandanteIds.includes(e.id)}
                             info={infoMural[e.id]} travasAtivas={travasAtivas} ocupado={puxando === e.id}
-                            onPuxar={() => abrirAssumir(e)} onPedir={() => abrirAssumir(e)} onDevolver={() => devolver(e.id)}
+                            onPuxar={() => puxar(e)} onPedir={() => abrirAssumir(e)} onDevolver={() => devolver(e.id)}
                             onEstouNaBase={() => estouNaBase(e.id)} onCancelarPedido={(pid) => cancelarPedido(pid, e.id)} />
                         )}
                         <button
@@ -435,7 +448,7 @@ export default function EscoltasPage() {
                   <div onClick={(ev) => ev.stopPropagation()}>
                     <AcaoMural semEquipe={semEquipeIds.includes(e.id)} souComandante={souComandanteIds.includes(e.id)}
                       info={infoMural[e.id]} travasAtivas={travasAtivas} ocupado={puxando === e.id}
-                      onPuxar={() => abrirAssumir(e)} onPedir={() => abrirAssumir(e)} onDevolver={() => devolver(e.id)}
+                      onPuxar={() => puxar(e)} onPedir={() => abrirAssumir(e)} onDevolver={() => devolver(e.id)}
                       onEstouNaBase={() => estouNaBase(e.id)} onCancelarPedido={(pid) => cancelarPedido(pid, e.id)} />
                   </div>
                 )}

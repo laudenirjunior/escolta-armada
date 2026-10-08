@@ -80,7 +80,8 @@ export default function SubstituicoesPage() {
     if (error) setMsg({ ok: false, texto: error.message })
     else {
       setMsg({ ok: true, texto: data?.executado ? `Pedido aprovado: ${p.solicitante} assumiu a escolta ${p.codigo}.` : 'Pedido aprovado, mas a escolta mudou antes da execução; nada foi trocado.' })
-      if (data?.aviso_pelo_banco === false) avisoCentral(p, 'Pedido de substituição aprovado', `${p.solicitante} assumiu. Equipe anterior: ${p.equipe_antes}.`)
+      if (data?.aviso_pelo_banco === false && data?.executado)
+        avisoCentral(p, 'Equipe substituída (aprovado)', `${p.solicitante} assumiu. Equipe anterior: ${p.equipe_antes}. Motivo: ${p.motivo}`)
     }
     setOcupado(null); await carregar()
   }
