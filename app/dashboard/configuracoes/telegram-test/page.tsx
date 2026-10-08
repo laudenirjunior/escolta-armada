@@ -2,8 +2,20 @@
 
 import { useState } from 'react'
 import { Send, CheckCircle2, AlertTriangle, Camera, Bot } from 'lucide-react'
+import { useAuth } from '@/hooks/useAuth'
 
+// Lote 2026-10: a tela manda mensagem para chat arbitrário. Só o administrador entra;
+// o layout só escondia o menu, a rota continuava aberta.
 export default function TelegramTestPage() {
+  const { user, loading } = useAuth()
+  if (loading) return null
+  if (user?.perfil?.codigo !== 'administrador') {
+    return <div className="p-6 text-sm">Acesso restrito ao administrador.</div>
+  }
+  return <TelegramTest />
+}
+
+function TelegramTest() {
   const [chatId, setChatId] = useState('')
   const [tipo, setTipo] = useState('status')
   const [titulo, setTitulo] = useState('Teste de Notificação')

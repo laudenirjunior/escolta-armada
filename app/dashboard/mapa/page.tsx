@@ -127,7 +127,10 @@ function criarElDestino(): HTMLElement {
   return el
 }
 
-function criarElPosicao(code: string, color: string): HTMLElement {
+function criarElPosicao(codeBruto: string, colorBruta: string): HTMLElement {
+  // Lote 2026-10: escapados porque vão para innerHTML (cor vem do cadastro do cliente).
+  const code = esc(codeBruto)
+  const color = esc(colorBruta)
   const el = document.createElement('div')
   el.style.cssText = `position:relative; cursor:pointer; width:32px; height:32px;`
   el.innerHTML = `
@@ -164,18 +167,25 @@ function criarElPosicao(code: string, color: string): HTMLElement {
   return el
 }
 
+// Lote 2026-10: o popup é HTML montado à mão; todo texto vindo do banco passa por aqui
+// (antes, o nome do cliente permitia injetar script).
+function esc(v: unknown): string {
+  return String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+}
+
 function popupHTML(e: EscoltaAtiva): string {
   const s = STATUS_MAP[e.status] ?? { label: e.status, color: '#53648A' }
   const pt = e.ultimo_ponto
   return `
     <div style="font-family:system-ui;padding:4px 0;min-width:160px">
-      <div style="font-size:12px;font-weight:800;color:#0E1A33">${e.codigo_escolta ?? '—'}</div>
-      <div style="font-size:11px;color:#5A6A80;margin:2px 0 4px">${e.cliente?.nome_cliente ?? '—'}</div>
-      <span style="font-size:9px;font-weight:700;padding:1px 6px;background:${s.color}22;color:${s.color};text-transform:uppercase">${s.label}</span>
+      <div style="font-size:12px;font-weight:800;color:#0E1A33">${esc(e.codigo_escolta ?? '—')}</div>
+      <div style="font-size:11px;color:#5A6A80;margin:2px 0 4px">${esc(e.cliente?.nome_cliente ?? '—')}</div>
+      <span style="font-size:9px;font-weight:700;padding:1px 6px;background:${s.color}22;color:${s.color};text-transform:uppercase">${esc(s.label)}</span>
       ${pt ? `
         <div style="margin-top:6px;padding-top:5px;border-top:1px solid #f0f0f0">
-          <div style="font-size:10px;font-weight:700;color:${corSinal(pt.data_hora)}">${pt.tipo} · ${tempoAtras(pt.data_hora)}</div>
-          ${pt.endereco ? `<div style="font-size:9px;color:#8B9BAD;margin-top:2px">${pt.endereco.substring(0, 70)}</div>` : ''}
+          <div style="font-size:10px;font-weight:700;color:${corSinal(pt.data_hora)}">${esc(pt.tipo)} · ${esc(tempoAtras(pt.data_hora))}</div>
+          ${pt.endereco ? `<div style="font-size:9px;color:#8B9BAD;margin-top:2px">${esc(pt.endereco.substring(0, 70))}</div>` : ''}
         </div>
       ` : `<div style="font-size:9px;color:#9CA3AF;margin-top:5px">Posição: coordenadas de origem</div>`}
     </div>

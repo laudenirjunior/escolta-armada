@@ -8,7 +8,21 @@ import { exigirSessao, dentroDoLimite, escaparHtml } from '@/lib/api-auth'
 const LIMITE_ENVIOS_POR_MINUTO = 30
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
-const BASE_URL = `https://api.telegram.org/bot${BOT_TOKEN}`
+// TELEGRAM_API_BASE existe só para a homologação (servidor falso do Telegram). Em
+// produção na Vercel é ignorado, para o token nunca ir a outro endereço.
+const API_BASE = process.env.VERCEL_ENV !== 'production' && process.env.TELEGRAM_API_BASE
+  ? process.env.TELEGRAM_API_BASE
+  : 'https://api.telegram.org'
+const BASE_URL = `${API_BASE}/bot${BOT_TOKEN}`
+
+// Lote 2026-10: foto só do bucket do próprio projeto, por URL assinada. Qualquer outra
+// URL é descartada e a mensagem sai só com texto.
+function fotoPermitida(url: unknown): string | null {
+  if (typeof url !== 'string' || !url) return null
+  const base = (process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').replace(/\/+$/, '')
+  if (!base) return null
+  return url.startsWith(`${base}/storage/v1/object/sign/fotos/`) ? url : null
+}
 
 if (!BOT_TOKEN) {
   console.warn('[telegram] TELEGRAM_BOT_TOKEN não configurado no .env.local')
@@ -67,10 +81,10 @@ export async function POST(req: NextRequest) {
       status_atual,
       efetivos,
       veiculo,
-      foto_url,
       data_hora,
       chat_id,
     } = body
+    const foto_url = fotoPermitida(body.foto_url)
 
     // O chat_id vinha do cliente: qualquer um usava o bot para mandar mensagem
     // a qualquer destino. Agora e resolvido no servidor a partir da escolta.
@@ -116,7 +130,7 @@ export async function POST(req: NextRequest) {
         for (const nome of efetivos) texto += `  • ${escaparHtml(String(nome))}\n`
       }
 
-      if (descricao?.trim()) texto += `\n📝 <i>${descricao.trim()}</i>\n`
+      if (descricao?.trim()) texto += `\n📝 <i>${escaparHtml(String(descricao).trim())}</i>\n`
 
       if (escolta_id) {
         texto += `\n🔗 <a href="${appUrl}/dashboard/escoltas/${escolta_id}">Abrir Escolta ${escolta_codigo ?? ''}</a>`
