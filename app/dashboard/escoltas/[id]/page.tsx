@@ -21,7 +21,7 @@ import {
   PODE_ALTERAR_PERIODICIDADE,
 } from '@/lib/permissions'
 import { podeOperarEscolta } from '@/lib/acesso-escolta'
-import { minutosAteCheckin as calcularMinutosAteCheckin, inicioOperacaoEm, registrarCheckin, TIPO_CHECKIN } from '@/lib/checkin'
+import { minutosAteCheckin as calcularMinutosAteCheckin, inicioOperacaoEm, registrarCheckin, TIPO_CHECKIN, periodicidadePadraoDoCliente } from '@/lib/checkin'
 import { useModoGuiado } from '@/hooks/useModoGuiado'
 import {
   LABELS_STATUS,
@@ -58,7 +58,7 @@ interface EscoltaDetalhe {
   checklist_pendente_no_inicio: boolean
   criada_por: string
   criado_em: string
-  cliente: { id: string; nome_cliente: string; cor_destaque: string; telefone: string } | null
+  cliente: { id: string; nome_cliente: string; cor_destaque: string; telefone: string; metadados?: Record<string, unknown> | null } | null
   valor_cobrado: number | null
   outros_custos: number | null
   observacao_financeira: string | null
@@ -799,7 +799,7 @@ export default function EscoltaDetalhePage() {
         checklist_pendente_no_inicio, criada_por, criado_em,
         valor_cobrado, outros_custos, observacao_financeira,
         periodicidade_checkin_min,
-        cliente:clientes(id, nome_cliente, cor_destaque, telefone)
+        cliente:clientes(id, nome_cliente, cor_destaque, telefone, metadados)
       `)
       .eq('id', id)
       .maybeSingle()
@@ -3485,7 +3485,10 @@ export default function EscoltaDetalhePage() {
                     {escolta.periodicidade_checkin_min ? `A cada ${escolta.periodicidade_checkin_min} min` : 'Desativado'}
                   </span>
                   {/* Periodicidade e planejamento: so a gestao altera (PODE_ALTERAR_PERIODICIDADE). */}
-                  {PODE_ALTERAR_PERIODICIDADE.includes(perfil) && (
+                  {/* Lote 2026-10 (M4): check-in desligado por padrão; "Alterar" só aparece se a
+                      escolta já tem periodicidade ou se o cliente foi religado (metadados). */}
+                  {PODE_ALTERAR_PERIODICIDADE.includes(perfil)
+                    && (escolta.periodicidade_checkin_min != null || periodicidadePadraoDoCliente(escolta.cliente?.metadados) != null) && (
                     <button onClick={() => { setPeriodicidadeEdit(escolta.periodicidade_checkin_min ? String(escolta.periodicidade_checkin_min) : ''); setEditandoPeriodicidade(true) }}
                       style={{ fontSize: '10px', color: '#1E7C52', textDecoration: 'underline' }}>
                       Alterar
