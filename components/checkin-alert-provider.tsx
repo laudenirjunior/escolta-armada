@@ -126,8 +126,8 @@ export function CheckinAlertProvider({ perfil }: { perfil?: string | null }) {
         if (dispensadoEm.get(esc.id) !== assinatura) {
           novosAlertas.push({
             escolta_id: esc.id,
-            codigo: esc.codigo_escolta ?? '—',
-            cliente: esc.cliente?.nome_cliente ?? '—',
+            codigo: esc.codigo_escolta ?? '-',
+            cliente: esc.cliente?.nome_cliente ?? '-',
             minutos_atraso: minutosAtraso,
             assinatura,
           })
