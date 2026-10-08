@@ -8,6 +8,15 @@ BEGIN
     PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname = 'lote2026_pedidos_vencidos';
   END IF;
 END $$;
+-- Pedidos pendentes não ficam sem desfecho.
+DO $$
+BEGIN
+  IF to_regclass('public.mural_pedidos') IS NOT NULL THEN
+    UPDATE public.mural_pedidos SET status = 'cancelado', decidido_em = now(),
+           observacao_decisao = 'Cancelado: as travas do mural foram revertidas.'
+     WHERE status = 'pendente';
+  END IF;
+END $$;
 
 CREATE OR REPLACE FUNCTION public.assumir_escolta(p_escolta_id uuid, p_acompanhantes uuid[] DEFAULT '{}'::uuid[], p_veiculo_id uuid DEFAULT NULL::uuid, p_motivo text DEFAULT NULL::text) RETURNS jsonb
     LANGUAGE plpgsql SECURITY DEFINER
@@ -298,3 +307,4 @@ DROP FUNCTION IF EXISTS public._nomes_da_equipe(jsonb);
 DROP FUNCTION IF EXISTS public._ids_da_equipe(jsonb);
 DROP FUNCTION IF EXISTS public._equipe_atual(uuid);
 DROP FUNCTION IF EXISTS public._hora_br(timestamptz);
+DROP FUNCTION IF EXISTS public._travar_vigilante(uuid);

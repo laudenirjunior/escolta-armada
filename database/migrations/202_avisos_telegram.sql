@@ -80,6 +80,7 @@ CREATE OR REPLACE FUNCTION public.escapar_html(p text) RETURNS text
     AS $$
   SELECT replace(replace(replace(coalesce(p, ''), '&', '&amp;'), '<', '&lt;'), '>', '&gt;')
 $$;
+REVOKE ALL ON FUNCTION public.escapar_html(text) FROM PUBLIC, anon, authenticated;
 
 -- 5. As peças do envio pelo banco estão todas presentes?
 CREATE OR REPLACE FUNCTION public.avisos_pelo_banco_ativos() RETURNS boolean
@@ -176,6 +177,12 @@ BEGIN
       EXECUTE $q$SELECT status_code, content::text, error_msg FROM net._http_response WHERE id = $1$q$
         INTO v_status, v_conteudo, v_erro USING r.pg_net_id;
     END IF;
+    -- Resposta que não é JSON (proxy devolvendo HTML) não pode derrubar a rodada inteira.
+    BEGIN
+      v_conteudo := v_conteudo::jsonb ->> 'description';
+    EXCEPTION WHEN others THEN
+      v_conteudo := NULL;
+    END;
     IF v_status = 200 THEN
       UPDATE public.avisos_telegram SET situacao = 'enviado', erro = NULL WHERE id = r.id;
       n := n + 1;
@@ -183,7 +190,7 @@ BEGIN
       UPDATE public.avisos_telegram
          SET situacao = 'erro',
              erro = regexp_replace(left(coalesce(v_status::text, '') || ' ' ||
-                      coalesce((v_conteudo::jsonb ->> 'description'), v_erro, ''), 300),
+                      coalesce(v_conteudo, v_erro, ''), 300),
                     '/bot[^/[:space:]]+', '/bot***', 'g')
        WHERE id = r.id;
     ELSIF r.enviado_em < now() - interval '10 minutes' THEN
@@ -191,13 +198,21 @@ BEGIN
     END IF;
   END LOOP;
   RETURN n;
-EXCEPTION WHEN invalid_text_representation THEN
-  RETURN n;
 END;
 $$;
 REVOKE ALL ON FUNCTION public.conferir_avisos_telegram() FROM PUBLIC, anon, authenticated;
 
--- 9. Agendamento a cada minuto (só com pg_cron).
+-- 9. O pg_net guarda a URL (com o token) na fila e o corpo da resposta: nenhum papel da
+--    aplicação lê o schema net (nada do cliente usa pg_net).
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'net') THEN
+    REVOKE USAGE ON SCHEMA net FROM anon, authenticated;
+    REVOKE ALL ON ALL TABLES IN SCHEMA net FROM anon, authenticated;
+  END IF;
+END $$;
+
+-- 10. Agendamento a cada minuto (só com pg_cron).
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN

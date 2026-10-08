@@ -32,9 +32,29 @@ CREATE POLICY configuracoes_mural_edicao ON public.configuracoes_mural FOR UPDAT
   WITH CHECK ((SELECT public.get_meu_perfil()) = ANY (ARRAY['administrador', 'gestor']));
 COMMENT ON TABLE public.configuracoes_mural IS 'Lote 2026-10 (M5): parâmetros das travas do mural, lidos pelas RPCs no servidor.';
 
--- 2. T6: escala fixa. Some do mural para operadores; só a gestão muda (a trigger
---    impedir_edicao_por_operador da 197 já protege a coluna).
+-- 2. T6: escala fixa. Some do mural para operadores; só supervisor ou acima muda.
+--    Trava própria (não depende da 197 da onda A): central e operador não alteram.
 ALTER TABLE public.escoltas ADD COLUMN IF NOT EXISTS escala_fixa boolean NOT NULL DEFAULT false;
+CREATE OR REPLACE FUNCTION public.proteger_escala_fixa() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $$
+DECLARE v_perfil text;
+BEGIN
+  IF auth.uid() IS NULL THEN RETURN NEW; END IF;      -- SQL Editor e migrations
+  IF TG_OP = 'UPDATE' AND NEW.escala_fixa IS NOT DISTINCT FROM OLD.escala_fixa THEN RETURN NEW; END IF;
+  IF TG_OP = 'INSERT' AND NOT NEW.escala_fixa THEN RETURN NEW; END IF;
+  SELECT public.get_meu_perfil() INTO v_perfil;
+  IF v_perfil IS NULL OR v_perfil NOT IN ('administrador', 'gestor', 'supervisor') THEN
+    RAISE EXCEPTION 'Somente supervisor ou acima marca ou desmarca escala fixa.';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.proteger_escala_fixa() FROM PUBLIC, anon, authenticated;
+DROP TRIGGER IF EXISTS tr_proteger_escala_fixa ON public.escoltas;
+CREATE TRIGGER tr_proteger_escala_fixa BEFORE INSERT OR UPDATE ON public.escoltas
+  FOR EACH ROW EXECUTE FUNCTION public.proteger_escala_fixa();
 COMMENT ON COLUMN public.escoltas.escala_fixa IS 'Lote 2026-10 (T6): equipe definida pela gestão; não aparece no mural e não é substituída pelo operador.';
 
 -- 3. T2: presença na base confirmada pela equipe escalada.
@@ -67,7 +87,7 @@ CREATE TABLE IF NOT EXISTS public.mural_pedidos (
   solicitante_vigilante_id  uuid NOT NULL REFERENCES public.vigilantes(id),
   acompanhantes             uuid[] NOT NULL DEFAULT '{}',
   veiculo_id                uuid REFERENCES public.veiculos(id),
-  motivo                    text NOT NULL CHECK (length(trim(motivo)) >= 20),
+  motivo                    text NOT NULL CHECK (length(trim(motivo)) BETWEEN 20 AND 500),
   equipe_antes              jsonb NOT NULL DEFAULT '[]',
   status                    text NOT NULL DEFAULT 'pendente'
                               CHECK (status IN ('pendente', 'aprovado', 'recusado', 'liberado_por_tempo', 'cancelado', 'invalidado')),

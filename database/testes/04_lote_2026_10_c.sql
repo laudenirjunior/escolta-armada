@@ -206,3 +206,56 @@ BEGIN
   ELSE RAISE NOTICE 'FALHOU: auditoria %', acoes; END IF;
 END $$;
 ROLLBACK;
+
+-- Revisão adversarial da onda C.
+-- Escala fixa só por supervisor ou acima (central e operador não), com trava própria.
+BEGIN;
+SELECT set_config('t.esc', qa.nova_escolta(now() + interval '30 minutes', 'agendada', 'qa_um')::text, true);
+SELECT qa.como('qa_central');
+DO $$
+BEGIN
+  UPDATE public.escoltas SET escala_fixa = true WHERE id = current_setting('t.esc')::uuid;
+  RAISE NOTICE 'FALHOU: central marcou escala fixa';
+EXCEPTION WHEN raise_exception THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: central marcando escala fixa';
+END $$;
+RESET ROLE;
+SELECT qa.como('qa_supervisor');
+DO $$
+BEGIN
+  UPDATE public.escoltas SET escala_fixa = true WHERE id = current_setting('t.esc')::uuid;
+  RAISE NOTICE 'PASSOU: supervisor marca escala fixa';
+EXCEPTION WHEN others THEN RAISE NOTICE 'FALHOU: supervisor nao marcou escala fixa: %', SQLERRM;
+END $$;
+ROLLBACK;
+
+-- Escolta remarcada para fora da janela: o pedido pendente não executa ao vencer.
+BEGIN;
+SELECT set_config('t.esc', qa.nova_escolta(now() + interval '30 minutes', 'agendada', 'qa_um')::text, true);
+SELECT qa.como('qa_dois');
+SELECT set_config('t.ped', (public.assumir_escolta(current_setting('t.esc')::uuid, '{}', NULL, 'a equipe escalada nao apareceu na base') ->> 'pedido_id'), true);
+RESET ROLE;
+SELECT set_config('request.jwt.claims', '', true), set_config('request.jwt.claim.sub', '', true);  -- como o SQL Editor
+UPDATE public.escoltas SET data_hora_prevista = now() + interval '1 day' WHERE id = current_setting('t.esc')::uuid;
+UPDATE public.mural_pedidos SET expira_em = now() - interval '1 minute' WHERE id = current_setting('t.ped')::uuid;
+SELECT public.processar_pedidos_vencidos();
+DO $$
+DECLARE cmd uuid; st text;
+BEGIN
+  SELECT vigilante_id INTO cmd FROM public.escolta_efetivo WHERE escolta_id = current_setting('t.esc')::uuid AND papel_na_escolta = 'comandante';
+  SELECT status INTO st FROM public.mural_pedidos WHERE id = current_setting('t.ped')::uuid;
+  IF cmd = qa.vigilante('qa_um') AND st = 'invalidado' THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: escolta remarcada fora da janela nao troca a equipe';
+  ELSE RAISE NOTICE 'FALHOU: remarcada st=%', st; END IF;
+END $$;
+ROLLBACK;
+
+-- Motivo acima de 500 caracteres.
+BEGIN;
+SELECT set_config('t.esc', qa.nova_escolta(now() + interval '30 minutes', 'agendada', 'qa_um')::text, true);
+SELECT qa.como('qa_dois');
+DO $$
+BEGIN
+  PERFORM public.assumir_escolta(current_setting('t.esc')::uuid, '{}', NULL, repeat('motivo longo ', 50));
+  RAISE NOTICE 'FALHOU: motivo de 650 caracteres aceito';
+EXCEPTION WHEN raise_exception THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: motivo acima de 500 caracteres';
+END $$;
+ROLLBACK;

@@ -60,6 +60,12 @@ CREATE OR REPLACE FUNCTION public._conflito_comandante(p_vigilante_id uuid, p_es
   LIMIT 1
 $$;
 
+-- T5 sob concorrência: serializa por vigilante (ordem de travas: escolta, vigilante, pedido).
+CREATE OR REPLACE FUNCTION public._travar_vigilante(p_vigilante_id uuid) RETURNS void
+    LANGUAGE sql VOLATILE SET search_path TO 'public', 'pg_temp' AS $$
+  SELECT pg_advisory_xact_lock(hashtextextended('lote2026_t5:' || p_vigilante_id::text, 0))
+$$;
+
 -- T2: alguém da equipe atual confirmou presença na base?
 CREATE OR REPLACE FUNCTION public._presenca_da_equipe(p_escolta_id uuid) RETURNS text
     LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $$
@@ -116,7 +122,7 @@ DO $$
 DECLARE f text;
 BEGIN
   FOREACH f IN ARRAY ARRAY['_hora_br(timestamptz)', '_equipe_atual(uuid)', '_ids_da_equipe(jsonb)', '_nomes_da_equipe(jsonb)',
-                           '_conflito_comandante(uuid, uuid)', '_presenca_da_equipe(uuid)', '_supervisao_ids()',
+                           '_conflito_comandante(uuid, uuid)', '_presenca_da_equipe(uuid)', '_supervisao_ids()', '_travar_vigilante(uuid)',
                            '_usuarios_dos_vigilantes(uuid[])', '_avisar_app(uuid, text, uuid[], text, text, uuid)',
                            '_auditar_mural(text, uuid, jsonb, jsonb)', '_texto_aviso_mural(text, uuid, text[])']
   LOOP
@@ -138,7 +144,8 @@ BEGIN
   IF p.id IS NULL OR p.status NOT IN ('aprovado', 'liberado_por_tempo') THEN
     RAISE EXCEPTION 'Pedido nao esta liberado para execucao.';
   END IF;
-  SELECT id, status, escala_fixa, codigo_escolta INTO e FROM public.escoltas WHERE id = p.escolta_id;
+  SELECT id, status, escala_fixa, codigo_escolta, data_hora_prevista INTO e FROM public.escoltas WHERE id = p.escolta_id;
+  PERFORM public._travar_vigilante(p.solicitante_vigilante_id);
   v_equipe_agora := public._equipe_atual(p.escolta_id);
   v_presenca := CASE WHEN (SELECT presenca_ligada FROM public.configuracoes_mural WHERE id = 1)
                      THEN public._presenca_da_equipe(p.escolta_id) END;
@@ -147,6 +154,8 @@ BEGIN
   v_motivo := CASE
     WHEN e.status IS DISTINCT FROM 'agendada' THEN 'a escolta ja comecou ou foi encerrada'
     WHEN e.escala_fixa THEN 'a escolta passou a ser de escala fixa'
+    WHEN now() < e.data_hora_prevista - make_interval(mins => (SELECT janela_substituicao_min FROM public.configuracoes_mural WHERE id = 1))
+      THEN 'a escolta foi remarcada e saiu da janela de substituicao'
     WHEN v_presenca IS NOT NULL THEN 'a equipe confirmou presenca na base (' || v_presenca || ')'
     WHEN public._ids_da_equipe(v_equipe_agora) IS DISTINCT FROM public._ids_da_equipe(p.equipe_antes) THEN 'a equipe da escolta mudou depois do pedido'
     WHEN v_conflito IS NOT NULL THEN 'o solicitante passou a comandar a escolta ' || v_conflito || ' a menos do intervalo minimo'
@@ -253,6 +262,7 @@ BEGIN
   IF e.escala_fixa THEN
     RAISE EXCEPTION 'Escolta de escala fixa: a equipe e definida pela supervisao.';
   END IF;
+  PERFORM public._travar_vigilante(v_vigilante);
 
   v_acomp_limpo := ARRAY(SELECT DISTINCT a FROM unnest(coalesce(p_acompanhantes, '{}')) a WHERE a IS DISTINCT FROM v_vigilante);
   IF EXISTS (SELECT 1 FROM unnest(v_acomp_limpo) a WHERE NOT EXISTS
@@ -298,6 +308,9 @@ BEGIN
   IF p_motivo IS NULL OR length(trim(p_motivo)) < 20 THEN
     RAISE EXCEPTION 'Informe o motivo da substituicao com pelo menos 20 caracteres.';
   END IF;
+  IF length(trim(p_motivo)) > 500 THEN
+    RAISE EXCEPTION 'O motivo pode ter no maximo 500 caracteres.';
+  END IF;
   v_inicio := e.data_hora_prevista - make_interval(mins => cfg.janela_substituicao_min);
   IF now() < v_inicio THEN
     RAISE EXCEPTION 'Substituicao de equipe liberada a partir de % (horario de Brasilia).', public._hora_br(v_inicio);
@@ -305,7 +318,7 @@ BEGIN
   IF cfg.presenca_ligada THEN
     v_presenca := public._presenca_da_equipe(p_escolta_id);
     IF v_presenca IS NOT NULL THEN
-      RAISE EXCEPTION 'A equipe escalada ja confirmou presenca na base (%). Fale com o supervisor.', v_presenca;
+      RAISE EXCEPTION 'A equipe escalada ja confirmou presenca na base. Fale com o supervisor.';
     END IF;
   END IF;
   v_conflito := public._conflito_comandante(v_vigilante, p_escolta_id);
@@ -365,6 +378,7 @@ BEGIN
   IF e.id IS NULL THEN RAISE EXCEPTION 'Escolta nao encontrada.'; END IF;
   IF e.status <> 'agendada' THEN RAISE EXCEPTION 'Esta escolta nao esta mais disponivel: ela ja saiu do mural.'; END IF;
   IF e.escala_fixa THEN RAISE EXCEPTION 'Escolta de escala fixa: a equipe e definida pela supervisao.'; END IF;
+  PERFORM public._travar_vigilante(v_vigilante);
   SELECT count(*) INTO v_ja FROM public.escolta_efetivo WHERE escolta_id = p_escolta_id;
   IF v_ja > 0 THEN RAISE EXCEPTION 'Esta escolta ja tem equipe designada.'; END IF;
   v_conflito := public._conflito_comandante(v_vigilante, p_escolta_id);
@@ -404,6 +418,11 @@ BEGIN
   DELETE FROM public.escolta_efetivo WHERE escolta_id = p_escolta_id;
   DELETE FROM public.mural_presencas WHERE escolta_id = p_escolta_id;
   PERFORM public._auditar_mural('devolveu_escolta_ao_mural', p_escolta_id, jsonb_build_object('equipe', v_equipe), '{"equipe": []}'::jsonb);
+  -- Quem saiu junto (acompanhantes) fica sabendo pelo aplicativo.
+  PERFORM public._avisar_app(p_escolta_id, 'substituicao_equipe',
+    ARRAY(SELECT u FROM unnest(public._usuarios_dos_vigilantes(public._ids_da_equipe(v_equipe))) u WHERE u IS DISTINCT FROM public.get_meu_usuario_id()),
+    'Escolta devolvida ao mural', 'A escolta ' || (SELECT codigo_escolta FROM public.escoltas WHERE id = p_escolta_id)
+      || ' foi devolvida ao mural em ' || public._hora_br(now()) || '. Você não está mais escalado nela.', NULL);
   RETURN jsonb_build_object('ok', true);
 END;
 $$;
@@ -608,7 +627,11 @@ BEGIN
            -- O operador não lê o efetivo dos colegas pela RLS; sem isto a tela via toda
            -- escolta agendada como "sem equipe".
            'tem_equipe', EXISTS (SELECT 1 FROM public.escolta_efetivo ee WHERE ee.escolta_id = e.id),
-           'presenca', public._presenca_da_equipe(e.id),
+           -- Nomes só para a gestão e para a própria equipe (a RLS de mural_presencas é assim).
+           'presenca', CASE WHEN public._presenca_da_equipe(e.id) IS NULL THEN NULL
+                            WHEN v_perfil IN ('administrador', 'gestor', 'supervisor', 'central')
+                              OR EXISTS (SELECT 1 FROM public.escolta_efetivo ee WHERE ee.escolta_id = e.id AND ee.vigilante_id = v_vigilante)
+                            THEN public._presenca_da_equipe(e.id) ELSE 'sim' END,
            'eu_confirmei', EXISTS (SELECT 1 FROM public.mural_presencas mp WHERE mp.escolta_id = e.id AND mp.vigilante_id = v_vigilante),
            'sou_da_equipe', EXISTS (SELECT 1 FROM public.escolta_efetivo ee WHERE ee.escolta_id = e.id AND ee.vigilante_id = v_vigilante),
            'pedido', (SELECT jsonb_build_object('id', p.id, 'expira_em', p.expira_em, 'meu', p.solicitante_usuario_id = v_usuario)

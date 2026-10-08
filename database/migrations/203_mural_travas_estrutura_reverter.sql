@@ -17,6 +17,8 @@ END $$;
 DROP TABLE IF EXISTS public.mural_pedidos;
 DROP TABLE IF EXISTS public.mural_presencas;
 DROP TABLE IF EXISTS public.configuracoes_mural;
+DROP TRIGGER IF EXISTS tr_proteger_escala_fixa ON public.escoltas;
+DROP FUNCTION IF EXISTS public.proteger_escala_fixa();
 ALTER TABLE public.escoltas DROP COLUMN IF EXISTS escala_fixa;
 DELETE FROM public.notificacoes WHERE tipo_evento_id IN
   (SELECT id FROM public.dom_tipos_evento WHERE codigo IN ('pedido_substituicao', 'decisao_substituicao', 'substituicao_equipe'));

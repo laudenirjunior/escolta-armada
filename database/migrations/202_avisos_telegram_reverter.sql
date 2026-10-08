@@ -1,8 +1,12 @@
 -- 202_avisos_telegram_reverter.sql
--- Desagenda o cron, remove fila, configuração e funções. Remove pg_net e pg_cron só se a
--- 202 os criou (registro em backup_20261008.extensoes_antes_202).
+-- ORDEM: reverter antes a 204 (as RPCs do mural chamam a fila) e o código das ondas C e F.
+-- Este arquivo aborta se a 204 ainda estiver aplicada. Desagenda só os jobs do lote e não
+-- remove pg_cron nem pg_net (removê-las apagaria qualquer outro agendamento do projeto).
 DO $$
 BEGIN
+  IF to_regprocedure('public.mural_travas_ativas()') IS NOT NULL THEN
+    RAISE EXCEPTION 'Reverta a 204 antes da 202: as RPCs do mural usam a fila de avisos.';
+  END IF;
   IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
     PERFORM cron.unschedule(jobid) FROM cron.job WHERE jobname = 'lote2026_avisos_telegram';
   END IF;
@@ -14,12 +18,4 @@ DROP FUNCTION IF EXISTS public.avisos_pelo_banco_ativos();
 DROP FUNCTION IF EXISTS public.escapar_html(text);
 DROP TABLE IF EXISTS public.avisos_telegram;
 DROP TABLE IF EXISTS public.configuracao_avisos;
-DO $$
-DECLARE r record;
-BEGIN
-  IF to_regclass('backup_20261008.extensoes_antes_202') IS NULL THEN RETURN; END IF;
-  FOR r IN SELECT nome FROM backup_20261008.extensoes_antes_202 WHERE NOT existia LOOP
-    EXECUTE format('DROP EXTENSION IF EXISTS %I CASCADE', r.nome);
-  END LOOP;
-  DROP TABLE backup_20261008.extensoes_antes_202;
-END $$;
+DROP TABLE IF EXISTS backup_20261008.extensoes_antes_202;
