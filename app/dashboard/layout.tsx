@@ -7,7 +7,7 @@ import {
   LayoutDashboard, Shield, Radio, Map, Database,
   Crosshair, ClipboardList, BarChart2, FileText,
   Users, Settings, AlertTriangle, Bell, Send,
- Repeat } from 'lucide-react'
+ Repeat, MapPin } from 'lucide-react'
 import { Sidebar, MobileDrawer, SidebarContent, SidebarSection, SidebarItem, SidebarFooter } from '@/components/layout/sidebar'
 import { TopBar } from '@/components/layout/topbar'
 import { TelegramNotificacoesProvider } from '@/components/telegram-notificacoes-provider'
@@ -62,6 +62,8 @@ const NAV: { section: string; items: NavItem[] }[] = [
     items: [
       { label: 'Usuários',      href: '/dashboard/usuarios',           icon: <Users size={16} />,       perfis: ['administrador','gestor','supervisor'] as Perfil[] },
       { label: 'Telegram',      href: '/dashboard/sistema/telegram',   icon: <Send size={16} />,        perfis: ['administrador','gestor'] as Perfil[] },
+      // Lote 2026-10 (M2): atalhos de endereço; supervisor ou acima cadastra, gestor e administrador ativam.
+      { label: 'Locais Salvos', href: '/dashboard/configuracoes/locais', icon: <MapPin size={16} />,   perfis: ['administrador','gestor','supervisor'] as Perfil[] },
       { label: 'Configurações', href: '/dashboard/configuracoes',      icon: <Settings size={16} />,    perfis: ['administrador'] as Perfil[] },
       { label: 'Auditoria',     href: '/dashboard/auditoria',          icon: <AlertTriangle size={16} />, perfis: ['administrador'] as Perfil[] },
     ],
