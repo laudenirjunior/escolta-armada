@@ -178,7 +178,7 @@ Bloco **Identificação da Missão**. Aqui entram **Cliente Contratante**, **Dat
 
 Para cada viatura, escolhe-se o **Veículo Operacional** e o **efetivo** (com o papel de comandante ou operador). Dá para adicionar mais de uma viatura. **O vigilante é opcional:** se ficar sem ninguém escalado, a escolta vai para o mural, de onde um Operador a puxa (ver B2).
 
-Cada vigilante entra **uma vez só** na escolta, em qualquer viatura: quem já foi escolhido some da lista das outras linhas. A mesma placa também não pode estar em duas viaturas da mesma escolta; o passo 2 avisa e não deixa avançar. Se o vigilante escolhido não tiver acesso ao aplicativo (cadastro sem conta de usuário), aparece logo abaixo dele: "Este vigilante não tem acesso ao aplicativo e não verá a escolta". O cadastro continua permitido, mas ele não recebe a escolta no celular.
+Cada vigilante entra **uma vez só** na escolta, em qualquer viatura: quem já foi escolhido some da lista das outras linhas. A mesma placa também não pode estar em duas viaturas da mesma escolta; o passo 2 avisa e não deixa avançar. Se o vigilante escolhido não tiver acesso ao aplicativo (cadastro sem conta de usuário), aparece logo abaixo dele: "Este vigilante não tem acesso ao aplicativo e não verá a escolta". O cadastro continua permitido, mas ele não recebe a escolta no celular. O mesmo vale para vigilante com conta **inativa**, **bloqueada** ou **pendente**: o aviso diz o estado da conta.
 
 `[PRINT P12]`
 
@@ -302,6 +302,7 @@ Em **Escoltas**, o Operador tem um alternador de três modos: **Minhas Escoltas*
 A tela abre em **Minhas Escoltas** sempre que o Operador tem escolta ativa. Só abre direto no mural quem não tem nenhuma escolta e há escolta livre para puxar. Na aba Disponíveis, quem tem escolta vê o aviso "Você tem N escolta(s) em Minhas Escoltas", que leva de volta à aba dele. A escolta de outra dupla nunca aparece como livre: quem tem equipe é informado pelo servidor.
 
 - Escolta **sem equipe:** botão **Puxar**. O Operador vira o comandante e escolhe quem vai junto. Não dá para ser comandante de duas escoltas agendadas com menos de 6 horas entre elas.
+- **Outra viatura:** ao puxar ou pedir, "Vamos usar outra viatura" troca a primeira viatura da escolta. A lista não oferece a placa que já está em outra viatura da mesma escolta, e o sistema recusa essa troca com mensagem. Se a placa escolhida num pedido passar a estar em outra viatura antes da decisão, o pedido é invalidado com o motivo, sem travar os pedidos das outras escoltas.
 - Escolta **já escalada:** badge "já escalada". Antes da janela aparece "Substituição a partir das HH:MM"; dentro dela, o botão **Pedir**.
 - Escolta de **escala fixa** não aparece no mural: a equipe é definida pela supervisão.
 
