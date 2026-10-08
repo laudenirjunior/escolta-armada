@@ -27,6 +27,7 @@ import {
 } from '@/lib/checkin'
 import { CONFIRMACAO_POR_DESTINO, proximaAcao, type AcaoDetalhe } from '@/lib/proximo-passo-operador'
 import { PainelGuiado, type Confirmacao, type PainelAberto, type Pendencia } from '@/components/campo-guiado/painel-guiado'
+import { urlAssinada } from '@/lib/fotos-url'
 
 const supabase = createClient()
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1198,8 +1199,8 @@ export default function CampoPage() {
       if (fotoId) {
         const { data: fotoData } = await sb.from('fotos').select('caminho_arquivo').eq('id', fotoId).maybeSingle()
         if (fotoData?.caminho_arquivo) {
-          const { data: pub } = sb.storage.from('fotos').getPublicUrl(fotoData.caminho_arquivo)
-          fotoTgUrl = pub?.publicUrl ?? null
+          // Lote 2026-10: URL assinada; o Telegram baixa a foto na hora do envio.
+          fotoTgUrl = await urlAssinada(sb, fotoData.caminho_arquivo)
         }
       }
 
@@ -1387,8 +1388,7 @@ export default function CampoPage() {
       if (fotoId) {
         const { data: fRow } = await sb.from('fotos').select('caminho_arquivo').eq('id', fotoId).maybeSingle()
         if (fRow?.caminho_arquivo) {
-          const { data: pub } = sb.storage.from('fotos').getPublicUrl(fRow.caminho_arquivo)
-          fotoTgUrl = pub?.publicUrl ?? null
+          fotoTgUrl = await urlAssinada(sb, fRow.caminho_arquivo)
         }
       }
       const { data: viatRowsOc } = await sb
@@ -1500,7 +1500,7 @@ export default function CampoPage() {
       let fotoTgUrl: string | null = null
       const { data: fotoRow } = await sb.from('fotos').select('caminho_arquivo').eq('id', fotoIds[0]).maybeSingle()
       if (fotoRow?.caminho_arquivo) {
-        fotoTgUrl = sb.storage.from('fotos').getPublicUrl(fotoRow.caminho_arquivo)?.data?.publicUrl ?? null
+        fotoTgUrl = await urlAssinada(sb, fotoRow.caminho_arquivo)
       }
       fetch('/api/telegram', {
         method: 'POST',

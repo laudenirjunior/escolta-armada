@@ -8,8 +8,12 @@ import {
   Car, Shield, UserCheck, AlertTriangle, DollarSign
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { periodicidadePadraoDoCliente } from '@/lib/checkin'
 import { useAuth } from '@/hooks/useAuth'
 import { AiTextButton } from '@/components/ui/ai-text-button'
+import { AtalhosLocais } from '@/components/endereco/atalhos-locais'
+import { ConferenciaCoordenada } from '@/components/endereco/conferencia-coordenada'
+import { LocalSalvo, carregarLocaisAtivos, PERFIS_CADASTRAM_LOCAL } from '@/lib/locais'
 
 // ─── Palette ──────────────────────────────────────────────────────────────────
 const P = {
@@ -28,7 +32,7 @@ const P = {
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-interface ClienteOpt    { id: string; nome_cliente: string; cor_destaque: string; valor_padrao_escolta: number | null }
+interface ClienteOpt    { id: string; nome_cliente: string; cor_destaque: string; valor_padrao_escolta: number | null; metadados: Record<string, unknown> | null }
 interface VeiculoOpt    { id: string; placa: string; modelo: string | null; tipo: { nome: string } | null }
 interface VigilanteOpt  { id: string; nome_completo: string; funcao: { nome: string } | null; valor_padrao_pago: number | null }
 
@@ -119,6 +123,27 @@ interface MapboxFeature {
   id: string
   place_name: string
   center: [number, number]
+  // Lote 2026-10 (M1): para mostrar bairro e município e avisar sugestão sem número.
+  place_type?: string[]
+  address?: string
+  text?: string
+  context?: { id: string; text: string }[]
+}
+
+/** Sugestão que não é um endereço com número: a coordenada pode cair longe do portão. */
+function semNumero(f: MapboxFeature): boolean {
+  return !(f.place_type ?? []).includes('address') || !f.address
+}
+
+/** Bairro e município da sugestão, a partir do contexto da Mapbox v5. */
+function bairroMunicipio(f: MapboxFeature): { bairro: string | null; municipio: string | null } {
+  const ctx = f.context ?? []
+  const achar = (prefixos: string[]) => ctx.find(c => prefixos.some(p => c.id.startsWith(p + '.')))?.text ?? null
+  const proprio = (tipo: string) => (f.place_type ?? []).includes(tipo) ? (f.text ?? null) : null
+  return {
+    bairro: proprio('neighborhood') ?? achar(['neighborhood', 'locality']),
+    municipio: proprio('place') ?? achar(['place']),
+  }
 }
 
 function AddressAutocomplete({
@@ -128,7 +153,7 @@ function AddressAutocomplete({
   icon,
 }: {
   value: string
-  onChange: (address: string, lat?: number, lon?: number) => void
+  onChange: (address: string, lat?: number, lon?: number, meta?: { semNumero: boolean }) => void
   placeholder: string
   icon?: React.ReactNode
 }) {
@@ -167,7 +192,14 @@ function AddressAutocomplete({
     )
   }, [])
 
-  useEffect(() => { setQuery(value) }, [value])
+  // Valor trocado por fora (atalho de local salvo, carga da edição) não dispara a busca:
+  // o atalho preenche sem chamar a Mapbox (lote 2026-10, M2).
+  useEffect(() => {
+    setQuery(q => {
+      if (q !== value) puloRef.current = true
+      return value
+    })
+  }, [value])
 
   useEffect(() => {
     if (puloRef.current) { puloRef.current = false; return }
@@ -241,7 +273,7 @@ function AddressAutocomplete({
     puloRef.current = true
     const [lon, lat] = f.center
     setQuery(f.place_name)
-    onChange(f.place_name, lat, lon)
+    onChange(f.place_name, lat, lon, { semNumero: semNumero(f) })
     setSuggestions([])
     setAberto(false)
     setErroApi(null)
@@ -306,7 +338,18 @@ function AddressAutocomplete({
                 onMouseLeave={e => (e.currentTarget as HTMLElement).style.backgroundColor = ''}
               >
                 <p style={{ fontSize: '12px', fontWeight: 600, color: P.text }}>{principal}</p>
+                {(() => {
+                  const { bairro, municipio } = bairroMunicipio(f)
+                  return (bairro || municipio) ? (
+                    <p style={{ fontSize: '11px', fontWeight: 700, color: P.steel, marginTop: '2px' }}>
+                      {[bairro, municipio].filter(Boolean).join(' · ')}
+                    </p>
+                  ) : null
+                })()}
                 {secundario && <p style={{ fontSize: '10px', color: P.light, marginTop: '2px' }}>{secundario}</p>}
+                {semNumero(f) && (
+                  <p style={{ fontSize: '10px', fontWeight: 700, color: '#8A5A10', marginTop: '2px' }}>Sem número: confira no mapa</p>
+                )}
               </button>
             )
           })}
@@ -375,12 +418,31 @@ function FormularioEscolta() {
   const [valorCobrado, setValorCobrado] = useState('')
   const [outrosCustos, setOutrosCustos] = useState('')
   const [obsFinanceiro, setObsFinanceiro] = useState('')
-  const [periodicidadeCheckin, setPeriodicidadeCheckin] = useState('30')
+  // Lote 2026-10 (M4): sem check-in obrigatório por padrão.
+  const [periodicidadeCheckin, setPeriodicidadeCheckin] = useState('')
   const verFinanceiro = PERFIS_FINANCEIRO.includes((user?.perfil?.codigo ?? '') as any)
+  // Lote 2026-10 (T6): escala fixa só por supervisor ou acima; a trigger do banco barra o operador.
+  const podeEscalaFixa = PERFIS_FINANCEIRO.includes((user?.perfil?.codigo ?? '') as any)
+  const [escalaFixa, setEscalaFixa] = useState(false)
+  // Lote 2026-10 (M2 e M1): atalhos e conferência da coordenada no mapa antes de salvar.
+  const [locais, setLocais] = useState<LocalSalvo[]>([])
+  const confVazia = { conferida: false, semNumero: false, viaLocal: null as string | null, localId: null as string | null }
+  const [confOrigem, setConfOrigem] = useState(confVazia)
+  const [confDestino, setConfDestino] = useState(confVazia)
+  const podeSalvarLocal = PERFIS_CADASTRAM_LOCAL.includes((user?.perfil?.codigo ?? '') as string)
+  useEffect(() => { carregarLocaisAtivos(sb).then(setLocais) }, [])
+  const salvarComoLocal = async (nome: string, endereco: string, complemento: string, lat: number, lng: number): Promise<string | null> => {
+    const { data, error } = await sb.from('locais_salvos').insert({
+      nome, endereco, complemento: complemento || null, latitude: lat, longitude: lng,
+      situacao: 'aguardando_conferencia', fonte_coordenada: 'Busca da Mapbox no formulário de escolta, ajustada no pino',
+    }).select('id')
+    if (error || !data?.length) return `Não foi possível salvar: ${error?.message ?? 'sem permissão'}`
+    return `Local "${nome}" salvo, aguardando conferência por gestor ou administrador em Configurações, Locais salvos.`
+  }
 
   const carregar = useCallback(async () => {
     const [{ data: cls }, { data: vcs }, { data: vgs }] = await Promise.all([
-      sb.from('clientes').select('id, nome_cliente, cor_destaque, valor_padrao_escolta').eq('status', 'ativo').order('nome_cliente'),
+      sb.from('clientes').select('id, nome_cliente, cor_destaque, valor_padrao_escolta, metadados').eq('status', 'ativo').order('nome_cliente'),
       sb.from('veiculos').select('id, placa, modelo, tipo:dom_tipos_veiculo(nome)').eq('status', 'ativo').order('placa'),
       sb.from('vigilantes').select('id, nome_completo, funcao:dom_funcoes(nome), valor_padrao_pago').eq('status', 'ativo').order('nome_completo'),
     ])
@@ -409,7 +471,7 @@ function FormularioEscolta() {
           id, cliente_id, status, data_hora_prevista, metadados,
           origem_endereco, origem_lat, origem_lng,
           destino_endereco, destino_lat, destino_lng,
-          periodicidade_checkin_min, valor_cobrado, outros_custos, observacao_financeira,
+          periodicidade_checkin_min, valor_cobrado, outros_custos, observacao_financeira, escala_fixa,
           veiculos:escolta_veiculos(
             id, veiculo_id,
             efetivo:escolta_efetivo(id, vigilante_id, papel_na_escolta, valor_pago_vigilante)
@@ -472,7 +534,12 @@ function FormularioEscolta() {
           }))
         : [novaViatura()])
 
-      setPeriodicidadeCheckin(e.periodicidade_checkin_min != null ? String(e.periodicidade_checkin_min) : '30')
+      setEscalaFixa(Boolean(e.escala_fixa))
+      // Coordenadas já gravadas valem como conferidas; mudar o endereço exige nova conferência.
+      setConfOrigem({ conferida: true, semNumero: false, viaLocal: null, localId: null })
+      setConfDestino({ conferida: true, semNumero: false, viaLocal: null, localId: null })
+      // Editar não religa o check-in: nulo continua nulo.
+      setPeriodicidadeCheckin(e.periodicidade_checkin_min != null ? String(e.periodicidade_checkin_min) : '')
       setValorCobrado(e.valor_cobrado != null ? String(e.valor_cobrado) : '')
       setOutrosCustos(e.outros_custos != null ? String(e.outros_custos) : '')
       setObsFinanceiro(e.observacao_financeira ?? '')
@@ -493,10 +560,14 @@ function FormularioEscolta() {
     if (!dados.origem_endereco.trim())  e.push('Informe o endereço de origem.')
     // Coordenada zerada cai no golfo da Guiné e envenena mapa, rota e indicadores.
     else if (!dados.origem_lat || !dados.origem_lng)
-      e.push('Origem sem coordenada. Selecione o endereço na lista de sugestões para fixar as coordenadas.')
+      e.push('Origem sem coordenada. Escolha um atalho ou selecione o endereço na lista de sugestões.')
+    else if (!confOrigem.conferida)
+      e.push('Confira a origem no mapa e marque "Conferido no mapa".')
     if (!dados.destino_endereco.trim()) e.push('Informe o endereço de destino.')
     else if (!dados.destino_lat || !dados.destino_lng)
-      e.push('Destino sem coordenada. Selecione o endereço na lista de sugestões para fixar as coordenadas.')
+      e.push('Destino sem coordenada. Escolha um atalho ou selecione o endereço na lista de sugestões.')
+    else if (!confDestino.conferida)
+      e.push('Confira o destino no mapa e marque "Conferido no mapa".')
     return e
   }
 
@@ -564,12 +635,21 @@ function FormularioEscolta() {
         destino_lng:         dados.destino_lng,
         metadados:           Object.keys(meta).length ? meta : null,
         periodicidade_checkin_min: periodicidadeCheckin ? Number(periodicidadeCheckin) : null,
-        valor_cobrado:       verFinanceiro && valorCobrado ? parseFloat(valorCobrado) : null,
-        outros_custos:       verFinanceiro && outrosCustos ? parseFloat(outrosCustos) : 0,
-        observacao_financeira: verFinanceiro && obsFinanceiro.trim() ? obsFinanceiro.trim() : null,
+        // Lote 2026-10 (H18): quem não vê a seção financeira não grava nada nela. Antes a
+        // edição pela central gravava nulo e zero por cima do financeiro da escolta.
+        ...(verFinanceiro ? {
+          valor_cobrado:       valorCobrado ? parseFloat(valorCobrado) : null,
+          outros_custos:       outrosCustos ? parseFloat(outrosCustos) : 0,
+          observacao_financeira: obsFinanceiro.trim() ? obsFinanceiro.trim() : null,
+        } : {}),
+        ...(podeEscalaFixa ? { escala_fixa: escalaFixa } : {}),
       }
 
       let escoltaId: string
+      // Lote 2026-10 (M3): a edição recria as viaturas; o combustível lançado e o valor
+      // pago aos vigilantes são guardados antes e devolvidos às que continuam.
+      const combustivelAntes = new Map<string, { litros: number | null; valor: number | null }>()
+      const valorPagoAntes = new Map<string, number | null>()
 
       if (editandoId) {
         // A precondicao de status vive junto do update: se a escolta tiver comecado
@@ -591,6 +671,15 @@ function FormularioEscolta() {
         // casar o que ficou, o que saiu e o que entrou, e o ganho nao paga o risco de
         // deixar vinculo orfao. Como a escolta ainda nao comecou, nao ha ponto de
         // controle nem foto apontando para essas linhas.
+        const { data: viatsAntes } = await sb.from('escolta_veiculos')
+          .select('veiculo_id, abastecimento_litros, abastecimento_valor, efetivo:escolta_efetivo(vigilante_id, valor_pago_vigilante)')
+          .eq('escolta_id', editandoId)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const va of (viatsAntes ?? []) as any[]) {
+          if (va.abastecimento_litros != null || va.abastecimento_valor != null)
+            combustivelAntes.set(va.veiculo_id, { litros: va.abastecimento_litros, valor: va.abastecimento_valor })
+          for (const ef of va.efetivo ?? []) valorPagoAntes.set(ef.vigilante_id, ef.valor_pago_vigilante)
+        }
         await sb.from('escolta_efetivo').delete().eq('escolta_id', editandoId)
         const { error: eDel } = await sb.from('escolta_veiculos').delete().eq('escolta_id', editandoId)
         if (eDel) throw new Error('Não foi possível atualizar as viaturas: ' + eDel.message)
@@ -616,6 +705,10 @@ function FormularioEscolta() {
           .insert({
             escolta_id: escoltaId,
             veiculo_id: v.veiculo_id,
+            ...(combustivelAntes.has(v.veiculo_id) ? {
+              abastecimento_litros: combustivelAntes.get(v.veiculo_id)!.litros,
+              abastecimento_valor: combustivelAntes.get(v.veiculo_id)!.valor,
+            } : {}),
           })
           .select('id').single()
 
@@ -628,7 +721,9 @@ function FormularioEscolta() {
             vigilante_id:       m.vigilante_id,
             papel_na_escolta:   m.papel_na_escolta,
             confirmado:         false,
-            valor_pago_vigilante: verFinanceiro && m.valor_pago ? parseFloat(m.valor_pago) : null,
+            valor_pago_vigilante: verFinanceiro
+              ? (m.valor_pago ? parseFloat(m.valor_pago) : null)
+              : (valorPagoAntes.get(m.vigilante_id) ?? null),
           })
           // Antes o erro era engolido: a escolta nascia com viatura e sem equipe, e
           // ninguem ficava sabendo ate a hora de sair da base.
@@ -794,6 +889,8 @@ function FormularioEscolta() {
                   onChange={e => {
                     const cid = e.target.value
                     setDados(d => ({ ...d, cliente_id: cid }))
+                    const padraoCheckin = periodicidadePadraoDoCliente(clientes.find(c => c.id === cid)?.metadados)
+                    setPeriodicidadeCheckin(padraoCheckin ? String(padraoCheckin) : '')
                     if (verFinanceiro) {
                       const cli = clientes.find(c => c.id === cid)
                       if (cli?.valor_padrao_escolta != null) setValorCobrado(cli.valor_padrao_escolta.toString())
@@ -856,19 +953,28 @@ function FormularioEscolta() {
             {/* Origem */}
             <div>
               <FieldLabel required>Endereço de Origem</FieldLabel>
+              <AtalhosLocais locais={locais} selecionadoId={confOrigem.localId} onEscolher={(l) => {
+                setDados(d => ({ ...d, origem_endereco: l.endereco, origem_complemento: l.complemento ?? d.origem_complemento, origem_lat: l.latitude ?? 0, origem_lng: l.longitude ?? 0 }))
+                setConfOrigem({ conferida: true, semNumero: false, viaLocal: l.nome, localId: l.id })
+              }} />
               <AddressAutocomplete
                 value={dados.origem_endereco}
-                onChange={(addr, lat, lon) => setDados(d => ({
+                onChange={(addr, lat, lon, meta) => { setConfOrigem({ conferida: false, semNumero: Boolean(meta?.semNumero), viaLocal: null, localId: null }); setDados(d => ({
                   ...d,
                   origem_endereco: addr,
                   // Digitar depois de escolher invalida a coordenada: sem isto a escolta
                   // nasceria com o endereço de um lugar e a coordenada de outro.
                   origem_lat: lat ?? 0,
                   origem_lng: lon ?? 0,
-                }))}
+                })) }}
                 placeholder="Rua, número, bairro, cidade..."
                 icon={<MapPin size={15} />}
               />
+              <ConferenciaCoordenada lat={dados.origem_lat || null} lng={dados.origem_lng || null}
+                conferida={confOrigem.conferida} semNumero={confOrigem.semNumero} viaLocal={confOrigem.viaLocal} podeSalvarLocal={podeSalvarLocal}
+                onMover={(lat, lng) => setDados(d => ({ ...d, origem_lat: lat, origem_lng: lng }))}
+                onConferir={(v) => setConfOrigem(c => ({ ...c, conferida: v }))}
+                onSalvarLocal={(nome) => salvarComoLocal(nome, dados.origem_endereco, dados.origem_complemento, dados.origem_lat, dados.origem_lng)} />
             </div>
 
             {/* Complemento da origem: campo separado de propósito, para que digitar aqui
@@ -894,18 +1000,27 @@ function FormularioEscolta() {
             {/* Destino */}
             <div>
               <FieldLabel required>Endereço de Destino</FieldLabel>
+              <AtalhosLocais locais={locais} selecionadoId={confDestino.localId} onEscolher={(l) => {
+                setDados(d => ({ ...d, destino_endereco: l.endereco, destino_complemento: l.complemento ?? d.destino_complemento, destino_lat: l.latitude ?? 0, destino_lng: l.longitude ?? 0 }))
+                setConfDestino({ conferida: true, semNumero: false, viaLocal: l.nome, localId: l.id })
+              }} />
               <AddressAutocomplete
                 value={dados.destino_endereco}
-                onChange={(addr, lat, lon) => setDados(d => ({
+                onChange={(addr, lat, lon, meta) => { setConfDestino({ conferida: false, semNumero: Boolean(meta?.semNumero), viaLocal: null, localId: null }); setDados(d => ({
                   ...d,
                   destino_endereco: addr,
                   // Mesma regra da origem: texto editado à mão perde a coordenada antiga.
                   destino_lat: lat ?? 0,
                   destino_lng: lon ?? 0,
-                }))}
+                })) }}
                 placeholder="Rua, número, bairro, cidade..."
                 icon={<Flag size={15} />}
               />
+              <ConferenciaCoordenada lat={dados.destino_lat || null} lng={dados.destino_lng || null}
+                conferida={confDestino.conferida} semNumero={confDestino.semNumero} viaLocal={confDestino.viaLocal} podeSalvarLocal={podeSalvarLocal}
+                onMover={(lat, lng) => setDados(d => ({ ...d, destino_lat: lat, destino_lng: lng }))}
+                onConferir={(v) => setConfDestino(c => ({ ...c, conferida: v }))}
+                onSalvarLocal={(nome) => salvarComoLocal(nome, dados.destino_endereco, dados.destino_complemento, dados.destino_lat, dados.destino_lng)} />
             </div>
 
             {/* Complemento do destino: mesma regra da origem. */}
@@ -948,7 +1063,8 @@ function FormularioEscolta() {
               </div>
             </div>
 
-            {/* Periodicidade de check-in */}
+            {/* Periodicidade de check-in: escondida, salvo escolta que já tem ou cliente religado */}
+            {(periodicidadeCheckin !== '' || periodicidadePadraoDoCliente(clientes.find(c => c.id === dados.cliente_id)?.metadados) != null) && (
             <div>
               <FieldLabel>Periodicidade de Check-in em Rota</FieldLabel>
               <FieldWrap icon={<Radio size={13} />}>
@@ -958,7 +1074,8 @@ function FormularioEscolta() {
                   className={inputCls} style={inputStyle}
                 >
                   <option value="">Sem check-in obrigatório</option>
-                  {[10,15,20,30,45,60,90,120].map(m => (
+                  {Array.from(new Set([10, 15, 20, 30, 45, 60, 90, 120, ...(periodicidadeCheckin ? [Number(periodicidadeCheckin)] : [])]))
+                    .sort((a, b) => a - b).map(m => (
                     <option key={m} value={String(m)}>A cada {m} minutos</option>
                   ))}
                 </select>
@@ -967,6 +1084,20 @@ function FormularioEscolta() {
                 Define com que frequência o operador deve confirmar a posição da escolta. Gera alerta no painel e no Telegram quando o prazo vence.
               </p>
             </div>
+            )}
+
+            {/* Escala fixa (T6), supervisor+ */}
+            {podeEscalaFixa && (
+              <label className="flex items-start gap-3 p-3" style={{ border: `1.5px solid ${P.border}`, borderRadius: '4px' }}>
+                <input type="checkbox" checked={escalaFixa} onChange={e => setEscalaFixa(e.target.checked)} className="mt-1" />
+                <span>
+                  <span className="block text-sm font-bold" style={{ color: P.text }}>Escala fixa</span>
+                  <span className="block" style={{ fontSize: '11px', color: P.sub }}>
+                    A escolta não aparece no mural para os operadores e a equipe só muda pela supervisão.
+                  </span>
+                </span>
+              </label>
+            )}
 
             {/* Seção Financeira — supervisor+ */}
             {verFinanceiro && (

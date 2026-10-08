@@ -45,3 +45,11 @@ Cada decisão com a alternativa que foi descartada e o custo assumido.
 ## Gráficos
 
 **Sem biblioteca de gráficos, se e quando forem feitos.** Os gráficos precisam sair no PDF impresso, e canvas não imprime bem. SVG próprio, com `d3-scale` e `d3-shape` apenas para escalas e geometria.
+
+## Geolocalização (lote 2026-10, M1 e M2)
+
+**Locais salvos com pino conferido, não troca de API.** A medida de 08/10/2026 mostrou que, na JAMEF, a busca da Mapbox (Geocoding v5) devolve uma coordenada a 1.327 m do lugar onde o GPS dos operadores registra a chegada (5 pontos com precisão de até 15 m, dispersos em 16 m). O erro é da coordenada da busca, não do GPS. A troca para Geocoding v6 ou Search Box não pôde ser medida (sem token da Mapbox na VPS), e a decisão 7 de Peçanha manda trocar só com ganho medido; a API ficou como está. A correção veio de dois lados: local salvo com coordenada conferida por gestor ou administrador, e mapa com pino arrastável que obriga a conferir a coordenada de qualquer endereço vindo da busca.
+
+**Rótulo do ponto separado da coordenada.** O endereço por extenso de um ponto vem da geocodificação reversa e pode trazer o município vizinho perto da divisa. Ele passou a ser só rótulo: perto de um local salvo (100 m), aparece o local; senão, o texto com a marca "aproximado" e a precisão do GPS.
+
+**Custo assumido:** um passo a mais no formulário (conferir no mapa) para endereço que não seja atalho.
