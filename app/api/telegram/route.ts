@@ -90,7 +90,10 @@ export async function POST(req: NextRequest) {
     // O chat_id vinha do cliente: qualquer um usava o bot para mandar mensagem
     // a qualquer destino. Agora e resolvido no servidor a partir da escolta.
     let destChatId: string | undefined
-    if (escolta_id) {
+    // Lote 2026-10: avisos do mural vão ao chat central, não ao grupo do cliente, mesmo
+    // trazendo escolta_id (usado só no link). Decidido aqui, no servidor.
+    const paraCentral = body.destino === 'central'
+    if (escolta_id && !paraCentral) {
       const sb = createClient()
       const { data } = await sb
         .from('escoltas')
@@ -101,7 +104,7 @@ export async function POST(req: NextRequest) {
       destChatId = cli?.telegram_chat_id ?? undefined
     }
     // Um chat_id explicito so e aceito de quem administra as integracoes.
-    if (!destChatId && chat_id && ['administrador', 'gestor'].includes(auth.sessao.perfil)) {
+    if (!destChatId && !paraCentral && chat_id && ['administrador', 'gestor'].includes(auth.sessao.perfil)) {
       destChatId = chat_id
     }
     destChatId = destChatId ?? process.env.TELEGRAM_CHAT_ID
