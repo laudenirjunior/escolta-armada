@@ -44,6 +44,7 @@ import {
 import { serializarObservacao, lerObservacao, fotoIdsDoPonto } from '@/lib/pontos-controle'
 import { urlsAssinadas, urlDoMapa, urlAssinada } from '@/lib/fotos-url'
 import { carregarLocaisAtivos } from '@/lib/locais'
+import { CombustivelViaturas } from '@/components/escolta/combustivel-viaturas'
 import { rotuloDoPonto } from '@/lib/rotulo-ponto'
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
@@ -4111,13 +4112,14 @@ export default function EscoltaDetalhePage() {
                     {v.quilometragem_retorno != null ? `${v.quilometragem_retorno.toLocaleString('pt-BR')} km` : '—'}
                   </p>
                 </div>
-                {v.abastecimento_litros != null && (
+                {/* Lote 2026-10 (M3): combustível é dado financeiro; só quem vê o Financeiro. */}
+                {verFinanceiroDet && v.abastecimento_litros != null && (
                   <div>
                     <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#A8B8C2' }}>Abastecimento</p>
                     <p className="text-sm font-medium mt-0.5" style={{ color: '#1E2D35' }}>{v.abastecimento_litros} L</p>
                   </div>
                 )}
-                {v.abastecimento_valor != null && (
+                {verFinanceiroDet && v.abastecimento_valor != null && (
                   <div>
                     <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#A8B8C2' }}>Combustível</p>
                     <p className="text-sm font-medium mt-0.5" style={{ color: '#1E2D35' }}>
@@ -4185,6 +4187,11 @@ export default function EscoltaDetalhePage() {
                 </div>
               ))}
             </div>
+
+            {/* Lote 2026-10 (M3): lançamento do combustível por viatura. */}
+            <CombustivelViaturas
+              viaturas={viaturas.map(v => ({ id: v.id, rotulo: rotuloViatura(v), litros: v.abastecimento_litros, valor: v.abastecimento_valor }))}
+              onSalvo={() => carregar()} />
 
             {/* Breakdown */}
             <div className="card-light overflow-hidden">

@@ -635,13 +635,21 @@ function FormularioEscolta() {
         destino_lng:         dados.destino_lng,
         metadados:           Object.keys(meta).length ? meta : null,
         periodicidade_checkin_min: periodicidadeCheckin ? Number(periodicidadeCheckin) : null,
-        valor_cobrado:       verFinanceiro && valorCobrado ? parseFloat(valorCobrado) : null,
-        outros_custos:       verFinanceiro && outrosCustos ? parseFloat(outrosCustos) : 0,
-        observacao_financeira: verFinanceiro && obsFinanceiro.trim() ? obsFinanceiro.trim() : null,
+        // Lote 2026-10 (H18): quem não vê a seção financeira não grava nada nela. Antes a
+        // edição pela central gravava nulo e zero por cima do financeiro da escolta.
+        ...(verFinanceiro ? {
+          valor_cobrado:       valorCobrado ? parseFloat(valorCobrado) : null,
+          outros_custos:       outrosCustos ? parseFloat(outrosCustos) : 0,
+          observacao_financeira: obsFinanceiro.trim() ? obsFinanceiro.trim() : null,
+        } : {}),
         ...(podeEscalaFixa ? { escala_fixa: escalaFixa } : {}),
       }
 
       let escoltaId: string
+      // Lote 2026-10 (M3): a edição recria as viaturas; o combustível lançado e o valor
+      // pago aos vigilantes são guardados antes e devolvidos às que continuam.
+      const combustivelAntes = new Map<string, { litros: number | null; valor: number | null }>()
+      const valorPagoAntes = new Map<string, number | null>()
 
       if (editandoId) {
         // A precondicao de status vive junto do update: se a escolta tiver comecado
@@ -663,6 +671,15 @@ function FormularioEscolta() {
         // casar o que ficou, o que saiu e o que entrou, e o ganho nao paga o risco de
         // deixar vinculo orfao. Como a escolta ainda nao comecou, nao ha ponto de
         // controle nem foto apontando para essas linhas.
+        const { data: viatsAntes } = await sb.from('escolta_veiculos')
+          .select('veiculo_id, abastecimento_litros, abastecimento_valor, efetivo:escolta_efetivo(vigilante_id, valor_pago_vigilante)')
+          .eq('escolta_id', editandoId)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const va of (viatsAntes ?? []) as any[]) {
+          if (va.abastecimento_litros != null || va.abastecimento_valor != null)
+            combustivelAntes.set(va.veiculo_id, { litros: va.abastecimento_litros, valor: va.abastecimento_valor })
+          for (const ef of va.efetivo ?? []) valorPagoAntes.set(ef.vigilante_id, ef.valor_pago_vigilante)
+        }
         await sb.from('escolta_efetivo').delete().eq('escolta_id', editandoId)
         const { error: eDel } = await sb.from('escolta_veiculos').delete().eq('escolta_id', editandoId)
         if (eDel) throw new Error('Não foi possível atualizar as viaturas: ' + eDel.message)
@@ -688,6 +705,10 @@ function FormularioEscolta() {
           .insert({
             escolta_id: escoltaId,
             veiculo_id: v.veiculo_id,
+            ...(combustivelAntes.has(v.veiculo_id) ? {
+              abastecimento_litros: combustivelAntes.get(v.veiculo_id)!.litros,
+              abastecimento_valor: combustivelAntes.get(v.veiculo_id)!.valor,
+            } : {}),
           })
           .select('id').single()
 
@@ -700,7 +721,9 @@ function FormularioEscolta() {
             vigilante_id:       m.vigilante_id,
             papel_na_escolta:   m.papel_na_escolta,
             confirmado:         false,
-            valor_pago_vigilante: verFinanceiro && m.valor_pago ? parseFloat(m.valor_pago) : null,
+            valor_pago_vigilante: verFinanceiro
+              ? (m.valor_pago ? parseFloat(m.valor_pago) : null)
+              : (valorPagoAntes.get(m.vigilante_id) ?? null),
           })
           // Antes o erro era engolido: a escolta nascia com viatura e sem equipe, e
           // ninguem ficava sabendo ate a hora de sair da base.
