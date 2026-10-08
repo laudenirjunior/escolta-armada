@@ -7,7 +7,7 @@ import {
   LayoutDashboard, Shield, Radio, Map, Database,
   Crosshair, ClipboardList, BarChart2, FileText,
   Users, Settings, AlertTriangle, Bell, Send,
-} from 'lucide-react'
+ Repeat } from 'lucide-react'
 import { Sidebar, MobileDrawer, SidebarContent, SidebarSection, SidebarItem, SidebarFooter } from '@/components/layout/sidebar'
 import { TopBar } from '@/components/layout/topbar'
 import { TelegramNotificacoesProvider } from '@/components/telegram-notificacoes-provider'
@@ -46,6 +46,8 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { label: 'Cadastros',   href: '/dashboard/cadastros',   icon: <Database size={16} />,     perfis: ['administrador','gestor','supervisor','central'] as Perfil[] },
       { label: 'Armamentos',  href: '/dashboard/armamentos',  icon: <Crosshair size={16} />,    perfis: ['administrador','gestor','supervisor','central'] as Perfil[] },
       { label: 'Checklists',  href: '/dashboard/checklists',  icon: <ClipboardList size={16} />, perfis: ['administrador','gestor','supervisor','central'] as Perfil[] },
+      // Lote 2026-10 (M5): pedidos de substituição do mural, para supervisor ou acima.
+      { label: 'Substituições', href: '/dashboard/substituicoes', icon: <Repeat size={16} />, perfis: ['administrador','gestor','supervisor'] as Perfil[] },
     ],
   },
   {
