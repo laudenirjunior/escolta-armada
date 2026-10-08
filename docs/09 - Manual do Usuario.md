@@ -178,6 +178,8 @@ Bloco **Identificação da Missão**. Aqui entram **Cliente Contratante**, **Dat
 
 Para cada viatura, escolhe-se o **Veículo Operacional** e o **efetivo** (com o papel de comandante ou operador). Dá para adicionar mais de uma viatura. **O vigilante é opcional:** se ficar sem ninguém escalado, a escolta vai para o mural, de onde um Operador a puxa (ver B2).
 
+Cada vigilante entra **uma vez só** na escolta, em qualquer viatura: quem já foi escolhido some da lista das outras linhas. A mesma placa também não pode estar em duas viaturas da mesma escolta; o passo 2 avisa e não deixa avançar. Se o vigilante escolhido não tiver acesso ao aplicativo (cadastro sem conta de usuário), aparece logo abaixo dele: "Este vigilante não tem acesso ao aplicativo e não verá a escolta". O cadastro continua permitido, mas ele não recebe a escolta no celular.
+
 `[PRINT P12]`
 
 ### Fase 03: Revisar e Confirmar
@@ -296,6 +298,8 @@ Quando não há escolta ativa, a tela diz "Nenhuma escolta ativa". É o sinal de
 ## B2. Puxar e assumir escolta no mural
 
 Em **Escoltas**, o Operador tem um alternador de três modos: **Minhas Escoltas**, **Disponíveis** e **Todas as Ativas**. A aba **Disponíveis** é o mural: escoltas agendadas esperando equipe.
+
+A tela abre em **Minhas Escoltas** sempre que o Operador tem escolta ativa. Só abre direto no mural quem não tem nenhuma escolta e há escolta livre para puxar. Na aba Disponíveis, quem tem escolta vê o aviso "Você tem N escolta(s) em Minhas Escoltas", que leva de volta à aba dele. A escolta de outra dupla nunca aparece como livre: quem tem equipe é informado pelo servidor.
 
 - Escolta **sem equipe:** botão **Puxar**. O Operador vira o comandante e escolhe quem vai junto. Não dá para ser comandante de duas escoltas agendadas com menos de 6 horas entre elas.
 - Escolta **já escalada:** badge "já escalada". Antes da janela aparece "Substituição a partir das HH:MM"; dentro dela, o botão **Pedir**.
