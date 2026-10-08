@@ -89,7 +89,7 @@ A regra real vive em `lib/permissions.ts`. Abaixo, o essencial para os dois perf
 Dois pontos que valem destaque:
 
 - **O Supervisor entra em Usuários com escopo restrito:** ele cria e edita apenas o perfil Operador. Não mexe em Gestor, Administrador ou Central.
-- **O Operador pode assumir uma escolta agendada e escolher quem vai junto, mas não altera o que foi contratado.** A regra está na tela e também no banco.
+- **O Operador pode puxar uma escolta agendada livre e escolher quem vai junto, mas não altera o que foi contratado.** Substituir uma equipe escalada passa pelas regras do mural (B2). A regra está na tela e também no banco.
 
 ---
 
@@ -289,12 +289,22 @@ Quando não há escolta ativa, a tela diz "Nenhuma escolta ativa". É o sinal de
 
 Em **Escoltas**, o Operador tem um alternador de três modos: **Minhas Escoltas**, **Disponíveis** e **Todas as Ativas**. A aba **Disponíveis** é o mural: escoltas agendadas esperando equipe.
 
-- Escolta **sem equipe:** botão **Puxar**. O Operador vira o comandante e escolhe quem vai junto.
-- Escolta **já escalada:** badge "já escalada" e botão **Assumir**.
+- Escolta **sem equipe:** botão **Puxar**. O Operador vira o comandante e escolhe quem vai junto. Não dá para ser comandante de duas escoltas agendadas com menos de 6 horas entre elas.
+- Escolta **já escalada:** badge "já escalada". Antes da janela aparece "Substituição a partir das HH:MM"; dentro dela, o botão **Pedir**.
+- Escolta de **escala fixa** não aparece no mural: a equipe é definida pela supervisão.
 
 `[PRINT P26]`
 
-Assumir uma escolta que já tem equipe **exige confirmação e um motivo escrito** (mínimo de cinco caracteres), porque a equipe anterior será substituída e isso fica no histórico. Enquanto a escolta não começa, dá para **Devolver** ao mural.
+Regras do mural desde o lote de outubro de 2026 (travas T1 a T7):
+
+1. **Janela:** pedir uma escolta que já tem equipe só a partir de **60 minutos antes** da hora prevista.
+2. **Presença:** a equipe escalada confirma **Estou na base** (no mural ou no Painel Guiado, a partir do início da janela). Com a presença confirmada, ninguém assume a escolta.
+3. **Pedido:** dentro da janela e sem presença, assumir vira um **pedido à supervisão**, com motivo de **no mínimo 20 caracteres**. Supervisor, gestor ou administrador aprova ou recusa na tela **Substituições**. **Sem resposta em 15 minutos**, o pedido é liberado automaticamente pelo sistema e quem pediu assume.
+4. **Aviso:** a equipe substituída e a supervisão recebem aviso no aplicativo; o chat central do Telegram recebe uma mensagem por evento.
+5. **Escala fixa:** marcada pela supervisão no formulário da escolta; some do mural e só a supervisão muda a equipe.
+6. **Registro:** puxar, pedir, decidir, substituir, devolver, incluir e confirmar presença ficam na auditoria; a tela **Substituições** mostra o histórico (quem, de quem, quando, antecedência, motivo, quem decidiu ou se foi liberado por tempo).
+
+Os números (60 minutos, 15 minutos, 6 horas) são os padrões e podem ser ajustados por gestor ou administrador na tela Substituições. Enquanto a escolta não começa, o comandante pode **Devolver** ao mural, salvo em escala fixa.
 
 `[PRINT P27]`
 

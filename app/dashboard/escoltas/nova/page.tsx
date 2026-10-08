@@ -379,6 +379,9 @@ function FormularioEscolta() {
   // Lote 2026-10 (M4): sem check-in obrigatório por padrão.
   const [periodicidadeCheckin, setPeriodicidadeCheckin] = useState('')
   const verFinanceiro = PERFIS_FINANCEIRO.includes((user?.perfil?.codigo ?? '') as any)
+  // Lote 2026-10 (T6): escala fixa só por supervisor ou acima; a trigger do banco barra o operador.
+  const podeEscalaFixa = PERFIS_FINANCEIRO.includes((user?.perfil?.codigo ?? '') as any)
+  const [escalaFixa, setEscalaFixa] = useState(false)
 
   const carregar = useCallback(async () => {
     const [{ data: cls }, { data: vcs }, { data: vgs }] = await Promise.all([
@@ -411,7 +414,7 @@ function FormularioEscolta() {
           id, cliente_id, status, data_hora_prevista, metadados,
           origem_endereco, origem_lat, origem_lng,
           destino_endereco, destino_lat, destino_lng,
-          periodicidade_checkin_min, valor_cobrado, outros_custos, observacao_financeira,
+          periodicidade_checkin_min, valor_cobrado, outros_custos, observacao_financeira, escala_fixa,
           veiculos:escolta_veiculos(
             id, veiculo_id,
             efetivo:escolta_efetivo(id, vigilante_id, papel_na_escolta, valor_pago_vigilante)
@@ -474,6 +477,7 @@ function FormularioEscolta() {
           }))
         : [novaViatura()])
 
+      setEscalaFixa(Boolean(e.escala_fixa))
       // Editar não religa o check-in: nulo continua nulo.
       setPeriodicidadeCheckin(e.periodicidade_checkin_min != null ? String(e.periodicidade_checkin_min) : '')
       setValorCobrado(e.valor_cobrado != null ? String(e.valor_cobrado) : '')
@@ -570,6 +574,7 @@ function FormularioEscolta() {
         valor_cobrado:       verFinanceiro && valorCobrado ? parseFloat(valorCobrado) : null,
         outros_custos:       verFinanceiro && outrosCustos ? parseFloat(outrosCustos) : 0,
         observacao_financeira: verFinanceiro && obsFinanceiro.trim() ? obsFinanceiro.trim() : null,
+        ...(podeEscalaFixa ? { escala_fixa: escalaFixa } : {}),
       }
 
       let escoltaId: string
@@ -974,6 +979,19 @@ function FormularioEscolta() {
                 Define com que frequência o operador deve confirmar a posição da escolta. Gera alerta no painel e no Telegram quando o prazo vence.
               </p>
             </div>
+            )}
+
+            {/* Escala fixa (T6) — supervisor+ */}
+            {podeEscalaFixa && (
+              <label className="flex items-start gap-3 p-3" style={{ border: `1.5px solid ${P.border}`, borderRadius: '4px' }}>
+                <input type="checkbox" checked={escalaFixa} onChange={e => setEscalaFixa(e.target.checked)} className="mt-1" />
+                <span>
+                  <span className="block text-sm font-bold" style={{ color: P.text }}>Escala fixa</span>
+                  <span className="block" style={{ fontSize: '11px', color: P.sub }}>
+                    A escolta não aparece no mural para os operadores e a equipe só muda pela supervisão.
+                  </span>
+                </span>
+              </label>
             )}
 
             {/* Seção Financeira — supervisor+ */}

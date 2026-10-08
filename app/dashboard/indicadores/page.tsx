@@ -11,6 +11,7 @@ import {
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
 import { ehPontoCheckin } from '@/lib/checkin'
+import { SubstituicoesPorOperador } from '@/components/indicadores/substituicoes-por-operador'
 
 // ─── Paleta ──────────────────────────────────────────────────────────────────
 const P = {
@@ -1353,6 +1354,10 @@ export default function IndicadoresPage() {
       {/* ── ABA: PESSOAS ── */}
       {abaAtiva === 'pessoas' && (
         <div className="space-y-6">
+          {['administrador', 'gestor', 'supervisor'].includes((user?.perfil?.codigo ?? '') as string) && (() => {
+            const { from, to } = computeRange(tipoPeriodo, dataInicio, dataFim)
+            return <SubstituicoesPorOperador desde={from} ate={to} />
+          })()}
           <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
             {[
               { label: 'Total Efetivo',    valor: pessoasStats?.totalEfetivo ?? '—',    sub: 'escalações no período',                                   cor: P.navy,      corTop: P.navy    },
