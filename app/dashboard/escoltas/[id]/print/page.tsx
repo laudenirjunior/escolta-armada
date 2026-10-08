@@ -6,6 +6,8 @@ import { createClient } from '@/lib/supabase/client'
 import { lerObservacao, fotoIdsDoPonto } from '@/lib/pontos-controle'
 import { STATUS, LABELS_STATUS, TIPO_PONTO_POR_STATUS } from '@/lib/fluxo-escolta'
 import { urlsAssinadas, urlDoMapa, VALIDADE_IMPRESSAO_S } from '@/lib/fotos-url'
+import { carregarLocaisAtivos } from '@/lib/locais'
+import { rotuloDoPonto } from '@/lib/rotulo-ponto'
 
 const sb = createClient() as any
 
@@ -56,6 +58,8 @@ interface PrintData {
     latitude: number | null
     longitude: number | null
     sem_sinal_gps: boolean
+    /** Lote 2026-10 (M1): local salvo próximo ou endereço aproximado. */
+    rotulo: string | null
   }>
   ocorrencias: Array<{ tipo: string; descricao: string; data_hora: string; autor: string; fotoUrl: string | null }>
   checklists: Array<{ tipo: string; data_conclusao: string; autor: string; conformes: number; total: number }>
@@ -202,7 +206,7 @@ export default function EscoltaPrintPage() {
         // Pontos de controle
         const { data: pts } = viatIds.length > 0
           ? await sb.from('pontos_controle')
-              .select('data_hora, foto_id, observacoes, latitude, longitude, sem_sinal_gps, tipo:dom_tipos_ponto(codigo, nome_exibicao), autor:usuarios!lancado_por(nome_completo)')
+              .select('data_hora, foto_id, observacoes, latitude, longitude, precisao_metros, sem_sinal_gps, tipo:dom_tipos_ponto(codigo, nome_exibicao), autor:usuarios!lancado_por(nome_completo)')
               .in('escolta_veiculo_id', viatIds)
               .order('data_hora', { ascending: true })
           : { data: [] }
@@ -225,6 +229,7 @@ export default function EscoltaPrintPage() {
           if (url) urlPorFotoId.set(f.id, url)
         }
 
+        const locaisAtivos = await carregarLocaisAtivos(sb)
         const pontos = (pts ?? []).map((p: any, i: number) => {
           const lido = lerObservacao(p.observacoes)
           return {
@@ -242,6 +247,7 @@ export default function EscoltaPrintPage() {
             latitude: p.latitude ?? null,
             longitude: p.longitude ?? null,
             sem_sinal_gps: p.sem_sinal_gps ?? false,
+            rotulo: rotuloDoPonto({ latitude: p.latitude, longitude: p.longitude, precisao_metros: p.precisao_metros, endereco: lido.endereco }, locaisAtivos),
           }
         })
 
@@ -756,6 +762,7 @@ export default function EscoltaPrintPage() {
                   }}>
                     {fmtGps(p)}
                   </span>
+                  {p.rotulo && <span style={{ display: 'block', color: '#1E2D35', marginTop: '2px' }}>{p.rotulo}</span>}
                 </div>
 
                 {p.observacao && (

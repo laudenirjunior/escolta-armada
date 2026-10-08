@@ -164,6 +164,12 @@ Botão **Nova Escolta**, dentro de Escoltas. O assistente tem **três fases** no
 
 Bloco **Identificação da Missão**. Aqui entram **Cliente Contratante**, **Data** e **Hora de Partida**, **Endereço de Origem** e **Endereço de Destino** (escolhidos de uma lista de sugestões, não digitados livres), os complementos de cada endereço e observações. Desde o lote de outubro de 2026, o check-in periódico em rota vem **desligado** e o campo de periodicidade não aparece; ele só volta para o cliente que tiver o check-in religado no cadastro (ver B6). Um bloco de **Dados Financeiros** (valor cobrado, outros custos, observação) aparece só para Supervisor e acima.
 
+**Locais salvos e conferência no mapa (outubro de 2026).** Acima de origem e destino aparecem os **atalhos** dos locais salvos ativos (por exemplo JAMEF, Sede): um toque preenche endereço, complemento e coordenada, sem passar pela busca. Endereço escolhido na busca abre um **mapa com pino**: arraste o pino até o portão ou a doca e marque **Conferido no mapa**, sem o que a escolta não é salva. A lista de sugestões mostra bairro e município em destaque e avisa quando a sugestão não tem número. Supervisor ou acima pode usar **Salvar este endereço como local**; o local nasce aguardando conferência.
+
+**Configurações, Locais salvos.** Supervisor, gestor e administrador cadastram e editam; só **gestor e administrador** conferem o pino e ativam. Só local ativo vira atalho. Mudar a coordenada de um local ativo devolve o local para conferência.
+
+**Pontos de controle.** A coordenada do GPS é a verdade. Ponto a até 100 metros de um local salvo ativo aparece como "Local: nome, endereço"; os demais mostram o endereço por extenso marcado como aproximado, com a precisão do GPS.
+
 `[PRINT P11]`
 
 ### Fase 02: Efetivo e Veículos

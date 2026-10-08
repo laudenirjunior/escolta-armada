@@ -43,6 +43,8 @@ import {
 } from '@/lib/textos-padrao'
 import { serializarObservacao, lerObservacao, fotoIdsDoPonto } from '@/lib/pontos-controle'
 import { urlsAssinadas, urlDoMapa, urlAssinada } from '@/lib/fotos-url'
+import { carregarLocaisAtivos } from '@/lib/locais'
+import { rotuloDoPonto } from '@/lib/rotulo-ponto'
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -134,6 +136,8 @@ interface TimelineItem {
   descricao: string | null
   usuario: string | null
   coordenadas?: { lat: number; lng: number } | null
+  /** Lote 2026-10 (M1): local salvo próximo ou endereço reverso marcado como aproximado. */
+  rotulo?: string | null
   foto_url?: string | null
   /** Todas as fotos do evento. `foto_url` continua sendo a primeira, por compatibilidade. */
   foto_urls?: string[]
@@ -870,7 +874,7 @@ export default function EscoltaDetalhePage() {
     const { data: pts } = viaturaIds.length > 0
       ? await sb
           .from('pontos_controle')
-          .select(`id, escolta_veiculo_id, data_hora, latitude, longitude, sem_sinal_gps, lancado_por, observacoes, tipo:dom_tipos_ponto(codigo, nome_exibicao), foto:fotos(id, caminho_arquivo), autor:usuarios!lancado_por(nome_completo)`)
+          .select(`id, escolta_veiculo_id, data_hora, latitude, longitude, precisao_metros, sem_sinal_gps, lancado_por, observacoes, tipo:dom_tipos_ponto(codigo, nome_exibicao), foto:fotos(id, caminho_arquivo), autor:usuarios!lancado_por(nome_completo)`)
           .in('escolta_veiculo_id', viaturaIds)
       : { data: null }
 
@@ -944,6 +948,7 @@ export default function EscoltaDetalhePage() {
     }
 
     const tl: TimelineItem[] = []
+    const locaisAtivos = await carregarLocaisAtivos(sb)
 
     histNorm.forEach((h) => {
       tl.push({
@@ -971,6 +976,7 @@ export default function EscoltaDetalhePage() {
         descricao: info.observacao,
         usuario: p.autor?.nome_completo ?? 'Operador',
         coordenadas: p.latitude && p.longitude ? { lat: Number(p.latitude), lng: Number(p.longitude) } : null,
+        rotulo: rotuloDoPonto({ latitude: p.latitude, longitude: p.longitude, precisao_metros: p.precisao_metros, endereco: info.endereco }, locaisAtivos),
         foto_url: fotosPonto[0] ?? null,
         foto_urls: fotosPonto,
         extra: { sem_sinal_gps: p.sem_sinal_gps === true },
@@ -4383,6 +4389,7 @@ export default function EscoltaDetalhePage() {
                 {item.coordenadas && (
                   <div>
                     <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#A8B8C2', marginBottom: '6px' }}>Localização GPS</p>
+                    {item.rotulo && <p style={{ fontSize: '12px', color: '#0E1A33', marginBottom: '6px' }}>{item.rotulo}</p>}
                     <a href={`https://www.google.com/maps/search/?api=1&query=${item.coordenadas.lat},${item.coordenadas.lng}`}
                       target="_blank" rel="noopener noreferrer"
                       className="flex items-center gap-2 h-9 px-4 text-white font-black text-[10px] uppercase tracking-widest w-fit"
