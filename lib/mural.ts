@@ -38,10 +38,14 @@ const CODIGOS_SEM_TRAVAS = ['PGRST202', '42883', '42501']
 export async function lerInfoMural(sb: any, ids: string[]): Promise<{ ativo: boolean; info: MapaInfoMural; falhou?: boolean }> {
   const chamar = () => ids.length === 0 ? sb.rpc('mural_travas_ativas') : sb.rpc('mural_info', { p_escolta_ids: ids })
   const semTravas = (e: { code?: string } | null) => Boolean(e && CODIGOS_SEM_TRAVAS.includes(e.code ?? ''))
-  let r = await chamar().catch((e: unknown) => ({ data: null, error: { message: String(e) } }))
+  // O construtor do supabase-js só tem then (sem catch): a falha de rede vira erro aqui.
+  const tentar = async (): Promise<{ data: unknown; error: { code?: string; message?: string } | null }> => {
+    try { return await chamar() } catch (e) { return { data: null, error: { message: String(e) } } }
+  }
+  let r = await tentar()
   if (r.error && !semTravas(r.error)) {
     await new Promise(ok => setTimeout(ok, 1500))
-    r = await chamar().catch((e: unknown) => ({ data: null, error: { message: String(e) } }))
+    r = await tentar()
   }
   if (!r.error) return { ativo: true, info: ids.length === 0 ? {} : ((r.data ?? {}) as MapaInfoMural) }
   if (semTravas(r.error)) return { ativo: false, info: {} }
