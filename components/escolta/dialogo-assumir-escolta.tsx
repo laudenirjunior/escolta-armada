@@ -138,7 +138,7 @@ export function DialogoAssumirEscolta({
           body: JSON.stringify({
             tipo: 'status', destino: 'central', escolta_id: escoltaId, escolta_codigo: codigo,
             titulo: 'Pedido de substituição de equipe',
-            descricao: `Equipe atual: ${data.equipe_atual ?? '—'}. Motivo: ${motivo.trim()}. Sem resposta até ${new Date(data.expira_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })}, o pedido é liberado automaticamente.`,
+            descricao: `Equipe atual: ${data.equipe_atual ?? '-'}. Motivo: ${motivo.trim()}. Sem resposta até ${new Date(data.expira_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })}, o pedido é liberado automaticamente.`,
           }),
         }).catch(() => {})
       }

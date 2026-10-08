@@ -38,8 +38,8 @@ const ROTULO: Record<string, { texto: string; cor: string }> = {
   invalidado: { texto: 'Invalidado', cor: '#6B7E8A' },
 }
 
-const dataHora = (iso: string | null) => iso ? new Date(iso).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—'
-const antecedencia = (min: number | null) => min == null ? '—' : min >= 0 ? `${min} min antes` : `${-min} min depois`
+const dataHora = (iso: string | null) => iso ? new Date(iso).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-'
+const antecedencia = (min: number | null) => min == null ? '-' : min >= 0 ? `${min} min antes` : `${-min} min depois`
 
 export default function SubstituicoesPage() {
   const { user, loading: carregandoUsuario } = useAuth()
@@ -203,7 +203,7 @@ export default function SubstituicoesPage() {
                     {ROTULO[p.status]?.texto ?? p.status}
                     {p.observacao_decisao && <span className="block font-normal" style={{ color: '#6B7E8A' }}>{p.observacao_decisao}</span>}
                   </td>
-                  <td className="px-3 py-2">{p.status === 'liberado_por_tempo' ? 'liberado por tempo' : p.decidido_por ?? '—'}{p.decidido_em ? ` · ${dataHora(p.decidido_em)}` : ''}</td>
+                  <td className="px-3 py-2">{p.status === 'liberado_por_tempo' ? 'liberado por tempo' : p.decidido_por ?? '-'}{p.decidido_em ? ` · ${dataHora(p.decidido_em)}` : ''}</td>
                 </tr>
               ))}
             </tbody>

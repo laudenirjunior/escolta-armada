@@ -23,7 +23,7 @@ export function SubstituicoesPorOperador({ desde, ate }: { desde: string; ate: s
       if (!vivo || error) return
       const mapa = new Map<string, Linha>()
       for (const p of (data ?? []) as Array<{ status: string; solicitante: { nome_completo: string } | null }>) {
-        const nome = p.solicitante?.nome_completo ?? '—'
+        const nome = p.solicitante?.nome_completo ?? '-'
         const l = mapa.get(nome) ?? { operador: nome, pedidos: 0, executados: 0, porTempo: 0, recusados: 0 }
         l.pedidos++
         if (p.status === 'aprovado' || p.status === 'liberado_por_tempo') l.executados++

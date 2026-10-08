@@ -981,7 +981,7 @@ function FormularioEscolta() {
             </div>
             )}
 
-            {/* Escala fixa (T6) — supervisor+ */}
+            {/* Escala fixa (T6), supervisor+ */}
             {podeEscalaFixa && (
               <label className="flex items-start gap-3 p-3" style={{ border: `1.5px solid ${P.border}`, borderRadius: '4px' }}>
                 <input type="checkbox" checked={escalaFixa} onChange={e => setEscalaFixa(e.target.checked)} className="mt-1" />
