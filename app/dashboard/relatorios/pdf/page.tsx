@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { urlAssinada, VALIDADE_IMPRESSAO_S } from '@/lib/fotos-url'
 
 const sb = createClient() as any
 
@@ -622,7 +623,8 @@ function RelatoriosPDFConteudo() {
       if (clienteId) {
         const { data: cliData } = await sb.from('clientes').select('nome_cliente, metadados').eq('id', clienteId).maybeSingle() as any
         setClienteNome(cliData?.nome_cliente ?? '')
-        setClienteLogoUrl(cliData?.metadados?.logo_url ?? '')
+        // Lote 2026-10: bucket privado; logo por URL assinada com validade para imprimir.
+        setClienteLogoUrl((await urlAssinada(sb, cliData?.metadados?.logo_url, VALIDADE_IMPRESSAO_S)) ?? '')
       }
 
       const [escResult, ocorrResult, checkResult] = await Promise.all(promises)
