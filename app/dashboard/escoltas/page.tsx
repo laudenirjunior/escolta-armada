@@ -77,7 +77,14 @@ export default function EscoltasPage() {
   const router = useRouter()
   const perfil = (user?.perfil?.codigo ?? '') as any
 
+  // Onda G: decide a aba inicial do operador só uma vez, depois da primeira carga feita
+  // já como operador (ver o fim de carregar()).
+  const jaEscolheuModo = useRef(false)
+
   const carregar = useCallback(async () => {
+    // Onda G: enquanto o login não termina, o perfil é vazio e a carga sairia como se
+    // fosse de não operador, sem as escoltas dele. Espera o usuário chegar.
+    if (!user) return
     setLoading(true)
     let q = sb
       .from('escoltas')
@@ -95,6 +102,7 @@ export default function EscoltasPage() {
     const { data } = await q
     let rows = (data ?? []) as EscoltaRow[]
 
+    let escoltaIdsOperador: string[] = []
     // Filtragem de Visibilidade (Operador vê apenas escoltas ativas)
     if (perfil === 'operador') {
       rows = rows.filter((e) =>
@@ -116,28 +124,32 @@ export default function EscoltasPage() {
           .filter((e: any) => e.papel_na_escolta === 'comandante')
           .map((e: any) => e.escolta_id).filter(Boolean)))
       }
+      escoltaIdsOperador = escoltaIds
       setMinhasEscoltaIds(escoltaIds)
       setSouComandanteIds(comandoIds)
     }
 
-    // Mural: agendadas que ainda não têm ninguém escalado. A consulta é sobre o efetivo
-    // das agendadas, e não sobre todas, para não trazer o efetivo do sistema inteiro.
+    // Mural: agendadas que ainda não têm ninguém escalado. Onda G: "sem equipe" vem só do
+    // servidor (mural_info). O efetivo lido pelo próprio operador não serve, porque a RLS
+    // esconde o efetivo dos colegas e toda escolta de outra dupla pareceria livre. Sem
+    // mural_info (minutos entre o deploy e o bloco 2), toda escolta conta como com equipe.
     const agendadas = rows.filter(e => e.status === 'agendada').map(e => e.id)
-    if (agendadas.length > 0) {
-      const { data: comEquipe } = await sb
-        .from('escolta_efetivo')
-        .select('escolta_id')
-        .in('escolta_id', agendadas)
-      const ocupadas = new Set((comEquipe ?? []).map((e: any) => e.escolta_id))
-      setSemEquipeIds(agendadas.filter(id => !ocupadas.has(id)))
-    } else {
-      setSemEquipeIds([])
-    }
     const lido = await lerInfoMural(sb, agendadas)
     setTravasAtivas(lido.ativo)
     setInfoMural(lido.info)
-    // Com as travas no ar, quem tem equipe vem do servidor (a RLS esconde o efetivo dos colegas).
-    if (lido.ativo) setSemEquipeIds(agendadas.filter(id => lido.info[id] && !lido.info[id].tem_equipe))
+    const livres = lido.ativo ? agendadas.filter(id => lido.info[id] && !lido.info[id].tem_equipe) : []
+    setSemEquipeIds(livres)
+
+    // Operador sem escolta nenhuma cai numa lista vazia e não descobre sozinho que existe
+    // uma aba com escoltas para pegar. Nesse caso a tela já abre no mural. Onda G: a
+    // escolha é feita aqui, com as escoltas dele já calculadas, e uma vez só; depois
+    // disso a escolha é dele.
+    if (perfil === 'operador' && !jaEscolheuModo.current) {
+      jaEscolheuModo.current = true
+      const minhas = rows.filter(e => escoltaIdsOperador.includes(e.id)).length
+      const livresVisiveis = livres.filter(id => !escoltaIdsOperador.includes(id) && !lido.info[id]?.escala_fixa)
+      if (minhas === 0 && livresVisiveis.length > 0) setModoLista('disponiveis')
+    }
 
     setEscoltas(rows)
     setLoading(false)
@@ -152,6 +164,7 @@ export default function EscoltasPage() {
       const lido = await lerInfoMural(sb, ids)
       setTravasAtivas(lido.ativo)
       setInfoMural(lido.info)
+      setSemEquipeIds(lido.ativo ? ids.filter(id => lido.info[id] && !lido.info[id].tem_equipe) : [])
     }, 30_000)
     return () => clearInterval(t)
   }, [escoltas])
@@ -187,19 +200,8 @@ export default function EscoltasPage() {
   }
 
   const ehOperador = perfil === 'operador'
+  const qtdMinhas = escoltas.filter(e => minhasEscoltaIds.includes(e.id)).length
   const podeEditar = PODE_EDITAR_ESCOLTA.includes(perfil)
-
-  // Operador sem escolta nenhuma cai numa lista vazia e nao descobre sozinho que existe
-  // uma aba com escoltas para pegar. Nesse caso a tela ja abre no mural. A ref garante
-  // que isso aconteca uma vez so: depois disso a escolha e dele.
-  const jaEscolheuModo = useRef(false)
-  useEffect(() => {
-    if (!ehOperador || jaEscolheuModo.current || loading) return
-    if (minhasEscoltaIds.length === 0 && semEquipeIds.length > 0) {
-      setModoLista('disponiveis')
-      jaEscolheuModo.current = true
-    }
-  }, [ehOperador, loading, minhasEscoltaIds.length, semEquipeIds.length])
 
   /**
    * Abre o dialogo de assumir. Ele mostra a equipe ja escalada, pede confirmacao e
@@ -554,6 +556,15 @@ export default function EscoltasPage() {
               vai para a supervisão; sem resposta em 15 minutos, é liberado sozinho.
               Pode devolver enquanto não começar.
             </p>
+          )}
+
+          {/* Onda G: quem tem escolta e está no mural sabe que as dele estão na outra aba. */}
+          {modoLista === 'disponiveis' && qtdMinhas > 0 && (
+            <button type="button" onClick={() => { setModoLista('minhas'); setAvisoMural(null) }}
+              className="block w-full text-left p-2.5 rounded text-[11px] font-bold leading-relaxed"
+              style={{ backgroundColor: '#EBF3FC', border: '1px solid #B8D3EE', color: '#2166A8' }}>
+              Você tem {qtdMinhas} escolta{qtdMinhas > 1 ? 's' : ''} em Minhas Escoltas. Toque para ver.
+            </button>
           )}
 
           <AvisosMural />
