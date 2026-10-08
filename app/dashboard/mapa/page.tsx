@@ -85,8 +85,24 @@ function buildGMapsUrl(lat: number, lng: number) {
   return `https://www.google.com/maps?q=${lat},${lng}`
 }
 
+// Lote 2026-10 (H15): a rota entre a mesma origem e o mesmo destino não muda. Sem este
+// cache, a recarga a cada 30 s pedia a rota de novo, cerca de 240 vezes por hora por aba.
+const rotasEmCache = new Map<string, Promise<[number, number][]>>()
+
 // Busca rota real via Mapbox Directions API (segue estradas)
-async function fetchRotaReal(
+function fetchRotaReal(
+  origLng: number, origLat: number,
+  destLng: number, destLat: number,
+): Promise<[number, number][]> {
+  const chave = `${origLng},${origLat};${destLng},${destLat}`
+  const emCache = rotasEmCache.get(chave)
+  if (emCache) return emCache
+  const pedido = buscarRotaReal(origLng, origLat, destLng, destLat)
+  rotasEmCache.set(chave, pedido)
+  return pedido
+}
+
+async function buscarRotaReal(
   origLng: number, origLat: number,
   destLng: number, destLat: number,
 ): Promise<[number, number][]> {

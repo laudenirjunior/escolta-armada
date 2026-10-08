@@ -58,6 +58,7 @@ export function CheckinAlertProvider({ perfil }: { perfil?: string | null }) {
         .in('status', STATUS_COM_CHECKIN)
 
       if (!escoltas?.length) { setAlertas([]); return }
+      const { data: bancoAtivo } = await sb.rpc('avisos_pelo_banco_ativos')
 
       // Avisos fechados por este usuário, com a assinatura do estado em que foram fechados.
       const { data: dispensados, error: erroDispensados } = await sb
@@ -133,7 +134,17 @@ export function CheckinAlertProvider({ perfil }: { perfil?: string | null }) {
           })
         }
 
-        // Telegram: trava antiga por janela de 5 min nesta aba (a onda F leva o envio ao servidor).
+        // Lote 2026-10 (onda F): com o envio pelo banco ativo, o navegador só pede o
+        // enfileiramento; a chave única por prazo vencido faz sair uma mensagem só, não
+        // importa quantas abas estejam abertas. Sem ele, fica a trava antiga desta aba.
+        if (bancoAtivo) {
+          if (!alertasEnviadosRef.current.has(`fila-${esc.id}`)) {
+            alertasEnviadosRef.current.add(`fila-${esc.id}`)
+            sb.rpc('enfileirar_alerta_checkin', { p_escolta_id: esc.id })
+              .then(() => alertasEnviadosRef.current.delete(`fila-${esc.id}`))
+          }
+          continue
+        }
         const janelaAlerta = `${esc.id}-${Math.floor(minutosAtraso / 5)}`
         if (alertasEnviadosRef.current.has(janelaAlerta)) continue
         alertasEnviadosRef.current.add(janelaAlerta)
