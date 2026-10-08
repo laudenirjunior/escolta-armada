@@ -266,6 +266,8 @@ Base: `2026-10-08 Comando VPS - Escolta Armada adendo 01.md` (15h52), que preval
 
 O comando proíbe perguntar durante o desenvolvimento. As análises deixaram pontos abertos; cada um foi decidido pela leitura mais conservadora do adendo e vai, com destaque, no relatório de prontidão, para o Peçanha confirmar ou mudar com "publicar sem X".
 
+Confirmação do Peçanha (08/10/2026, na sessão): S1, S2, S3, S4 (Telegram na regra atual, pendência 0.3), S5 (a gestão acompanha o resto pela aba Atividade) e S6 confirmadas como estão. As demais seguem como decisões assumidas.
+
 | Nº | Ponto aberto | Decisão assumida | Por quê |
 |---|---|---|---|
 | S1 | Onda H: o checklist do Passo 2 passa a ser por viatura? | Não. Só KM e foto do painel são por viatura; checklist de condições e as 5 fotos de ângulo continuam na primeira viatura (pendência 0.2) | O adendo libera "apenas para o bloco de KM inicial e foto do painel"; o restante do Caminho 2 continua proibido |
