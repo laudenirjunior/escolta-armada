@@ -605,6 +605,9 @@ BEGIN
   SELECT coalesce(jsonb_object_agg(e.id, jsonb_build_object(
            'janela_inicio', e.data_hora_prevista - make_interval(mins => cfg.janela_substituicao_min),
            'escala_fixa', e.escala_fixa,
+           -- O operador não lê o efetivo dos colegas pela RLS; sem isto a tela via toda
+           -- escolta agendada como "sem equipe".
+           'tem_equipe', EXISTS (SELECT 1 FROM public.escolta_efetivo ee WHERE ee.escolta_id = e.id),
            'presenca', public._presenca_da_equipe(e.id),
            'eu_confirmei', EXISTS (SELECT 1 FROM public.mural_presencas mp WHERE mp.escolta_id = e.id AND mp.vigilante_id = v_vigilante),
            'sou_da_equipe', EXISTS (SELECT 1 FROM public.escolta_efetivo ee WHERE ee.escolta_id = e.id AND ee.vigilante_id = v_vigilante),
