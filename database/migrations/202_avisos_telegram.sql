@@ -202,8 +202,12 @@ END;
 $$;
 REVOKE ALL ON FUNCTION public.conferir_avisos_telegram() FROM PUBLIC, anon, authenticated;
 
--- 9. O pg_net guarda a URL (com o token) na fila e o corpo da resposta: nenhum papel da
---    aplicação lê o schema net (nada do cliente usa pg_net).
+-- 9. O pg_net guarda a URL (com o token) na fila e o corpo da resposta: tenta tirar o acesso
+--    de anon e authenticated ao schema net (nada do cliente usa pg_net). No Supabase o dono
+--    do schema net não é o postgres e o REVOKE pode não ter efeito (aviso "no privileges
+--    could be revoked"); nesse caso fica como pendência declarada: o schema net não é
+--    exposto pelo PostgREST, então só uma conexão SQL direta com papel de baixo privilégio
+--    leria a fila.
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = 'net') THEN
