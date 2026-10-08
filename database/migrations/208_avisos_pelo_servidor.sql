@@ -3,10 +3,12 @@
 --
 -- Por quê (docs/13, H10 e H12; comando, onda F, item 3): o alerta de check-in e o aviso de
 -- presença iam ao Telegram uma vez por navegador aberto. Com estas funções o navegador
--- só pede o enfileiramento; a chave única por evento garante uma mensagem, e o envio é
--- do banco (202). Sem o envio pelo banco configurado, as funções devolvem
+-- só pede o enfileiramento do alerta de check-in; a chave única por evento garante uma
+-- mensagem, e o envio é do banco (202). Sem o envio pelo banco configurado, as funções devolvem
 -- enfileirado = false e o app continua pelo /api/telegram, como antes.
--- Limite declarado: a fila manda só texto; a foto da presença não vai pelo banco.
+-- Presença: vai com foto pelo /api/telegram, mas só uma vez por presença, mesmo com
+-- várias abas abertas: reservar_aviso_presenca() grava a reserva no banco e só o primeiro
+-- navegador recebe true (a fila do banco manda só texto e perderia a foto).
 
 CREATE OR REPLACE FUNCTION public.enfileirar_alerta_checkin(p_escolta_id uuid) RETURNS jsonb
     LANGUAGE plpgsql VOLATILE SECURITY DEFINER
@@ -32,8 +34,10 @@ BEGIN
   IF v_ultima IS NULL THEN RETURN jsonb_build_object('enfileirado', false, 'motivo', 'sem parada'); END IF;
   v_atraso := floor(extract(epoch FROM (now() - v_ultima)) / 60) - e.periodicidade_checkin_min;
   IF v_atraso < 1 THEN RETURN jsonb_build_object('enfileirado', false, 'motivo', 'em dia'); END IF;
-  -- Uma mensagem por prazo vencido (chave: escolta e última parada).
-  v_ok := public._enfileirar_aviso('checkin:' || p_escolta_id || ':' || extract(epoch FROM v_ultima)::bigint, 'cliente', p_escolta_id,
+  -- Uma mensagem por período vencido sem check-in (chave: escolta, última parada e
+  -- número do período). Antes saía uma a cada 5 min por navegador aberto.
+  v_ok := public._enfileirar_aviso('checkin:' || p_escolta_id || ':' || extract(epoch FROM v_ultima)::bigint
+                                   || ':' || floor(v_atraso::numeric / e.periodicidade_checkin_min)::int, 'cliente', p_escolta_id,
     '<b>Alerta: check-in em atraso</b>' || E'\n'
     || 'Escolta: <code>' || public.escapar_html(e.codigo_escolta) || '</code> · ' || public.escapar_html(e.nome_cliente) || E'\n'
     || 'Sem check-in há ' || (v_atraso + e.periodicidade_checkin_min) || ' minutos (periodicidade de '
@@ -43,33 +47,34 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.enfileirar_aviso_presenca(p_presenca_id uuid) RETURNS jsonb
+CREATE TABLE IF NOT EXISTS public.avisos_reservados (
+  chave        text PRIMARY KEY,
+  reservado_em timestamptz NOT NULL DEFAULT now(),
+  usuario_id   uuid
+);
+ALTER TABLE public.avisos_reservados ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.avisos_reservados FROM anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.reservar_aviso_presenca(p_presenca_id uuid) RETURNS boolean
     LANGUAGE plpgsql VOLATILE SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
     AS $$
-DECLARE v_perfil text; p record; v_ok boolean;
+DECLARE v_perfil text; v_esc uuid; v_n int;
 BEGIN
   SELECT public.get_meu_perfil() INTO v_perfil;
   IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
-  SELECT pr.id, pr.escolta_id, pr.data_hora, v.nome_completo, es.codigo_escolta, c.nome_cliente INTO p
-  FROM public.presencas pr
-  JOIN public.vigilantes v ON v.id = pr.vigilante_id
-  JOIN public.escoltas es ON es.id = pr.escolta_id
-  JOIN public.clientes c ON c.id = es.cliente_id
-  WHERE pr.id = p_presenca_id;
-  IF p.id IS NULL THEN RETURN jsonb_build_object('enfileirado', false); END IF;
-  IF v_perfil NOT IN ('administrador', 'gestor', 'supervisor', 'central') AND NOT public.sou_do_efetivo(p.escolta_id) THEN
-    RAISE EXCEPTION 'Sem permissao para esta escolta.';
+  SELECT escolta_id INTO v_esc FROM public.presencas WHERE id = p_presenca_id;
+  IF v_esc IS NULL THEN RETURN false; END IF;
+  IF v_perfil NOT IN ('administrador', 'gestor', 'supervisor', 'central') AND NOT public.sou_do_efetivo(v_esc) THEN
+    RETURN false;
   END IF;
-  v_ok := public._enfileirar_aviso('presenca:' || p_presenca_id, 'cliente', p.escolta_id,
-    '<b>Presença confirmada</b>' || E'\n'
-    || 'Escolta: <code>' || public.escapar_html(p.codigo_escolta) || '</code> · ' || public.escapar_html(p.nome_cliente) || E'\n'
-    || public.escapar_html(p.nome_completo) || ' confirmou presença em '
-    || to_char(p.data_hora AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY HH24:MI') || ' (Brasília).');
-  RETURN jsonb_build_object('enfileirado', v_ok);
+  INSERT INTO public.avisos_reservados (chave, usuario_id) VALUES ('presenca:' || p_presenca_id, public.get_meu_usuario_id())
+  ON CONFLICT (chave) DO NOTHING;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  RETURN v_n = 1;
 END;
 $$;
 REVOKE ALL ON FUNCTION public.enfileirar_alerta_checkin(uuid) FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION public.enfileirar_aviso_presenca(uuid) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.reservar_aviso_presenca(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.enfileirar_alerta_checkin(uuid) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.enfileirar_aviso_presenca(uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.reservar_aviso_presenca(uuid) TO authenticated;

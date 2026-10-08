@@ -1,5 +1,7 @@
 # Arquitetura Atual
 
+> **Atualização do lote 2026-10 (08/10/2026).** Números de 08/10 antes do lote: 34 tabelas no `public` (a `usuarios_credenciais` entrou depois deste documento), 73 policies, 31 funções. As rotas `/api/telegram` e `/api/ai/melhorar-texto` exigem sessão e o `middleware.ts` está ativo (ver `docs/12`, 4.1 e 4.2). O histórico de status **não** é mais gravado em dobro: a trigger `tr_registrar_historico_status` foi removida de produção antes de 08/10 e a remoção ficou versionada na migration 209; desde a onda F, status e histórico de cada etapa são gravados juntos pela RPC `registrar_etapa_escolta` (207). O bucket `fotos` passa a privado na onda A (migration 200), com leitura por URL assinada. As seções abaixo descrevem o estado anterior e ficam como registro; a análise atual está em `docs/13 - Analise Completa 2026-10.md`.
+
 **Projeto Supabase:** `qthoyxujyzskydulvcfy` (escolta-armada, us-east-2, plano Free, branch `main` em produção)
 
 Next.js 14 App Router, Supabase (Postgres 17), Tailwind 3, Mapbox GL. Sem biblioteca de gráficos.

@@ -84,3 +84,68 @@ BEGIN
   ELSE RAISE NOTICE 'FALHOU: % avisos de check-in na fila', n; END IF;
 END $$;
 ROLLBACK;
+
+-- Revisão adversarial da onda F: finalizar, cancelar e reagendar pela RPC; presença única.
+BEGIN;
+SELECT set_config('t.esc', qa.nova_escolta(now() - interval '5 hours', 'na_base', 'qa_um')::text, true);
+SELECT qa.como('qa_um');
+DO $$
+DECLARE r record;
+BEGIN
+  PERFORM public.registrar_etapa_escolta(current_setting('t.esc')::uuid, '[]', 'na_base', 'finalizada', 'fim', NULL, NULL, 'relatorio final QA');
+  SELECT status, observacao_fechamento, data_finalizacao INTO r FROM public.escoltas WHERE id = current_setting('t.esc')::uuid;
+  IF r.status = 'finalizada' AND r.observacao_fechamento = 'relatorio final QA' AND r.data_finalizacao IS NOT NULL
+  THEN RAISE NOTICE 'PASSOU: operador finaliza pela RPC com relatorio e data de termino';
+  ELSE RAISE NOTICE 'FALHOU: finalizacao %', r; END IF;
+END $$;
+ROLLBACK;
+BEGIN;
+SELECT set_config('t.esc', qa.nova_escolta(now() + interval '5 hours', 'agendada', 'qa_um')::text, true);
+SELECT qa.como('qa_supervisor');
+DO $$
+DECLARE r record;
+BEGIN
+  PERFORM public.registrar_etapa_escolta(current_setting('t.esc')::uuid, '[]', 'agendada', 'cancelada', 'Cancelamento: cliente desistiu', NULL, NULL, 'cliente desistiu');
+  SELECT status, observacao_fechamento INTO r FROM public.escoltas WHERE id = current_setting('t.esc')::uuid;
+  IF r.status = 'cancelada' AND r.observacao_fechamento = 'cliente desistiu' THEN RAISE NOTICE 'PASSOU: supervisor cancela pela RPC com o motivo';
+  ELSE RAISE NOTICE 'FALHOU: cancelamento %', r; END IF;
+END $$;
+ROLLBACK;
+BEGIN;
+SELECT set_config('t.esc', qa.nova_escolta(now() + interval '1 hour', 'agendada', 'qa_um')::text, true);
+SELECT qa.como('qa_um');
+DO $$
+BEGIN
+  PERFORM public.registrar_etapa_escolta(current_setting('t.esc')::uuid, '[]', 'agendada', 'agendada', 'x', NULL, NULL, NULL, now() + interval '2 days');
+  RAISE NOTICE 'FALHOU: operador reagendou';
+EXCEPTION WHEN raise_exception OR insufficient_privilege THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: operador nao reagenda';
+END $$;
+RESET ROLE;
+SELECT qa.como('qa_supervisor');
+DO $$
+DECLARE r record;
+BEGIN
+  PERFORM public.registrar_etapa_escolta(current_setting('t.esc')::uuid, '[]', 'agendada', 'agendada', 'Reagendamento', NULL, NULL, NULL, now() + interval '2 days');
+  SELECT status, observacao_fechamento, data_hora_prevista > now() + interval '1 day' AS remarcou INTO r FROM public.escoltas WHERE id = current_setting('t.esc')::uuid;
+  IF r.status = 'agendada' AND r.observacao_fechamento IS NULL AND r.remarcou THEN RAISE NOTICE 'PASSOU: supervisor reagenda pela RPC com a nova data';
+  ELSE RAISE NOTICE 'FALHOU: reagendamento %', r; END IF;
+EXCEPTION WHEN others THEN RAISE NOTICE 'FALHOU: reagendamento recusado: %', SQLERRM;
+END $$;
+ROLLBACK;
+BEGIN;
+SELECT set_config('t.esc', qa.nova_escolta(now() - interval '1 hour', 'em_andamento', 'qa_um')::text, true);
+INSERT INTO public.fotos (id, caminho_arquivo, tipo_foto_id, data_hora_captura)
+VALUES ('00000000-0000-4000-a000-00000000fafa', 'presenca/' || current_setting('t.esc') || '/p.jpg', (SELECT id FROM public.dom_tipos_foto LIMIT 1), now());
+INSERT INTO public.presencas (id, escolta_id, vigilante_id, foto_id, data_hora, latitude, longitude)
+VALUES ('00000000-0000-4000-a000-00000000fbfb', current_setting('t.esc')::uuid, qa.vigilante('qa_um'), '00000000-0000-4000-a000-00000000fafa', now(), -22.9, -43.3);
+SELECT qa.como('qa_um');
+DO $$
+DECLARE a boolean; b boolean; c boolean;
+BEGIN
+  a := public.reservar_aviso_presenca('00000000-0000-4000-a000-00000000fbfb');
+  b := public.reservar_aviso_presenca('00000000-0000-4000-a000-00000000fbfb');
+  c := public.reservar_aviso_presenca('00000000-0000-4000-a000-00000000fbfb');
+  IF a AND NOT b AND NOT c THEN RAISE NOTICE 'PASSOU: tres navegadores, so o primeiro envia a presenca';
+  ELSE RAISE NOTICE 'FALHOU: reservas % % %', a, b, c; END IF;
+END $$;
+ROLLBACK;

@@ -99,6 +99,8 @@ function fetchRotaReal(
   if (emCache) return emCache
   const pedido = buscarRotaReal(origLng, origLat, destLng, destLat)
   rotasEmCache.set(chave, pedido)
+  // Falha (rota vazia) não fica em cache: a próxima recarga tenta de novo.
+  pedido.then(r => { if (!r.length) rotasEmCache.delete(chave) })
   return pedido
 }
 

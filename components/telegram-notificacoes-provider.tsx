@@ -19,10 +19,10 @@ export function TelegramNotificacoesProvider() {
       { event: 'INSERT', schema: 'public', table: 'presencas' },
       async (ev: any) => {
         const row = ev.new
-        // Lote 2026-10 (onda F): com o envio pelo banco ativo, uma mensagem por presença,
-        // enfileirada no servidor, em vez de uma por navegador aberto.
-        const { data: ativo } = await sb.rpc('avisos_pelo_banco_ativos')
-        if (ativo) { await sb.rpc('enfileirar_aviso_presenca', { p_presenca_id: row.id }); return }
+        // Lote 2026-10 (onda F): uma mensagem por presença, não uma por navegador aberto.
+        // A reserva fica no banco; só o primeiro navegador recebe true e envia, com a foto.
+        const { data: reservado, error: erroReserva } = await sb.rpc('reservar_aviso_presenca', { p_presenca_id: row.id })
+        if (!erroReserva && !reservado) return
         const { data } = await sb
           .from('presencas')
           .select(`

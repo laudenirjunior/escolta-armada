@@ -1494,7 +1494,7 @@ export default function EscoltaDetalhePage() {
   }
   // Lote 2026-10: com a gravacao atomica, transicao recusada nao deixa ponto nem historico.
   const ERRO_TRANSICAO_NADA_GRAVADO =
-    'A etapa já tinha sido avançada em outra tela ou por outra pessoa. Nada foi gravado desta vez. Recarregue a página e confira a etapa atual antes de registrar de novo.'
+    'A etapa já tinha sido avançada em outra tela ou por outra pessoa. O ponto, o status e o histórico desta etapa não foram gravados. Recarregue a página e confira a etapa atual antes de registrar de novo.'
 
   /**
    * Posicao a gravar no ponto de controle, no unico formato que o CHECK

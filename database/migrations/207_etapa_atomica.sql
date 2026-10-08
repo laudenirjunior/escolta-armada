@@ -25,8 +25,17 @@ CREATE OR REPLACE FUNCTION public.registrar_etapa_escolta(
     LANGUAGE plpgsql VOLATILE SECURITY INVOKER
     SET search_path TO 'public', 'pg_temp'
     AS $$
-DECLARE v_n int; v_faltando text[];
+DECLARE v_n int; v_faltando text[]; v_status text;
 BEGIN
+  -- 0. Trava a escolta e confere a etapa ANTES de gravar qualquer coisa. Serializa duas
+  --    viaturas do comboio registrando ao mesmo tempo (a segunda vê o ponto da primeira)
+  --    e impede ponto de uma etapa que já passou.
+  SELECT status INTO v_status FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
+  IF v_status IS NULL THEN RAISE EXCEPTION 'Escolta nao encontrada.'; END IF;
+  IF p_status_atual IS NOT NULL AND v_status IS DISTINCT FROM p_status_atual THEN
+    RAISE EXCEPTION 'ERRO_SEM_TRANSICAO';
+  END IF;
+
   -- 1. Pontos de controle (todas as viaturas num statement só).
   IF jsonb_array_length(coalesce(p_pontos, '[]'::jsonb)) > 0 THEN
     IF EXISTS (SELECT 1 FROM jsonb_to_recordset(p_pontos) AS x(escolta_veiculo_id uuid)
