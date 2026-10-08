@@ -100,6 +100,8 @@ export function TopBar({ userInfo, onLogout, onChangePassword, action, notificac
         {/* Bell */}
         <button
           onClick={onBellClick}
+          aria-label={notificacoesCount > 0 ? `Avisos: ${notificacoesCount} não lidos` : 'Avisos'}
+          data-teste="sino"
           className="flex items-center justify-center transition-all active:scale-90"
           style={{
             position: 'relative',
@@ -124,7 +126,7 @@ export function TopBar({ userInfo, onLogout, onChangePassword, action, notificac
         >
           <Bell size={16} />
           {notificacoesCount > 0 && (
-            <span style={{
+            <span data-teste="contador-sino" style={{
               position: 'absolute', top: '-4px', right: '-4px',
               backgroundColor: '#B83832', color: '#fff', borderRadius: '10px',
               fontSize: '9px', fontWeight: 900, padding: '1px 4px',
