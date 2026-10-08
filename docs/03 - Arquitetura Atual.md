@@ -36,6 +36,7 @@ As migrations válidas começam no número 100 e são aplicadas via MCP, registr
 | `pontos_controle.escolta_veiculo_id` | `escolta_veiculos(id)` | Não aponta para `escoltas` direto |
 | `checklists.escolta_veiculo_id` | `escolta_veiculos(id)` | `checklists` **não tem** `escolta_id` |
 | `pontos_controle.foto_id` | `fotos(id)` | Escalar. O schema comporta uma foto por ponto; as demais ficam num JSON em `observacoes` |
+| `escolta_efetivo (escolta_id, vigilante_id)` e `escolta_veiculos (escolta_id, veiculo_id)` | índices únicos da 210 (lote 2026-10, onda G, bloco 2) | O mesmo vigilante entra uma vez só em cada escolta, em qualquer viatura, e a mesma placa uma vez só por escolta. As RPCs do mural (204) recusam a repetição com mensagem e invalidam o pedido que esbarrar no índice |
 
 ## Funções
 

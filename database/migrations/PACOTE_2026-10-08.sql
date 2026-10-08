@@ -13,7 +13,7 @@
 --      Depois: segredos telegram_bot_token e telegram_chat_central pela tela Vault do
 --      painel do Supabase (nunca pelo SQL Editor). Responder "aplicado 1".
 --   2. Push das ondas para a master, uma a uma, com o teste de produção depois de cada uma.
---   3. BLOCO 2, logo depois do deploy das ondas A e C. Responder "aplicado 2".
+--   3. BLOCO 2, logo depois do deploy das ondas A, C e G. Responder "aplicado 2".
 --   Cada bloco roda inteiro numa transação: se qualquer comando falhar, nada do bloco fica.
 --   Se o SQL Editor recusar BEGIN/COMMIT, rode migration por migration, na ordem.
 --
@@ -35,9 +35,9 @@ UNION ALL SELECT 'efetivo de escolta aberta com usuario nao ativo (perde acesso 
   FROM public.escolta_efetivo ee JOIN public.escoltas e ON e.id = ee.escolta_id JOIN public.vigilantes v ON v.id = ee.vigilante_id JOIN public.usuarios u ON u.id = v.usuario_id
   WHERE e.status NOT IN ('finalizada', 'cancelada') AND u.status <> 'ativo'
 UNION ALL SELECT 'migrations registradas (ultima)', coalesce(max(version), '-') FROM supabase_migrations.schema_migrations
-UNION ALL SELECT 'vigilante repetido na mesma escolta (210 aborta se > 0)', count(*)::text
+UNION ALL SELECT 'vigilante repetido na mesma escolta (a 210, no bloco 2, aborta se > 0)', count(*)::text
   FROM (SELECT 1 FROM public.escolta_efetivo GROUP BY escolta_id, vigilante_id HAVING count(*) > 1) d
-UNION ALL SELECT 'veiculo repetido na mesma escolta (210 aborta se > 0)', count(*)::text
+UNION ALL SELECT 'veículo repetido na mesma escolta (a 210, no bloco 2, aborta se > 0)', count(*)::text
   FROM (SELECT 1 FROM public.escolta_veiculos GROUP BY escolta_id, veiculo_id HAVING count(*) > 1) d
 ORDER BY 1, 2;
 -- Regra de decisão: policy de storage FOR ALL que mencione o bucket fotos ou que não
@@ -1246,55 +1246,6 @@ DROP TRIGGER IF EXISTS tr_registrar_historico_status ON public.escoltas;
 COMMENT ON FUNCTION public.registrar_historico_status_escolta() IS
   'OBSOLETA: sem trigger desde antes de 08/10/2026 (remoção versionada na 209). O histórico é gravado pela RPC registrar_etapa_escolta (207) e pelo app.';
 
--- ──────── 210_efetivo_unico.sql ────────
--- 210_efetivo_unico.sql
--- Lote 2026-10, onda G (escolta com dois vigilantes). Idempotente. Bloco 1 (antes do
--- deploy; compatível com o código da master, que nunca grava repetição de propósito).
---
--- Por quê (docs/14, seção 10; analise/onda-g.md): escolta_efetivo e escolta_veiculos não
--- tinham restrição única. A tela de criação aceitava o mesmo vigilante duas vezes na
--- escolta (na mesma viatura ou em viaturas diferentes) e a mesma placa em duas viaturas,
--- e o ON CONFLICT DO NOTHING de assumir_escolta não tinha índice em que se apoiar.
---
--- O que faz:
--- 1. Conferência embutida: se já houver vigilante repetido na mesma escolta ou veículo
---    repetido na mesma escolta, aborta sem mudar nada (no backup de 08/10: 0 e 0). A
---    correção desses dados é decisão da gestão, fora deste pacote.
--- 2. Dois índices únicos: (escolta_id, vigilante_id) no efetivo e (escolta_id, veiculo_id)
---    nas viaturas da escolta.
---
--- A auditoria de devolver_escolta não é desta migration: vai na 217 (bloco 2).
---
--- Conferência (esperado: 2 linhas):
--- SELECT indexname FROM pg_indexes WHERE schemaname = 'public'
---  AND indexname IN ('escolta_efetivo_escolta_vigilante_uk', 'escolta_veiculos_escolta_veiculo_uk');
-
-DO $$
-DECLARE
-  v_vig int;
-  v_vei int;
-BEGIN
-  SELECT count(*) INTO v_vig FROM (
-    SELECT 1 FROM public.escolta_efetivo GROUP BY escolta_id, vigilante_id HAVING count(*) > 1
-  ) d;
-  SELECT count(*) INTO v_vei FROM (
-    SELECT 1 FROM public.escolta_veiculos GROUP BY escolta_id, veiculo_id HAVING count(*) > 1
-  ) d;
-  IF v_vig > 0 OR v_vei > 0 THEN
-    RAISE EXCEPTION '210: abortada sem mudar nada. Vigilante repetido na mesma escolta: % caso(s); veículo repetido na mesma escolta: % caso(s). Corrija pela gestão e aplique de novo.', v_vig, v_vei;
-  END IF;
-END $$;
-
-CREATE UNIQUE INDEX IF NOT EXISTS escolta_efetivo_escolta_vigilante_uk
-  ON public.escolta_efetivo (escolta_id, vigilante_id);
-CREATE UNIQUE INDEX IF NOT EXISTS escolta_veiculos_escolta_veiculo_uk
-  ON public.escolta_veiculos (escolta_id, veiculo_id);
-
-COMMENT ON INDEX public.escolta_efetivo_escolta_vigilante_uk IS
-  'Lote 2026-10, onda G (210): o mesmo vigilante entra uma vez só em cada escolta, em qualquer viatura.';
-COMMENT ON INDEX public.escolta_veiculos_escolta_veiculo_uk IS
-  'Lote 2026-10, onda G (210): a mesma viatura entra uma vez só em cada escolta.';
-
 COMMIT;
 
 -- Conferência do bloco 1 (somente leitura):
@@ -1340,22 +1291,18 @@ COMMIT;
 -- (conferência: ver o cabeçalho da migration)
 -- 209_historico_sem_trigger:
 -- (conferência: ver o cabeçalho da migration)
--- 210_efetivo_unico:
--- (conferência: na consulta abaixo, 'indices unicos do efetivo')
 SELECT 'funcoes novas' AS item, count(*)::text AS valor FROM pg_proc WHERE proname IN ('escolta_do_caminho','registrar_etapa_escolta','enfileirar_alerta_checkin','reservar_aviso_presenca','avisos_pelo_banco_ativos','locais_salvos_regras','impedir_combustivel_por_operador','proteger_escala_fixa')
 UNION ALL SELECT 'tabelas novas', count(*)::text FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('alertas_dispensados','avisos_telegram','configuracao_avisos','configuracoes_mural','mural_presencas','mural_pedidos','locais_salvos','avisos_reservados')
 UNION ALL SELECT 'escoltas abertas com periodicidade', count(*)::text FROM public.escoltas WHERE status NOT IN ('finalizada','cancelada') AND periodicidade_checkin_min IS NOT NULL
 UNION ALL SELECT 'locais salvos', string_agg(nome || '=' || situacao, ', ') FROM public.locais_salvos
 UNION ALL SELECT 'troca de senha marcada (Douglas, Bruno)', string_agg(troca_senha_obrigatoria::text, ',') FROM public.usuarios WHERE id IN ('9b0c6047-d9eb-42a5-b980-d87ef7b5f611','130db52b-c966-44d9-aa35-622e24eb953c')
 UNION ALL SELECT 'cron do lote', string_agg(jobname, ', ') FROM cron.job WHERE jobname LIKE 'lote2026%'
-UNION ALL SELECT 'envio pelo banco ativo (true so depois dos segredos no Vault)', public.avisos_pelo_banco_ativos()::text
-UNION ALL SELECT 'indices unicos do efetivo', count(*)::text FROM pg_indexes WHERE schemaname = 'public'
-  AND indexname IN ('escolta_efetivo_escolta_vigilante_uk', 'escolta_veiculos_escolta_veiculo_uk');
+UNION ALL SELECT 'envio pelo banco ativo (true so depois dos segredos no Vault)', public.avisos_pelo_banco_ativos()::text;
 -- Esperado: 8 funções, 8 tabelas, 0 abertas com periodicidade, 5 locais aguardando_conferencia,
--- troca true,true, cron lote2026_avisos_telegram, 2 índices únicos do efetivo.
+-- troca true,true, cron lote2026_avisos_telegram.
 
 -- ════════════════════════════════════════════════════════════════════════════
--- BLOCO 2 (logo depois do deploy das ondas A e C)
+-- BLOCO 2 (logo depois do deploy das ondas A, C e G)
 -- ════════════════════════════════════════════════════════════════════════════
 BEGIN;
 
@@ -2131,6 +2078,59 @@ END $$;
 -- SELECT jobname, active FROM cron.job WHERE jobname LIKE 'lote2026%';          -- 2 linhas
 -- SELECT has_function_privilege('authenticated', 'public._executar_substituicao(uuid, text)', 'EXECUTE'); -- false
 
+-- ──────── 210_efetivo_unico.sql ────────
+-- 210_efetivo_unico.sql
+-- Lote 2026-10, onda G (escolta com dois vigilantes). Idempotente. BLOCO 2: aplicar logo
+-- DEPOIS do deploy, em seguida à 204. Não vai no bloco 1: o formulário da master não
+-- recusa vigilante nem placa repetidos e grava a escolta em várias requisições, sem
+-- transação; com o índice antes do deploy, um engano desses deixaria a escolta pela
+-- metade (revisão adversarial G, achado 2). O formulário novo recusa a repetição antes
+-- de gravar, e as RPCs da 204 tratam o índice com mensagem (sem erro técnico).
+--
+-- Por quê (docs/14, seção 10; analise/onda-g.md): escolta_efetivo e escolta_veiculos não
+-- tinham restrição única. A tela de criação aceitava o mesmo vigilante duas vezes na
+-- escolta (na mesma viatura ou em viaturas diferentes) e a mesma placa em duas viaturas,
+-- e o ON CONFLICT DO NOTHING de assumir_escolta não tinha índice em que se apoiar.
+--
+-- O que faz:
+-- 1. Conferência embutida: se já houver vigilante repetido na mesma escolta ou veículo
+--    repetido na mesma escolta, aborta sem mudar nada (no backup de 08/10: 0 e 0). A
+--    correção desses dados é decisão da gestão, fora deste pacote.
+-- 2. Dois índices únicos: (escolta_id, vigilante_id) no efetivo e (escolta_id, veiculo_id)
+--    nas viaturas da escolta.
+--
+-- A auditoria de devolver_escolta não é desta migration: vai na 217 (bloco 2).
+--
+-- Conferência (esperado: 2 linhas, as duas com indisunique = true):
+-- SELECT c.relname, i.indisunique FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+--  WHERE c.relname IN ('escolta_efetivo_escolta_vigilante_uk', 'escolta_veiculos_escolta_veiculo_uk');
+
+DO $$
+DECLARE
+  v_vig int;
+  v_vei int;
+BEGIN
+  SELECT count(*) INTO v_vig FROM (
+    SELECT 1 FROM public.escolta_efetivo GROUP BY escolta_id, vigilante_id HAVING count(*) > 1
+  ) d;
+  SELECT count(*) INTO v_vei FROM (
+    SELECT 1 FROM public.escolta_veiculos GROUP BY escolta_id, veiculo_id HAVING count(*) > 1
+  ) d;
+  IF v_vig > 0 OR v_vei > 0 THEN
+    RAISE EXCEPTION '210: abortada sem mudar nada. Vigilante repetido na mesma escolta: % caso(s); veículo repetido na mesma escolta: % caso(s). Corrija pela gestão e aplique de novo.', v_vig, v_vei;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS escolta_efetivo_escolta_vigilante_uk
+  ON public.escolta_efetivo (escolta_id, vigilante_id);
+CREATE UNIQUE INDEX IF NOT EXISTS escolta_veiculos_escolta_veiculo_uk
+  ON public.escolta_veiculos (escolta_id, veiculo_id);
+
+COMMENT ON INDEX public.escolta_efetivo_escolta_vigilante_uk IS
+  'Lote 2026-10, onda G (210): o mesmo vigilante entra uma vez só em cada escolta, em qualquer viatura.';
+COMMENT ON INDEX public.escolta_veiculos_escolta_veiculo_uk IS
+  'Lote 2026-10, onda G (210): a mesma viatura entra uma vez só em cada escolta.';
+
 -- ──────── 200_fechar_bucket_fotos.sql ────────
 -- 200_fechar_bucket_fotos.sql
 -- Lote 2026-10, onda A (segurança). Idempotente.
@@ -2276,8 +2276,10 @@ SELECT 'mural_travas_ativas' AS item, public.mural_travas_ativas()::text AS valo
 UNION ALL SELECT 'cron do lote', string_agg(jobname, ', ') FROM cron.job WHERE jobname LIKE 'lote2026%'
 UNION ALL SELECT 'bucket fotos publico (esperado false)', public::text FROM storage.buckets WHERE id = 'fotos'
 UNION ALL SELECT 'policies de leitura do storage', string_agg(policyname, ', ') FROM pg_policies WHERE schemaname = 'storage' AND cmd = 'SELECT'
-UNION ALL SELECT 'escoltas abertas com periodicidade (esperado 0)', count(*)::text FROM public.escoltas WHERE status NOT IN ('finalizada','cancelada') AND periodicidade_checkin_min IS NOT NULL;
--- Esperado: true; lote2026_avisos_telegram, lote2026_pedidos_vencidos; false; fotos_leitura_autenticada; 0.
+UNION ALL SELECT 'escoltas abertas com periodicidade (esperado 0)', count(*)::text FROM public.escoltas WHERE status NOT IN ('finalizada','cancelada') AND periodicidade_checkin_min IS NOT NULL
+UNION ALL SELECT 'índices únicos do efetivo (esperado 2)', count(*)::text FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+  WHERE c.relname IN ('escolta_efetivo_escolta_vigilante_uk', 'escolta_veiculos_escolta_veiculo_uk') AND i.indisunique;
+-- Esperado: true; lote2026_avisos_telegram, lote2026_pedidos_vencidos; false; fotos_leitura_autenticada; 0; 2.
 -- Teste rápido sem escrever dado: abrir em aba anônima a URL pública antiga de uma foto (deve falhar).
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -2302,6 +2304,12 @@ UNION ALL SELECT 'escoltas abertas com periodicidade (esperado 0)', count(*)::te
 -- DROP TABLE IF EXISTS backup_20261008.policies_storage;
 -- DROP FUNCTION IF EXISTS backup_20261008.alcanca_fotos(text);
 -- -- O schema backup_20261008 fica: outras migrations do lote também guardam backup nele.
+
+-- ──────── reverter 210_efetivo_unico ────────
+-- -- 210_efetivo_unico_reverter.sql
+-- -- Tira os dois índices únicos da 210. Nenhum dado muda.
+-- DROP INDEX IF EXISTS public.escolta_efetivo_escolta_vigilante_uk;
+-- DROP INDEX IF EXISTS public.escolta_veiculos_escolta_veiculo_uk;
 
 -- ──────── reverter 204_mural_travas_rpcs ────────
 -- -- 204_mural_travas_rpcs_reverter.sql
@@ -2614,12 +2622,6 @@ UNION ALL SELECT 'escoltas abertas com periodicidade (esperado 0)', count(*)::te
 -- DROP FUNCTION IF EXISTS public._equipe_atual(uuid);
 -- DROP FUNCTION IF EXISTS public._hora_br(timestamptz);
 -- DROP FUNCTION IF EXISTS public._travar_vigilante(uuid);
-
--- ──────── reverter 210_efetivo_unico ────────
--- -- 210_efetivo_unico_reverter.sql
--- -- Tira os dois índices únicos da 210. Nenhum dado muda.
--- DROP INDEX IF EXISTS public.escolta_efetivo_escolta_vigilante_uk;
--- DROP INDEX IF EXISTS public.escolta_veiculos_escolta_veiculo_uk;
 
 -- ──────── reverter 209_historico_sem_trigger ────────
 -- -- 209_historico_sem_trigger_reverter.sql

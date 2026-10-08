@@ -1,6 +1,10 @@
 -- 210_efetivo_unico.sql
--- Lote 2026-10, onda G (escolta com dois vigilantes). Idempotente. Bloco 1 (antes do
--- deploy; compatível com o código da master, que nunca grava repetição de propósito).
+-- Lote 2026-10, onda G (escolta com dois vigilantes). Idempotente. BLOCO 2: aplicar logo
+-- DEPOIS do deploy, em seguida à 204. Não vai no bloco 1: o formulário da master não
+-- recusa vigilante nem placa repetidos e grava a escolta em várias requisições, sem
+-- transação; com o índice antes do deploy, um engano desses deixaria a escolta pela
+-- metade (revisão adversarial G, achado 2). O formulário novo recusa a repetição antes
+-- de gravar, e as RPCs da 204 tratam o índice com mensagem (sem erro técnico).
 --
 -- Por quê (docs/14, seção 10; analise/onda-g.md): escolta_efetivo e escolta_veiculos não
 -- tinham restrição única. A tela de criação aceitava o mesmo vigilante duas vezes na
@@ -16,9 +20,9 @@
 --
 -- A auditoria de devolver_escolta não é desta migration: vai na 217 (bloco 2).
 --
--- Conferência (esperado: 2 linhas):
--- SELECT indexname FROM pg_indexes WHERE schemaname = 'public'
---  AND indexname IN ('escolta_efetivo_escolta_vigilante_uk', 'escolta_veiculos_escolta_veiculo_uk');
+-- Conferência (esperado: 2 linhas, as duas com indisunique = true):
+-- SELECT c.relname, i.indisunique FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+--  WHERE c.relname IN ('escolta_efetivo_escolta_vigilante_uk', 'escolta_veiculos_escolta_veiculo_uk');
 
 DO $$
 DECLARE
