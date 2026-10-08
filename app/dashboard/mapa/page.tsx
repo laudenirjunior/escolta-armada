@@ -433,7 +433,7 @@ export default function MapaPage() {
               .setLngLat([e.origem_lng, e.origem_lat])
               .setPopup(new mapboxgl.Popup({ offset: 12, closeButton: false }).setHTML(
                 `<div style="font-family:system-ui;font-size:10px;font-weight:700;color:#1E7C52">ORIGEM</div>
-                 <div style="font-family:system-ui;font-size:11px;color:#0E1A33;margin-top:2px">${e.origem_endereco?.substring(0, 60)}</div>`
+                 <div style="font-family:system-ui;font-size:11px;color:#0E1A33;margin-top:2px">${esc(e.origem_endereco?.substring(0, 60))}</div>`
               ))
               .addTo(map)
           : new mapboxgl.Marker({ element: origEl }).setLngLat([posLng, posLat])
@@ -454,7 +454,7 @@ export default function MapaPage() {
             .setLngLat([e.destino_lng, e.destino_lat])
             .setPopup(new mapboxgl.Popup({ offset: 20, closeButton: false }).setHTML(
               `<div style="font-family:system-ui;font-size:10px;font-weight:700;color:#B83832">DESTINO</div>
-               <div style="font-family:system-ui;font-size:11px;color:#0E1A33;margin-top:2px">${e.destino_endereco?.substring(0, 60)}</div>`
+               <div style="font-family:system-ui;font-size:11px;color:#0E1A33;margin-top:2px">${esc(e.destino_endereco?.substring(0, 60))}</div>`
             ))
             .addTo(map)
         }

@@ -2480,10 +2480,13 @@ export default function EscoltaDetalhePage() {
         .map(e => `${e.vigilante?.nome_completo ?? '—'}${e.papel_na_escolta ? ` (${e.papel_na_escolta})` : ''}`)
 
       // Última foto de qualquer ponto de controle (mais recente)
-      const ultimaFotoUrl = [...paradas]
+      // Lote 2026-10: a URL guardada na tela pode ter vencido (validade de 1 hora);
+      // assina de novo, a partir do caminho, na hora do envio.
+      const ultimaFotoGuardada = [...paradas]
         .sort((a, b) => new Date(b.data_hora).getTime() - new Date(a.data_hora).getTime())
         .find(p => p.fotoUrls.length > 0)
         ?.fotoUrls[0] ?? null
+      const ultimaFotoUrl = ultimaFotoGuardada ? await urlAssinada(sb, ultimaFotoGuardada) : null
 
       // Duração: desde o primeiro status em_andamento
       const inicioAndamento = [...historico]

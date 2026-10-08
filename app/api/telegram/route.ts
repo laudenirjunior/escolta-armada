@@ -85,6 +85,7 @@ export async function POST(req: NextRequest) {
       chat_id,
     } = body
     const foto_url = fotoPermitida(body.foto_url)
+    const fotoDescartada = Boolean(body.foto_url) && !foto_url
 
     // O chat_id vinha do cliente: qualquer um usava o bot para mandar mensagem
     // a qualquer destino. Agora e resolvido no servidor a partir da escolta.
@@ -133,7 +134,7 @@ export async function POST(req: NextRequest) {
       if (descricao?.trim()) texto += `\n📝 <i>${escaparHtml(String(descricao).trim())}</i>\n`
 
       if (escolta_id) {
-        texto += `\n🔗 <a href="${appUrl}/dashboard/escoltas/${escolta_id}">Abrir Escolta ${escolta_codigo ?? ''}</a>`
+        texto += `\n🔗 <a href="${appUrl}/dashboard/escoltas/${encodeURIComponent(String(escolta_id))}">Abrir Escolta ${escaparHtml(String(escolta_codigo ?? ''))}</a>`
       }
     }
 
@@ -152,7 +153,7 @@ export async function POST(req: NextRequest) {
           console.warn('[telegram] sendPhoto (finalizacao) falhou:', await photoResp.text())
         }
       }
-      return NextResponse.json({ ok: true })
+      return NextResponse.json({ ok: true, foto_descartada: fotoDescartada })
     }
 
     // Demais eventos: foto com caption se houver, senão só texto
@@ -175,7 +176,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ ok: true })
+    return NextResponse.json({ ok: true, foto_descartada: fotoDescartada })
   } catch (err: any) {
     console.error('[telegram]', err)
     return NextResponse.json({ error: err.message }, { status: 500 })

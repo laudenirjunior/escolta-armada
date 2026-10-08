@@ -75,6 +75,8 @@ export default function ClientesPage() {
   const [logoFile, setLogoFile] = useState<File | null>(null)
   const [logoPreview, setLogoPreview] = useState<string>('')
   const [logosAssinadas, setLogosAssinadas] = useState<Record<string, string>>({})
+  // Lote 2026-10: remoção da logo só por ação explícita (a prévia pode ficar vazia se a URL assinada falhar).
+  const [logoRemovida, setLogoRemovida] = useState(false)
   const { user } = useAuth()
   const supabase = createClient()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -99,6 +101,7 @@ export default function ClientesPage() {
 
   const abrirNovo = () => {
     setEditando(null)
+    setLogoRemovida(false)
     setForm(FORM_VAZIO)
     setLogoFile(null)
     setLogoPreview('')
@@ -108,6 +111,7 @@ export default function ClientesPage() {
 
   const abrirEdicao = (c: ClienteRow) => {
     setEditando(c)
+    setLogoRemovida(false)
     setForm({
       nome_cliente: c.nome_cliente,
       cnpj: c.cnpj ?? '',
@@ -135,6 +139,7 @@ export default function ClientesPage() {
   }
 
   const removerLogo = () => {
+    setLogoRemovida(true)
     setLogoFile(null)
     setLogoPreview('')
   }
@@ -187,7 +192,7 @@ export default function ClientesPage() {
           metadados: { ...metaAtual, logo_url: path },
         }).eq('id', clienteId)
       }
-    } else if (!logoPreview && editando?.metadados?.logo_url) {
+    } else if (logoRemovida && editando?.metadados?.logo_url) {
       // Logo foi removida manualmente
       const metaAtual = { ...editando.metadados }
       delete metaAtual.logo_url

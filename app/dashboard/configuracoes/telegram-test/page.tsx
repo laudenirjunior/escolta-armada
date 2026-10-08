@@ -46,7 +46,9 @@ function TelegramTest() {
       })
       const data = await resp.json()
       if (resp.ok && data.ok) {
-        setResultado({ ok: true, msg: '✅ Mensagem enviada com sucesso!' })
+        setResultado({ ok: true, msg: data.foto_descartada
+          ? 'Mensagem enviada sem a foto: só são aceitas fotos do próprio sistema (URL assinada do bucket).'
+          : '✅ Mensagem enviada com sucesso!' })
       } else {
         setResultado({ ok: false, msg: `❌ Erro: ${data.error ?? resp.statusText}` })
       }
