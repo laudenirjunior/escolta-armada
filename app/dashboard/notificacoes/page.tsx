@@ -12,6 +12,10 @@ import { createClient } from '@/lib/supabase/client'
 import { lerObservacao } from '@/lib/pontos-controle'
 import { useAuth } from '@/hooks/useAuth'
 import { urlsAssinadas, urlDoMapa } from '@/lib/fotos-url'
+import { PERFIS_GESTAO } from '@/lib/permissions'
+import type { CodigoPerfil } from '@/lib/permissions'
+import { CentralAvisos } from '@/components/avisos/central-avisos'
+import { useAvisos } from '@/components/avisos-provider'
 
 const sb = createClient() as any
 const sbStorage = createClient()
@@ -155,7 +159,12 @@ export default function NotificacoesPage() {
   const { user } = useAuth()
   const router = useRouter()
 
-  const [tab, setTab] = useState<'notificacoes' | 'chat'>('notificacoes')
+  // Lote 2026-10 (onda J): a aba padrão é a Central (avisos pessoais, com lida e não
+  // lida). O feed de eventos vira a aba Atividade, só para a gestão e fora do contador.
+  const [tab, setTab] = useState<'central' | 'notificacoes' | 'chat'>('central')
+  const perfil = user?.perfil?.codigo as CodigoPerfil | undefined
+  const ehGestao = !!perfil && PERFIS_GESTAO.includes(perfil)
+  const { naoLidas } = useAvisos()
 
   const [notificacoes, setNotificacoes] = useState<NotificacaoFeed[]>([])
   const [loadingNot, setLoadingNot] = useState(true)
@@ -318,7 +327,7 @@ export default function NotificacoesPage() {
     setUsuarios((data ?? []) as ChatUser[])
   }, [user?.id])
 
-  useEffect(() => { carregarNotificacoes() }, [carregarNotificacoes])
+  useEffect(() => { if (ehGestao) carregarNotificacoes() }, [carregarNotificacoes, ehGestao])
   useEffect(() => { carregarUsuarios() }, [carregarUsuarios])
 
   const carregarMensagens = useCallback(async () => {
@@ -335,6 +344,7 @@ export default function NotificacoesPage() {
   useEffect(() => { msgEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [mensagens])
 
   useEffect(() => {
+    if (!ehGestao) return
     const ch = sb.channel('notif-feed-v3')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'pontos_controle' }, () => carregarNotificacoes())
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ocorrencias' }, () => carregarNotificacoes())
@@ -342,7 +352,7 @@ export default function NotificacoesPage() {
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'presencas' }, () => carregarNotificacoes())
       .subscribe()
     return () => { sb.removeChannel(ch) }
-  }, [carregarNotificacoes])
+  }, [carregarNotificacoes, ehGestao])
 
   useEffect(() => {
     if (!chatSelecionado) return
@@ -403,16 +413,21 @@ export default function NotificacoesPage() {
           <div className="eyebrow-tag mb-2">
             <Radio size={10} />Central de Comunicações · Tempo Real
           </div>
-          <h1 className="page-title" style={{ marginBottom: '2px' }}>Notificações & Chat</h1>
-          <p className="page-subtitle">{loadingNot ? 'Carregando...' : `${counts.total} eventos · ${counts.comFoto} com foto`}</p>
+          <h1 className="page-title" style={{ marginBottom: '2px' }}>Avisos</h1>
+          <p className="page-subtitle">
+            {tab === 'central' ? (naoLidas === 1 ? '1 aviso não lido' : `${naoLidas} avisos não lidos`)
+              : tab === 'chat' ? 'Chat interno'
+              : loadingNot ? 'Carregando...' : `${counts.total} eventos · ${counts.comFoto} com foto`}
+          </p>
         </div>
 
         {/* Tabs */}
         <div className="flex gap-0.5 self-start sm:self-auto shrink-0" style={{ backgroundColor: '#E2E6F0', padding: '3px', borderRadius: '3px' }}>
           {([
-            { key: 'notificacoes', label: 'Notificações', icon: <Bell size={12} /> },
+            { key: 'central', label: 'Central', icon: <Bell size={12} /> },
+            ...(ehGestao ? [{ key: 'notificacoes', label: 'Atividade', icon: <Radio size={12} /> }] : []),
             { key: 'chat', label: 'Chat Interno', icon: <MessageSquare size={12} /> },
-          ] as const).map(t => (
+          ] as { key: 'central' | 'notificacoes' | 'chat'; label: string; icon: React.ReactNode }[]).map(t => (
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
@@ -426,10 +441,10 @@ export default function NotificacoesPage() {
                 boxShadow: tab === t.key ? '0 1px 4px rgba(26,41,74,0.3)' : 'none',
               }}
             >
-              {t.icon}<span className="hidden xs:inline sm:hidden md:inline">{t.label}</span>
-              {t.key === 'notificacoes' && counts.total > 0 && (
-                <span style={{ backgroundColor: tab === 'notificacoes' ? 'rgba(255,255,255,0.2)' : '#B83832', color: '#fff', borderRadius: '10px', fontSize: '9px', fontWeight: 900, padding: '1px 6px', minWidth: '18px', textAlign: 'center' }}>
-                  {counts.total}
+              {t.icon}<span>{t.label}</span>
+              {t.key === 'central' && naoLidas > 0 && (
+                <span style={{ backgroundColor: tab === 'central' ? 'rgba(255,255,255,0.2)' : '#B83832', color: '#fff', borderRadius: '10px', fontSize: '9px', fontWeight: 900, padding: '1px 6px', minWidth: '18px', textAlign: 'center' }}>
+                  {naoLidas > 99 ? '99+' : naoLidas}
                 </span>
               )}
             </button>
@@ -437,8 +452,11 @@ export default function NotificacoesPage() {
         </div>
       </div>
 
-      {/* ══════════ NOTIFICAÇÕES ══════════ */}
-      {tab === 'notificacoes' && (
+      {/* ══════════ CENTRAL ══════════ */}
+      {tab === 'central' && <CentralAvisos perfil={perfil} />}
+
+      {/* ══════════ ATIVIDADE (feed de eventos, só gestão) ══════════ */}
+      {tab === 'notificacoes' && ehGestao && (
         <div className={`grid gap-3 md:gap-4 items-start ${selecionada ? 'grid-cols-1 lg:grid-cols-[1fr_340px]' : 'grid-cols-1 lg:grid-cols-[1fr_200px]'}`}>
 
           {/* ── Feed principal ── */}
