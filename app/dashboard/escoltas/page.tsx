@@ -73,9 +73,19 @@ export default function EscoltasPage() {
   // Lote 2026-10 (M5): estado das travas, lido do servidor (mural_info).
   const [infoMural, setInfoMural] = useState<MapaInfoMural>({})
   const [travasAtivas, setTravasAtivas] = useState(false)
-  const { user } = useAuth()
+  const { user, loading: carregandoAuth } = useAuth()
   const router = useRouter()
   const perfil = (user?.perfil?.codigo ?? '') as any
+  // Onda G: sem perfil a lista não carrega (sairia como não operador). Se o perfil não
+  // chegar (conta sem perfil, leitura falhou, sessão perdida), a tela não fica presa em
+  // "Carregando": mostra a mensagem depois do login terminar, ou de 15 s no máximo.
+  const [semPerfil, setSemPerfil] = useState(false)
+  useEffect(() => {
+    if (perfil) { setSemPerfil(false); return }
+    if (!carregandoAuth) { setSemPerfil(true); setLoading(false); return }
+    const t = setTimeout(() => { setSemPerfil(true); setLoading(false) }, 15_000)
+    return () => clearTimeout(t)
+  }, [perfil, carregandoAuth])
 
   // Onda G: decide a aba inicial do operador só uma vez, depois da primeira carga feita
   // já como operador (ver o fim de carregar()).
@@ -83,8 +93,8 @@ export default function EscoltasPage() {
 
   const carregar = useCallback(async () => {
     // Onda G: enquanto o login não termina, o perfil é vazio e a carga sairia como se
-    // fosse de não operador, sem as escoltas dele. Espera o usuário chegar.
-    if (!user) return
+    // fosse de não operador, sem as escoltas dele. Espera o usuário e o perfil chegarem.
+    if (!user || !perfil) return
     setLoading(true)
     let q = sb
       .from('escoltas')
@@ -134,17 +144,23 @@ export default function EscoltasPage() {
     // esconde o efetivo dos colegas e toda escolta de outra dupla pareceria livre. Sem
     // mural_info (minutos entre o deploy e o bloco 2), toda escolta conta como com equipe.
     const agendadas = rows.filter(e => e.status === 'agendada').map(e => e.id)
+    // Falha passageira (rede, tempo esgotado), já com uma nova tentativa: mantém o último
+    // estado lido e não escolhe a aba com base nela.
     const lido = await lerInfoMural(sb, agendadas)
-    setTravasAtivas(lido.ativo)
-    setInfoMural(lido.info)
     const livres = lido.ativo ? agendadas.filter(id => lido.info[id] && !lido.info[id].tem_equipe) : []
-    setSemEquipeIds(livres)
+    if (lido.falhou) {
+      setSemEquipeIds(ant => ant.filter(id => agendadas.includes(id)))
+    } else {
+      setTravasAtivas(lido.ativo)
+      setInfoMural(lido.info)
+      setSemEquipeIds(livres)
+    }
 
     // Operador sem escolta nenhuma cai numa lista vazia e não descobre sozinho que existe
     // uma aba com escoltas para pegar. Nesse caso a tela já abre no mural. Onda G: a
     // escolha é feita aqui, com as escoltas dele já calculadas, e uma vez só; depois
     // disso a escolha é dele.
-    if (perfil === 'operador' && !jaEscolheuModo.current) {
+    if (perfil === 'operador' && !jaEscolheuModo.current && !lido.falhou) {
       jaEscolheuModo.current = true
       const minhas = rows.filter(e => escoltaIdsOperador.includes(e.id)).length
       const livresVisiveis = livres.filter(id => !escoltaIdsOperador.includes(id) && !lido.info[id]?.escala_fixa)
@@ -162,6 +178,7 @@ export default function EscoltasPage() {
     const t = setInterval(async () => {
       const ids = escoltas.filter(e => e.status === 'agendada').map(e => e.id)
       const lido = await lerInfoMural(sb, ids)
+      if (lido.falhou) return
       setTravasAtivas(lido.ativo)
       setInfoMural(lido.info)
       setSemEquipeIds(lido.ativo ? ids.filter(id => lido.info[id] && !lido.info[id].tem_equipe) : [])
@@ -201,6 +218,8 @@ export default function EscoltasPage() {
 
   const ehOperador = perfil === 'operador'
   const qtdMinhas = escoltas.filter(e => minhasEscoltaIds.includes(e.id)).length
+  // Contador da aba Disponíveis: o mesmo recorte da lista (escala fixa some do mural).
+  const qtdDisponiveis = semEquipeIds.filter(id => !infoMural[id]?.escala_fixa && !minhasEscoltaIds.includes(id)).length
   const podeEditar = PODE_EDITAR_ESCOLTA.includes(perfil)
 
   /**
@@ -530,7 +549,7 @@ export default function EscoltasPage() {
           <div className="inline-flex p-1 rounded-lg" style={{ backgroundColor: '#EEF0F5', border: '1px solid #E2E8EC' }}>
             {([
               { val: 'minhas' as const, label: `Minha${minhasEscoltaIds.length > 1 ? 's' : ''} Escolta${minhasEscoltaIds.length > 1 ? 's' : ''}` },
-              { val: 'disponiveis' as const, label: `Disponíveis${semEquipeIds.length ? ` (${semEquipeIds.length})` : ''}` },
+              { val: 'disponiveis' as const, label: `Disponíveis${qtdDisponiveis ? ` (${qtdDisponiveis})` : ''}` },
               { val: 'todas' as const, label: 'Todas as Ativas' },
             ]).map(opt => (
               <button
@@ -773,7 +792,20 @@ export default function EscoltasPage() {
       </div>
 
       {/* ── Listagem de Escoltas ── */}
-      {loading ? (
+      {semPerfil ? (
+        <div className="py-12 px-4 text-center space-y-3" data-aviso="sem-perfil">
+          <p className="text-sm font-bold" style={{ color: '#B83832' }}>
+            Não foi possível carregar o seu perfil de acesso.
+          </p>
+          <p className="text-xs" style={{ color: '#6B7E8A' }}>
+            Recarregue a página ou entre de novo. Se continuar, fale com o administrador.
+          </p>
+          <button type="button" onClick={() => window.location.reload()}
+            className="px-4 text-xs font-bold" style={{ minHeight: '44px', border: '1px solid #C8D5DC', color: '#5A6A80' }}>
+            Recarregar
+          </button>
+        </div>
+      ) : loading ? (
         <div className="py-16 flex items-center justify-center gap-3">
           <div className="w-5 h-5 rounded border-2 border-t-transparent animate-spin"
             style={{ borderColor: '#4A90A4', borderTopColor: 'transparent' }} />

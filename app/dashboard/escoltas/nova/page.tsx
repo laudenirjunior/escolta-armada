@@ -34,7 +34,7 @@ const P = {
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface ClienteOpt    { id: string; nome_cliente: string; cor_destaque: string; valor_padrao_escolta: number | null; metadados: Record<string, unknown> | null }
 interface VeiculoOpt    { id: string; placa: string; modelo: string | null; tipo: { nome: string } | null }
-interface VigilanteOpt  { id: string; nome_completo: string; funcao: { nome: string } | null; valor_padrao_pago: number | null; usuario_id: string | null }
+interface VigilanteOpt  { id: string; nome_completo: string; funcao: { nome: string } | null; valor_padrao_pago: number | null; usuario_id: string | null; usuario: { status: string } | null }
 
 interface MembroForm    { uid: string; vigilante_id: string; papel_na_escolta: 'comandante' | 'operador'; valor_pago: string }
 
@@ -444,7 +444,7 @@ function FormularioEscolta() {
     const [{ data: cls }, { data: vcs }, { data: vgs }] = await Promise.all([
       sb.from('clientes').select('id, nome_cliente, cor_destaque, valor_padrao_escolta, metadados').eq('status', 'ativo').order('nome_cliente'),
       sb.from('veiculos').select('id, placa, modelo, tipo:dom_tipos_veiculo(nome)').eq('status', 'ativo').order('placa'),
-      sb.from('vigilantes').select('id, nome_completo, funcao:dom_funcoes(nome), valor_padrao_pago, usuario_id').eq('status', 'ativo').order('nome_completo'),
+      sb.from('vigilantes').select('id, nome_completo, funcao:dom_funcoes(nome), valor_padrao_pago, usuario_id, usuario:usuarios!vigilantes_usuario_id_fkey(status)').eq('status', 'ativo').order('nome_completo'),
     ])
     setClientes(cls ?? [])
     setVeiculos(vcs ?? [])
@@ -1293,6 +1293,18 @@ function FormularioEscolta() {
                                 Este vigilante não tem acesso ao aplicativo e não verá a escolta.
                               </p>
                             )}
+                            {/* Conta inativa, bloqueada ou pendente também não vê a escolta. */}
+                            {(() => {
+                              const st = vigilantes.find(v => v.id === m.vigilante_id && v.usuario_id)?.usuario?.status
+                              if (!st || st === 'ativo') return null
+                              const rotulo: Record<string, string> = { inativo: 'inativa', bloqueado: 'bloqueada', pendente: 'pendente de aprovação' }
+                              return (
+                                <p className="mt-1 text-[11px] font-bold leading-snug" data-aviso="vigilante-conta-sem-acesso"
+                                  style={{ color: '#8A5A10' }}>
+                                  A conta deste vigilante está {rotulo[st] ?? 'sem acesso'} e ele não verá a escolta.
+                                </p>
+                              )
+                            })()}
                           </div>
 
                           {/* Papel + valor + botão remover em linha no mobile */}

@@ -25,16 +25,27 @@ export function horaBrasilia(iso: string | null | undefined): string {
   return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })
 }
 
-/** Lê o estado do mural. `ativo` falso: a migration 204 ainda não foi aplicada. */
+// Função ausente (master sem a 204) ou sem permissão: o mural antigo vale. Qualquer outro
+// erro (rede, tempo esgotado, 500) é passageiro.
+const CODIGOS_SEM_TRAVAS = ['PGRST202', '42883', '42501']
+
+/**
+ * Lê o estado do mural. `ativo` falso: a migration 204 ainda não foi aplicada.
+ * Onda G: erro passageiro ganha uma nova tentativa; se persistir, volta `falhou` e a
+ * tela mantém o último estado lido em vez de tratar o mural como desligado.
+ */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function lerInfoMural(sb: any, ids: string[]): Promise<{ ativo: boolean; info: MapaInfoMural }> {
-  if (ids.length === 0) {
-    const { error } = await sb.rpc('mural_travas_ativas')
-    return { ativo: !error, info: {} }
+export async function lerInfoMural(sb: any, ids: string[]): Promise<{ ativo: boolean; info: MapaInfoMural; falhou?: boolean }> {
+  const chamar = () => ids.length === 0 ? sb.rpc('mural_travas_ativas') : sb.rpc('mural_info', { p_escolta_ids: ids })
+  const semTravas = (e: { code?: string } | null) => Boolean(e && CODIGOS_SEM_TRAVAS.includes(e.code ?? ''))
+  let r = await chamar().catch((e: unknown) => ({ data: null, error: { message: String(e) } }))
+  if (r.error && !semTravas(r.error)) {
+    await new Promise(ok => setTimeout(ok, 1500))
+    r = await chamar().catch((e: unknown) => ({ data: null, error: { message: String(e) } }))
   }
-  const { data, error } = await sb.rpc('mural_info', { p_escolta_ids: ids })
-  if (error) return { ativo: false, info: {} }
-  return { ativo: true, info: (data ?? {}) as MapaInfoMural }
+  if (!r.error) return { ativo: true, info: ids.length === 0 ? {} : ((r.data ?? {}) as MapaInfoMural) }
+  if (semTravas(r.error)) return { ativo: false, info: {} }
+  return { ativo: false, info: {}, falhou: true }
 }
 
 /** GPS do aparelho, sem bloquear: sem sinal ou sem permissão volta null. */
