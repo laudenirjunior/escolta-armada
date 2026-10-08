@@ -181,7 +181,7 @@ Operador: nenhum cadastro; vê o rótulo novo dos pontos. Supervisor: atalhos e 
 
 ### 5.1 Migration `206_combustivel.sql` (bloco 1)
 
-Trigger `impedir_combustivel_por_operador` em `escolta_veiculos` (BEFORE UPDATE, SECURITY DEFINER, sem GRANT): quem não é G4 não altera `abastecimento_litros` nem `abastecimento_valor`. CHECK de não negativo com `NOT VALID` e `VALIDATE`.
+Trigger `impedir_combustivel_por_operador` em `escolta_veiculos` (BEFORE UPDATE, SECURITY DEFINER, sem GRANT): quem não é G4 não altera `abastecimento_litros` nem `abastecimento_valor`. (Na execução: os CHECK de não negativo já existiam em produção; a 206 não cria outro.)
 
 ### 5.2 Código
 

@@ -28,10 +28,17 @@ export function CombustivelViaturas({ viaturas, onSalvo }: { viaturas: ViaturaCo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chave])
 
-  const numero = (s: string) => s.trim() === '' ? null : Number(s.replace(',', '.'))
+  // Formato brasileiro: "1.250,50" e "1.250" são mil duzentos e cinquenta; "12,5" é doze e meio.
+  const numero = (s: string) => {
+    const t = s.trim().replace(/\s|R\$/g, '')
+    if (t === '') return null
+    if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(t)) return Number(t.replace(/\./g, '').replace(',', '.'))
+    return Number(t.replace(',', '.'))
+  }
 
   const salvar = async () => {
     setSalvando(true); setMsg(null)
+    let gravadas = 0
     for (const v of viaturas) {
       const litros = numero(valores[v.id]?.litros ?? ''), valor = numero(valores[v.id]?.valor ?? '')
       if ((litros != null && (!Number.isFinite(litros) || litros < 0)) || (valor != null && (!Number.isFinite(valor) || valor < 0))) {
@@ -41,11 +48,15 @@ export function CombustivelViaturas({ viaturas, onSalvo }: { viaturas: ViaturaCo
       const { data, error } = await sb.from('escolta_veiculos')
         .update({ abastecimento_litros: litros, abastecimento_valor: valor }).eq('id', v.id).select('id')
       if (error || !data?.length) {
-        setMsg({ ok: false, texto: `${v.rotulo}: não foi possível salvar (${error?.message ?? 'sem permissão'}).` }); setSalvando(false); return
+        setMsg({ ok: false, texto: `${v.rotulo}: não foi possível salvar (${error?.message ?? 'sem permissão'}).${gravadas ? ' As viaturas anteriores foram salvas.' : ''}` })
+        setSalvando(false); if (gravadas) onSalvo(); return
       }
+      gravadas++
     }
-    setMsg({ ok: true, texto: 'Combustível salvo. Já entra no custo total, nos Indicadores e no PDF.' })
-    setSalvando(false); onSalvo()
+    setMsg(gravadas
+      ? { ok: true, texto: 'Combustível salvo. Já entra no custo total, nos Indicadores e no PDF.' }
+      : { ok: true, texto: 'Nada mudou: os valores já estavam salvos.' })
+    setSalvando(false); if (gravadas) onSalvo()
   }
 
   return (

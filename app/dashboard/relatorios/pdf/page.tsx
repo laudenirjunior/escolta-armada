@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { urlAssinada, VALIDADE_IMPRESSAO_S } from '@/lib/fotos-url'
+import { useAuth } from '@/hooks/useAuth'
 
 const sb = createClient() as any
 
@@ -749,10 +750,21 @@ function RelatoriosPDFConteudo() {
   )
 }
 
-export default function RelatoriosPDFPage() {
+function RelatoriosPDFComSuspense() {
   return (
     <Suspense fallback={<div style={{ padding: 40, fontFamily: 'system-ui', color: '#5A6A80' }}>Carregando relatorio...</div>}>
       <RelatoriosPDFConteudo />
     </Suspense>
   )
+}
+
+// Lote 2026-10 (M3): o PDF traz financeiro e combustível. Só os perfis do menu Relatórios
+// abrem; antes o operador abria a URL direto e via o custo das próprias escoltas.
+export default function RelatoriosPDFPage() {
+  const { user, loading } = useAuth()
+  if (loading) return null
+  if (!['administrador', 'gestor', 'supervisor', 'central'].includes((user?.perfil?.codigo ?? '') as string)) {
+    return <div className="p-6 text-sm">Acesso restrito à gestão.</div>
+  }
+  return <RelatoriosPDFComSuspense />
 }
