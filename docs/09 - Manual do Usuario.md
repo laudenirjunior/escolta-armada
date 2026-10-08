@@ -89,7 +89,7 @@ A regra real vive em `lib/permissions.ts`. Abaixo, o essencial para os dois perf
 Dois pontos que valem destaque:
 
 - **O Supervisor entra em Usuários com escopo restrito:** ele cria e edita apenas o perfil Operador. Não mexe em Gestor, Administrador ou Central.
-- **O Operador pode assumir uma escolta agendada e escolher quem vai junto, mas não altera o que foi contratado.** A regra está na tela e também no banco.
+- **O Operador pode puxar uma escolta agendada livre e escolher quem vai junto, mas não altera o que foi contratado.** Substituir uma equipe escalada passa pelas regras do mural (B2). A regra está na tela e também no banco.
 
 ---
 
@@ -162,7 +162,13 @@ Botão **Nova Escolta**, dentro de Escoltas. O assistente tem **três fases** no
 
 ### Fase 01: Dados da Escolta
 
-Bloco **Identificação da Missão**. Aqui entram **Cliente Contratante**, **Data** e **Hora de Partida**, **Endereço de Origem** e **Endereço de Destino** (escolhidos de uma lista de sugestões, não digitados livres), os complementos de cada endereço, observações e a **periodicidade de check-in em rota**. Um bloco de **Dados Financeiros** (valor cobrado, outros custos, observação) aparece só para Supervisor e acima.
+Bloco **Identificação da Missão**. Aqui entram **Cliente Contratante**, **Data** e **Hora de Partida**, **Endereço de Origem** e **Endereço de Destino** (escolhidos de uma lista de sugestões, não digitados livres), os complementos de cada endereço e observações. Desde o lote de outubro de 2026, o check-in periódico em rota vem **desligado** e o campo de periodicidade não aparece; ele só volta para o cliente que tiver o check-in religado no cadastro (ver B6). Um bloco de **Dados Financeiros** (valor cobrado, outros custos, observação) aparece só para Supervisor e acima.
+
+**Locais salvos e conferência no mapa (outubro de 2026).** Acima de origem e destino aparecem os **atalhos** dos locais salvos ativos (por exemplo JAMEF, Sede): um toque preenche endereço, complemento e coordenada, sem passar pela busca. Endereço escolhido na busca abre um **mapa com pino**: arraste o pino até o portão ou a doca e marque **Conferido no mapa**, sem o que a escolta não é salva. A lista de sugestões mostra bairro e município em destaque e avisa quando a sugestão não tem número. Supervisor ou acima pode usar **Salvar este endereço como local**; o local nasce aguardando conferência.
+
+**Configurações, Locais salvos.** Supervisor, gestor e administrador cadastram e editam; só **gestor e administrador** conferem o pino e ativam. Só local ativo vira atalho. Mudar a coordenada de um local ativo devolve o local para conferência.
+
+**Pontos de controle.** A coordenada do GPS é a verdade. Ponto a até 100 metros de um local salvo ativo aparece como "Local: nome, endereço"; os demais mostram o endereço por extenso marcado como aproximado, com a precisão do GPS.
 
 `[PRINT P11]`
 
@@ -234,7 +240,7 @@ Além da tela de detalhe, o Supervisor tem duas telas de monitoramento.
 
   `[PRINT P23]`
 
-O sistema também dispara um **alerta de check-in atrasado** quando uma escolta passa da periodicidade sem reportar. O atraso não passa despercebido.
+Quando o check-in periódico está ligado para a escolta, o sistema dispara um **alerta de check-in atrasado** se a escolta passa da periodicidade sem reportar. Fechar o aviso no X vale para quem fechou, naquela escolta, até haver mudança real: um novo check-in, uma nova etapa ou outra periodicidade. Recarregar a página ou passar mais tempo não faz o aviso voltar.
 
 `[PRINT P24]`
 
@@ -274,7 +280,7 @@ Regras que valem no painel:
 - **Duas ou mais viaturas**: o painel pede a viatura do registro, já marcando a sua. Dá para trocar e registrar por outra viatura da mesma escolta. A etapa só avança quando todas as viaturas registram; enquanto isso aparece "Aguardando registro da viatura ...".
 - **Confirmação**: depois de cada registro aparece uma tela verde com o horário e a Próxima Ação. Ela só aparece se o registro foi de fato gravado.
 - **Pré-início, chegada na base, finalização e parada** abrem a tela da escolta no diálogo certo. Ao concluir, o sistema volta sozinho para o painel.
-- **Check-in atrasado** vira a Próxima Ação, em vermelho. O aviso de atraso tem o botão **Registrar Check-in**, que abre o registro direto.
+- **Check-in atrasado** (só quando o check-in periódico está ligado para a escolta) vira a Próxima Ação, em vermelho. O aviso de atraso tem o botão **Registrar Check-in**, que abre o registro direto.
 - **Ver tela completa**, no rodapé, desliga o Modo Guiado neste aparelho. O botão **Voltar ao Modo Guiado**, no topo da tela completa, liga de novo.
 
 ## B1. A tela de Campo
@@ -289,12 +295,22 @@ Quando não há escolta ativa, a tela diz "Nenhuma escolta ativa". É o sinal de
 
 Em **Escoltas**, o Operador tem um alternador de três modos: **Minhas Escoltas**, **Disponíveis** e **Todas as Ativas**. A aba **Disponíveis** é o mural: escoltas agendadas esperando equipe.
 
-- Escolta **sem equipe:** botão **Puxar**. O Operador vira o comandante e escolhe quem vai junto.
-- Escolta **já escalada:** badge "já escalada" e botão **Assumir**.
+- Escolta **sem equipe:** botão **Puxar**. O Operador vira o comandante e escolhe quem vai junto. Não dá para ser comandante de duas escoltas agendadas com menos de 6 horas entre elas.
+- Escolta **já escalada:** badge "já escalada". Antes da janela aparece "Substituição a partir das HH:MM"; dentro dela, o botão **Pedir**.
+- Escolta de **escala fixa** não aparece no mural: a equipe é definida pela supervisão.
 
 `[PRINT P26]`
 
-Assumir uma escolta que já tem equipe **exige confirmação e um motivo escrito** (mínimo de cinco caracteres), porque a equipe anterior será substituída e isso fica no histórico. Enquanto a escolta não começa, dá para **Devolver** ao mural.
+Regras do mural desde o lote de outubro de 2026 (travas T1 a T7):
+
+1. **Janela:** pedir uma escolta que já tem equipe só a partir de **60 minutos antes** da hora prevista.
+2. **Presença:** a equipe escalada confirma **Estou na base** (no mural ou no Painel Guiado, a partir do início da janela). Com a presença confirmada, ninguém assume a escolta.
+3. **Pedido:** dentro da janela e sem presença, assumir vira um **pedido à supervisão**, com motivo de **no mínimo 20 caracteres**. Supervisor, gestor ou administrador aprova ou recusa na tela **Substituições**. **Sem resposta em 15 minutos**, o pedido é liberado automaticamente pelo sistema e quem pediu assume.
+4. **Aviso:** a equipe substituída e a supervisão recebem aviso no aplicativo; o chat central do Telegram recebe uma mensagem por evento.
+5. **Escala fixa:** marcada pela supervisão no formulário da escolta; some do mural e só a supervisão muda a equipe.
+6. **Registro:** puxar, pedir, decidir, substituir, devolver, incluir e confirmar presença ficam na auditoria; a tela **Substituições** mostra o histórico (quem, de quem, quando, antecedência, motivo, quem decidiu ou se foi liberado por tempo).
+
+Os números (60 minutos, 15 minutos, 6 horas) são os padrões e podem ser ajustados por gestor ou administrador na tela Substituições. Enquanto a escolta não começa, o comandante pode **Devolver** ao mural, salvo em escala fixa.
 
 `[PRINT P27]`
 
@@ -341,7 +357,8 @@ Em dois momentos aparece um checklist: o **Pré-Saída** (na preparação) e o *
 
 Durante o trajeto, o Operador mantém o pulso da operação. Estas duas ações ficam no **Painel de Ações do Operador**, na tela de detalhe da escolta.
 
-- **Check-in:** a periodicidade é configurável (de 10 a 120 minutos). Quando vence, o botão fica vermelho e avisa "CHECK-IN ATRASADO". O diálogo pede **foto (mínimo 1)** e usa o **GPS**. Aqui, ao contrário do checkpoint, **o botão de confirmar fica bloqueado sem GPS e sem foto**.
+- **Check-in periódico desligado por padrão (outubro de 2026):** as fotos de cada etapa já registram a posição. O botão **Registrar Check-in** continua em Outras Ações para quem quiser reportar a posição entre etapas. Para religar o check-in obrigatório de um cliente, é preciso gravar `checkin_periodico_min` (em minutos) nos metadados do cliente, hoje só pelo SQL Editor (não há tela para isso); aí o campo volta ao formulário de escolta desse cliente.
+- **Check-in, quando ligado:** a periodicidade é configurável (de 10 a 120 minutos). Quando vence, o botão fica vermelho e avisa "CHECK-IN ATRASADO". O diálogo pede **foto (mínimo 1)** e usa o **GPS**. Aqui, ao contrário do checkpoint, **o botão de confirmar fica bloqueado sem GPS e sem foto**.
 - **Registrar Parada:** para qualquer parada não prevista (abastecimento, refeição, blitz, manutenção, entre outras). Pede o tipo, **foto** e **justificativa**, ambos obrigatórios.
 
 `[PRINT P33]`

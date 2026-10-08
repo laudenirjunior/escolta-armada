@@ -21,7 +21,7 @@ import {
   PODE_ALTERAR_PERIODICIDADE,
 } from '@/lib/permissions'
 import { podeOperarEscolta } from '@/lib/acesso-escolta'
-import { minutosAteCheckin as calcularMinutosAteCheckin, inicioOperacaoEm, registrarCheckin, TIPO_CHECKIN } from '@/lib/checkin'
+import { minutosAteCheckin as calcularMinutosAteCheckin, inicioOperacaoEm, registrarCheckin, TIPO_CHECKIN, periodicidadePadraoDoCliente } from '@/lib/checkin'
 import { useModoGuiado } from '@/hooks/useModoGuiado'
 import {
   LABELS_STATUS,
@@ -42,6 +42,9 @@ import {
   modeloRelatorioFinal,
 } from '@/lib/textos-padrao'
 import { serializarObservacao, lerObservacao, fotoIdsDoPonto } from '@/lib/pontos-controle'
+import { urlsAssinadas, urlDoMapa, urlAssinada } from '@/lib/fotos-url'
+import { carregarLocaisAtivos } from '@/lib/locais'
+import { rotuloDoPonto } from '@/lib/rotulo-ponto'
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -57,7 +60,7 @@ interface EscoltaDetalhe {
   checklist_pendente_no_inicio: boolean
   criada_por: string
   criado_em: string
-  cliente: { id: string; nome_cliente: string; cor_destaque: string; telefone: string } | null
+  cliente: { id: string; nome_cliente: string; cor_destaque: string; telefone: string; metadados?: Record<string, unknown> | null } | null
   valor_cobrado: number | null
   outros_custos: number | null
   observacao_financeira: string | null
@@ -133,6 +136,8 @@ interface TimelineItem {
   descricao: string | null
   usuario: string | null
   coordenadas?: { lat: number; lng: number } | null
+  /** Lote 2026-10 (M1): local salvo próximo ou endereço reverso marcado como aproximado. */
+  rotulo?: string | null
   foto_url?: string | null
   /** Todas as fotos do evento. `foto_url` continua sendo a primeira, por compatibilidade. */
   foto_urls?: string[]
@@ -798,7 +803,7 @@ export default function EscoltaDetalhePage() {
         checklist_pendente_no_inicio, criada_por, criado_em,
         valor_cobrado, outros_custos, observacao_financeira,
         periodicidade_checkin_min,
-        cliente:clientes(id, nome_cliente, cor_destaque, telefone)
+        cliente:clientes(id, nome_cliente, cor_destaque, telefone, metadados)
       `)
       .eq('id', id)
       .maybeSingle()
@@ -869,7 +874,7 @@ export default function EscoltaDetalhePage() {
     const { data: pts } = viaturaIds.length > 0
       ? await sb
           .from('pontos_controle')
-          .select(`id, escolta_veiculo_id, data_hora, latitude, longitude, sem_sinal_gps, lancado_por, observacoes, tipo:dom_tipos_ponto(codigo, nome_exibicao), foto:fotos(id, caminho_arquivo), autor:usuarios!lancado_por(nome_completo)`)
+          .select(`id, escolta_veiculo_id, data_hora, latitude, longitude, precisao_metros, sem_sinal_gps, lancado_por, observacoes, tipo:dom_tipos_ponto(codigo, nome_exibicao), foto:fotos(id, caminho_arquivo), autor:usuarios!lancado_por(nome_completo)`)
           .in('escolta_veiculo_id', viaturaIds)
       : { data: null }
 
@@ -892,10 +897,10 @@ export default function EscoltaDetalhePage() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const getFotoUrl = (foto: any) => {
       if (!foto) return null
-      const path = foto.caminho_arquivo as string
-      if (path.startsWith('http://') || path.startsWith('https://')) return path
-      return supabase.storage.from('fotos').getPublicUrl(path).data.publicUrl
+      // Lote 2026-10: bucket privado; a URL vem do lote assinado logo abaixo.
+      return urlDoMapa(urlsFotos, foto.caminho_arquivo as string)
     }
+    const urlsFotos: Record<string, string> = {}
 
     // ── Fotos dos pontos de controle, em lote ─────────────────────────────────
     // A coleta antes era feita so para os pontos filtrados como parada, entao as
@@ -916,6 +921,17 @@ export default function EscoltaDetalhePage() {
       fotosData?.forEach((f: any) => { fotoPathMap[f.id] = f.caminho_arquivo })
     }
 
+    // Uma chamada só para assinar todas as fotos da tela (pontos, presenças, checklists).
+    Object.assign(urlsFotos, await urlsAssinadas(sb, [
+      ...Object.values(fotoPathMap),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...(pts ?? []).map((p: any) => p.foto?.caminho_arquivo),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...(pres ?? []).map((p: any) => p.foto?.caminho_arquivo),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...(chks ?? []).flatMap((c: any) => (c.respostas ?? []).map((r: any) => r.foto?.caminho_arquivo)),
+    ]))
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const urlsDoPonto = (p: any): string[] => {
       const urls = fotoIdsDoPonto({ foto_id: p.foto?.id ?? null, observacoes: p.observacoes })
@@ -932,6 +948,7 @@ export default function EscoltaDetalhePage() {
     }
 
     const tl: TimelineItem[] = []
+    const locaisAtivos = await carregarLocaisAtivos(sb)
 
     histNorm.forEach((h) => {
       tl.push({
@@ -959,6 +976,7 @@ export default function EscoltaDetalhePage() {
         descricao: info.observacao,
         usuario: p.autor?.nome_completo ?? 'Operador',
         coordenadas: p.latitude && p.longitude ? { lat: Number(p.latitude), lng: Number(p.longitude) } : null,
+        rotulo: rotuloDoPonto({ latitude: p.latitude, longitude: p.longitude, precisao_metros: p.precisao_metros, endereco: info.endereco }, locaisAtivos),
         foto_url: fotosPonto[0] ?? null,
         foto_urls: fotosPonto,
         extra: { sem_sinal_gps: p.sem_sinal_gps === true },
@@ -1079,7 +1097,7 @@ export default function EscoltaDetalhePage() {
     })
     setParadas(paradasProcessadas)
     setLoading(false)
-  }, [id, sb, supabase])
+  }, [id, sb])
 
   useEffect(() => { carregar() }, [carregar])
 
@@ -1910,8 +1928,8 @@ export default function EscoltaDetalhePage() {
       if (params.fotoId) {
         const { data: f } = await sb.from('fotos').select('caminho_arquivo').eq('id', params.fotoId).maybeSingle()
         if (f?.caminho_arquivo) {
-          const { data: pub } = sb.storage.from('fotos').getPublicUrl(f.caminho_arquivo)
-          fotoUrl = pub?.publicUrl ?? null
+          // Lote 2026-10: URL assinada; o Telegram baixa a foto na hora do envio.
+          fotoUrl = await urlAssinada(sb, f.caminho_arquivo)
         }
       }
       const viatIds = viaturas.map(v => v.id)
@@ -2468,10 +2486,13 @@ export default function EscoltaDetalhePage() {
         .map(e => `${e.vigilante?.nome_completo ?? '—'}${e.papel_na_escolta ? ` (${e.papel_na_escolta})` : ''}`)
 
       // Última foto de qualquer ponto de controle (mais recente)
-      const ultimaFotoUrl = [...paradas]
+      // Lote 2026-10: a URL guardada na tela pode ter vencido (validade de 1 hora);
+      // assina de novo, a partir do caminho, na hora do envio.
+      const ultimaFotoGuardada = [...paradas]
         .sort((a, b) => new Date(b.data_hora).getTime() - new Date(a.data_hora).getTime())
         .find(p => p.fotoUrls.length > 0)
         ?.fotoUrls[0] ?? null
+      const ultimaFotoUrl = ultimaFotoGuardada ? await urlAssinada(sb, ultimaFotoGuardada) : null
 
       // Duração: desde o primeiro status em_andamento
       const inicioAndamento = [...historico]
@@ -3470,7 +3491,10 @@ export default function EscoltaDetalhePage() {
                     {escolta.periodicidade_checkin_min ? `A cada ${escolta.periodicidade_checkin_min} min` : 'Desativado'}
                   </span>
                   {/* Periodicidade e planejamento: so a gestao altera (PODE_ALTERAR_PERIODICIDADE). */}
-                  {PODE_ALTERAR_PERIODICIDADE.includes(perfil) && (
+                  {/* Lote 2026-10 (M4): check-in desligado por padrão; "Alterar" só aparece se a
+                      escolta já tem periodicidade ou se o cliente foi religado (metadados). */}
+                  {PODE_ALTERAR_PERIODICIDADE.includes(perfil)
+                    && (escolta.periodicidade_checkin_min != null || periodicidadePadraoDoCliente(escolta.cliente?.metadados) != null) && (
                     <button onClick={() => { setPeriodicidadeEdit(escolta.periodicidade_checkin_min ? String(escolta.periodicidade_checkin_min) : ''); setEditandoPeriodicidade(true) }}
                       style={{ fontSize: '10px', color: '#1E7C52', textDecoration: 'underline' }}>
                       Alterar
@@ -4365,6 +4389,7 @@ export default function EscoltaDetalhePage() {
                 {item.coordenadas && (
                   <div>
                     <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#A8B8C2', marginBottom: '6px' }}>Localização GPS</p>
+                    {item.rotulo && <p style={{ fontSize: '12px', color: '#0E1A33', marginBottom: '6px' }}>{item.rotulo}</p>}
                     <a href={`https://www.google.com/maps/search/?api=1&query=${item.coordenadas.lat},${item.coordenadas.lng}`}
                       target="_blank" rel="noopener noreferrer"
                       className="flex items-center gap-2 h-9 px-4 text-white font-black text-[10px] uppercase tracking-widest w-fit"

@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { urlAssinada } from '@/lib/fotos-url'
 
 const sb = createClient() as any
 
@@ -34,8 +35,8 @@ export function TelegramNotificacoesProvider() {
 
         let fotoUrl: string | null = null
         if (data.foto?.caminho_arquivo) {
-          const { data: pub } = sb.storage.from('fotos').getPublicUrl(data.foto.caminho_arquivo)
-          fotoUrl = pub?.publicUrl ?? null
+          // Lote 2026-10: URL assinada; o Telegram baixa a foto na hora do envio.
+          fotoUrl = await urlAssinada(sb, data.foto.caminho_arquivo)
         }
 
         const { data: viatRowsPres } = await sb

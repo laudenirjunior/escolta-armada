@@ -125,3 +125,15 @@ export async function registrarCheckin(
   }
   return data[0].id as string
 }
+
+/**
+ * Lote 2026-10 (M4, decisão 3): o check-in periódico fica desligado por padrão e o
+ * campo some do formulário. Para religar para um cliente, sem migration, basta gravar
+ * `checkin_periodico_min` (minutos) em `clientes.metadados`: o formulário volta a
+ * mostrar o campo para esse cliente, já preenchido com esse valor.
+ */
+export function periodicidadePadraoDoCliente(metadados: unknown): number | null {
+  if (!metadados || typeof metadados !== 'object') return null
+  const v = Number((metadados as Record<string, unknown>).checkin_periodico_min)
+  return Number.isFinite(v) && v > 0 ? Math.round(v) : null
+}
