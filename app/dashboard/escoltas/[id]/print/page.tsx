@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { lerObservacao, fotoIdsDoPonto } from '@/lib/pontos-controle'
 import { STATUS, LABELS_STATUS, TIPO_PONTO_POR_STATUS } from '@/lib/fluxo-escolta'
+import { urlsAssinadas, urlDoMapa, VALIDADE_IMPRESSAO_S } from '@/lib/fotos-url'
 
 const sb = createClient() as any
 
@@ -215,13 +216,12 @@ export default function EscoltaPrintPage() {
           ? await sb.from('fotos').select('id, caminho_arquivo').in('id', idsFoto)
           : { data: [] }
 
+        // Lote 2026-10: bucket privado. URLs assinadas em lote, com validade para imprimir.
+        const assinadasPontos = await urlsAssinadas(
+          sb, ((fotosData ?? []) as Array<{ caminho_arquivo: string }>).map(f => f.caminho_arquivo), VALIDADE_IMPRESSAO_S)
         const urlPorFotoId = new Map<string, string>()
         for (const f of (fotosData ?? []) as Array<{ id: string; caminho_arquivo: string }>) {
-          const path = f.caminho_arquivo
-          if (!path) continue
-          const url = path.startsWith('http')
-            ? path
-            : sb.storage.from('fotos').getPublicUrl(path).data?.publicUrl ?? null
+          const url = urlDoMapa(assinadasPontos, f.caminho_arquivo)
           if (url) urlPorFotoId.set(f.id, url)
         }
 
@@ -252,13 +252,10 @@ export default function EscoltaPrintPage() {
           .eq('escolta_id', id)
           .order('data_hora', { ascending: true })
 
+        const assinadasOcorr = await urlsAssinadas(
+          sb, (ocorrs ?? []).map((o: any) => o.foto?.caminho_arquivo as string | undefined), VALIDADE_IMPRESSAO_S)
         const ocorrencias = await Promise.all((ocorrs ?? []).map(async (o: any) => {
-          let fotoUrl: string | null = null
-          if (o.foto?.caminho_arquivo) {
-            const path = o.foto.caminho_arquivo as string
-            fotoUrl = path.startsWith('http') ? path
-              : sb.storage.from('fotos').getPublicUrl(path).data?.publicUrl ?? null
-          }
+          const fotoUrl: string | null = urlDoMapa(assinadasOcorr, o.foto?.caminho_arquivo)
           return {
             tipo: o.tipo?.nome ?? 'Ocorrência',
             descricao: o.descricao ?? '',

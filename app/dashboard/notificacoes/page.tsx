@@ -11,6 +11,7 @@ import {
 import { createClient } from '@/lib/supabase/client'
 import { lerObservacao } from '@/lib/pontos-controle'
 import { useAuth } from '@/hooks/useAuth'
+import { urlsAssinadas, urlDoMapa } from '@/lib/fotos-url'
 
 const sb = createClient() as any
 const sbStorage = createClient()
@@ -171,12 +172,9 @@ export default function NotificacoesPage() {
   const [buscaUser, setBuscaUser] = useState('')
   const msgEndRef = useRef<HTMLDivElement>(null)
 
-  const toPublicUrl = useCallback((path: string | null): string | null => {
-    if (!path) return null
-    if (path.startsWith('http')) return path
-    const { data } = sbStorage.storage.from('fotos').getPublicUrl(path)
-    return data?.publicUrl ?? null
-  }, [])
+  // Lote 2026-10: bucket privado. Aqui guarda só o caminho; a URL assinada é gerada em
+  // lote no fim de carregarNotificacoes.
+  const toPublicUrl = useCallback((path: string | null): string | null => path || null, [])
 
   const carregarNotificacoes = useCallback(async () => {
     setLoadingNot(true)
@@ -300,6 +298,9 @@ export default function NotificacoesPage() {
 
       const tudo = [...feedPts, ...feedOcorrs, ...feedHist, ...feedPres]
         .sort((a, b) => new Date(b.data_hora).getTime() - new Date(a.data_hora).getTime())
+
+      const assinadas = await urlsAssinadas(sbStorage, tudo.map(n => n.foto_url))
+      for (const n of tudo) n.foto_url = urlDoMapa(assinadas, n.foto_url)
 
       setNotificacoes(tudo)
     } finally {
