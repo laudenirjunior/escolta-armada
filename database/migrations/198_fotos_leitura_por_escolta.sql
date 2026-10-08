@@ -42,9 +42,9 @@ CREATE POLICY fotos_leitura_autenticada ON storage.objects FOR SELECT TO authent
       (SELECT public.get_meu_perfil()) = ANY (ARRAY['administrador','gestor','supervisor','central'])
       OR name LIKE 'logos/%'
       OR public.sou_do_efetivo(public.escolta_do_caminho(name))
-      OR EXISTS (SELECT 1 FROM public.fotos f
-                 WHERE f.caminho_arquivo = storage.objects.name
-                   AND f.criado_por = (SELECT public.get_meu_usuario_id()))
+      -- Quem enviou o arquivo (dono no storage). Não usa a tabela fotos, cujo caminho o
+      -- autor consegue escrever: isso permitiria adivinhar caminhos de outra escolta.
+      OR owner_id = (SELECT auth.uid())::text
     )
   );
 

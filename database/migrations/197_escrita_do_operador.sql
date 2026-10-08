@@ -7,7 +7,9 @@
 --     API o operador mudava financeiro, fluxo_versao (voltar para 1 desliga a exigência
 --     do ponto de trânsito de retorno), checklist_pendente_no_inicio, a periodicidade do
 --     check-in e cancelava a escolta. A tela nunca ofereceu nada disso: o operador só
---     avança status e, na finalização, grava observacao_fechamento e data_finalizacao.
+--     avança status e, na finalização, grava observacao_fechamento e data_finalizacao
+--     (no mesmo UPDATE que muda o status para finalizada). Depois de encerrada, a escolta
+--     não muda mais pelo operador.
 -- H3. Policies sem FOR valem também para DELETE: o membro do efetivo apagava emergência,
 --     presença, rastreamento, checklist, respostas, atualização de status e a viatura
 --     (que leva pontos e checklists em cascata). O app só apaga escolta_veiculos na
@@ -63,9 +65,21 @@ BEGIN
   -- tambem para coluna criada depois desta funcao (escala_fixa, onda C).
   v_old := to_jsonb(OLD);
   v_new := to_jsonb(NEW);
+  -- Escolta encerrada não muda mais pelo operador (relatório final e horário de término).
+  IF OLD.status IN ('finalizada', 'cancelada') THEN
+    RAISE EXCEPTION 'Escolta encerrada. Fale com o supervisor para corrigir.';
+  END IF;
+
+  -- Relatório final e término só junto da própria finalização.
+  IF (NEW.observacao_fechamento IS DISTINCT FROM OLD.observacao_fechamento
+      OR NEW.data_finalizacao IS DISTINCT FROM OLD.data_finalizacao)
+     AND NEW.status IS DISTINCT FROM 'finalizada' THEN
+    RAISE EXCEPTION 'O relatorio final so e gravado na finalizacao da escolta.';
+  END IF;
+
   FOREACH v_col IN ARRAY ARRAY['valor_cobrado','outros_custos','observacao_financeira','fluxo_versao',
                                'checklist_pendente_no_inicio','periodicidade_checkin_min','codigo_escolta',
-                               'criada_por','escala_fixa']
+                               'criada_por','escala_fixa','metadados','data_solicitacao','criado_em']
   LOOP
     IF (v_new -> v_col) IS DISTINCT FROM (v_old -> v_col) THEN
       RAISE EXCEPTION 'Operador nao altera este campo da escolta (%). Fale com o supervisor.', v_col;

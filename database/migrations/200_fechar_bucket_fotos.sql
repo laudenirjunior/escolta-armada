@@ -58,6 +58,7 @@ BEGIN
     SELECT policyname, permissive, roles, qual
     FROM pg_policies
     WHERE schemaname = 'storage' AND tablename = 'objects' AND cmd = 'SELECT'
+      AND permissive = 'PERMISSIVE'   -- restritiva só estreita o acesso; apagar ampliaria
       AND policyname <> 'fotos_leitura_autenticada'
       AND backup_20261008.alcanca_fotos(qual)
   LOOP

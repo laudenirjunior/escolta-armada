@@ -40,12 +40,18 @@ BEGIN
 EXCEPTION WHEN others THEN
   RAISE NOTICE 'FALHOU: operador nao conseguiu iniciar: %', SQLERRM;
 END $$;
+ROLLBACK;
+-- Finalização como o app faz: status, relatório e término no mesmo UPDATE, a partir de Na Base.
+BEGIN;
+SELECT set_config('t.esc', qa.nova_escolta(now() - interval '4 hours', 'na_base', 'qa_um')::text, true);
+SELECT qa.como('qa_um');
 DO $$
 BEGIN
-  UPDATE public.escoltas SET observacao_fechamento = 'teste', data_finalizacao = now() WHERE id = current_setting('t.esc')::uuid;
-  RAISE NOTICE 'PASSOU: operador grava observacao de fechamento';
+  UPDATE public.escoltas SET status = 'finalizada', observacao_fechamento = 'teste', data_finalizacao = now()
+  WHERE id = current_setting('t.esc')::uuid;
+  RAISE NOTICE 'PASSOU: operador finaliza com o relatorio final';
 EXCEPTION WHEN others THEN
-  RAISE NOTICE 'FALHOU: observacao de fechamento recusada: %', SQLERRM;
+  RAISE NOTICE 'FALHOU: finalizacao recusada: %', SQLERRM;
 END $$;
 ROLLBACK;
 
@@ -174,5 +180,46 @@ BEGIN
   SELECT count(*) INTO m FROM storage.objects WHERE name LIKE '%' || current_setting('t.esc') || '%';
   IF n = 0 AND m = 0 THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: operador de fora nao le a foto';
   ELSE RAISE NOTICE 'FALHOU: operador de fora leu fotos=% objetos=%', n, m; END IF;
+END $$;
+ROLLBACK;
+
+-- Revisão adversarial da onda A: escolta encerrada, relatório final e caminho forjado.
+BEGIN;
+SELECT set_config('t.esc', qa.nova_escolta(now() - interval '5 hours', 'finalizada', 'qa_um')::text, true);
+SELECT set_config('t.rua', qa.nova_escolta(now() - interval '1 hour', 'em_andamento', 'qa_um')::text, true);
+SELECT qa.como('qa_um');
+DO $$
+BEGIN
+  BEGIN
+    UPDATE public.escoltas SET observacao_fechamento = 'reescrito depois' WHERE id = current_setting('t.esc')::uuid;
+    RAISE NOTICE 'FALHOU: operador reescreveu o relatorio de escolta finalizada';
+  EXCEPTION WHEN raise_exception THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: escolta finalizada nao muda pelo operador';
+  END;
+  BEGIN
+    UPDATE public.escoltas SET observacao_fechamento = 'antes da hora' WHERE id = current_setting('t.rua')::uuid;
+    RAISE NOTICE 'FALHOU: operador gravou relatorio final fora da finalizacao';
+  EXCEPTION WHEN raise_exception THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: relatorio final fora da finalizacao';
+  END;
+  BEGIN
+    UPDATE public.escoltas SET metadados = '{"x":1}' WHERE id = current_setting('t.rua')::uuid;
+    RAISE NOTICE 'FALHOU: operador alterou metadados';
+  EXCEPTION WHEN raise_exception THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: operador alterando metadados';
+  END;
+END $$;
+ROLLBACK;
+
+BEGIN;
+SELECT set_config('t.esc', qa.nova_escolta(now() - interval '1 hour', 'em_andamento', 'qa_um')::text, true);
+INSERT INTO storage.objects (bucket_id, name) VALUES ('fotos', 'origem/' || current_setting('t.esc') || '/alheia.jpg');
+SELECT qa.como('qa_dois');
+DO $$
+DECLARE m int;
+BEGIN
+  -- qa_dois não é do efetivo; grava uma linha em fotos apontando para o arquivo alheio.
+  INSERT INTO public.fotos (caminho_arquivo, tipo_foto_id, data_hora_captura, criado_por)
+  VALUES ('origem/' || current_setting('t.esc') || '/alheia.jpg', (SELECT id FROM public.dom_tipos_foto LIMIT 1), now(), public.get_meu_usuario_id());
+  SELECT count(*) INTO m FROM storage.objects WHERE name LIKE '%' || current_setting('t.esc') || '/alheia.jpg';
+  IF m = 0 THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: caminho forjado em fotos nao abre arquivo de outra escolta';
+  ELSE RAISE NOTICE 'FALHOU: caminho forjado abriu arquivo de outra escolta'; END IF;
 END $$;
 ROLLBACK;
