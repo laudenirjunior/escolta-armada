@@ -1139,35 +1139,22 @@ export default function EscoltaDetalhePage() {
     setAvancando(true)
     setErro(null)
 
-    const { data: atualizadas, error } = await sb
-      .from('escoltas')
-      .update({ status: proximo.status })
-      .eq('id', escolta.id)
-      .eq('status', escolta.status)
-      .select('id')
+    // Lote 2026-10 (onda F): status e histórico numa transação (registrar_etapa_escolta).
+    const { error } = await sb.rpc('registrar_etapa_escolta', {
+      p_escolta_id: escolta.id,
+      p_status_atual: escolta.status,
+      p_status_novo: proximo.status,
+      p_observacao: motivoAvanco.trim() || null,
+    })
 
     if (error) {
-      setErro(error.message ?? 'Erro ao avançar status.')
+      setErro(error.message === 'ERRO_SEM_TRANSICAO'
+        ? 'A escolta mudou de status em outro dispositivo. Recarregue a página e tente de novo.'
+        : (error.message ?? 'Erro ao avançar status.'))
       setAvancando(false)
+      if (error.message === 'ERRO_SEM_TRANSICAO') carregar()
       return
     }
-
-    // O PostgREST devolve sucesso com zero linhas quando a pre-condicao ou a RLS
-    // barram. Sem esta checagem a tela anunciava exito sem transicao nenhuma.
-    if (!atualizadas || atualizadas.length === 0) {
-      setErro('A escolta mudou de status em outro dispositivo. Recarregue a página e tente de novo.')
-      setAvancando(false)
-      carregar()
-      return
-    }
-
-    await sb.from('escolta_status_historico').insert({
-      escolta_id: escolta.id,
-      status_anterior: escolta.status,
-      status_novo: proximo.status,
-      observacao: motivoAvanco.trim() || null,
-      alterado_por: user?.id ?? null,
-    })
 
     // Notificar Telegram sobre mudança de status
     const statusLabel = STATUS_INFO[proximo.status]?.label ?? proximo.status
@@ -1335,29 +1322,16 @@ export default function EscoltaDetalhePage() {
         observacao: obsPartida,
         pos,
         km: kmPartida,
+        transicao: { statusNovo: 'em_andamento', observacao: obsPartida.trim() },
       })
 
       // 6. Atualizar status escolta
-      const { data: atualizadas, error: escErr } = await sb.from('escoltas')
-        .update({ status: 'em_andamento' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
       // 6b. KM de saida na coluna da viatura, depois do ponto (que ja o guarda) e do
       // status. Antes vinha antes de tudo e sem conferir se o banco aceitou.
       await gravarKmViaturas('quilometragem_saida', kmPartida)
 
-      // 7. Histórico de status
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'em_andamento',
-        observacao: obsPartida.trim(),
-        alterado_por: user?.id ?? null,
-      })
 
       // 8. Notificar Telegram — Checklist inicial concluído / Escolta iniciada
       const matConformes = Object.values(checkMateriais).filter(Boolean).length
@@ -1395,19 +1369,15 @@ export default function EscoltaDetalhePage() {
     setCancelando(true)
     setErro(null)
     try {
-      const { error } = await sb
-        .from('escoltas')
-        .update({ status: 'cancelada', observacao_fechamento: motivoCancelamento.trim() })
-        .eq('id', escolta!.id)
-      if (error) throw new Error(error.message)
-
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta!.id,
-        status_anterior: escolta!.status,
-        status_novo: 'cancelada',
-        observacao: `Cancelamento: ${motivoCancelamento.trim()}`,
-        alterado_por: user?.id ?? null,
+      // Lote 2026-10 (onda F): status e histórico numa transação (registrar_etapa_escolta).
+      const { error } = await sb.rpc('registrar_etapa_escolta', {
+        p_escolta_id: escolta!.id,
+        p_status_atual: escolta!.status,
+        p_status_novo: 'cancelada',
+        p_observacao: `Cancelamento: ${motivoCancelamento.trim()}`,
+        p_observacao_fechamento: motivoCancelamento.trim(),
       })
+      if (error) throw new Error(error.message === 'ERRO_SEM_TRANSICAO' ? 'A escolta mudou de status em outro dispositivo. Recarregue a página.' : error.message)
 
       setDialogCancelar(false)
       setMotivoCancelamento('')
@@ -1429,19 +1399,15 @@ export default function EscoltaDetalhePage() {
     try {
       const novaDataHora = new Date(`${novaDataReagendamento}T${novaHoraReagendamento}:00`).toISOString()
 
-      const { error } = await sb
-        .from('escoltas')
-        .update({ status: 'agendada', data_hora_prevista: novaDataHora, observacao_fechamento: null })
-        .eq('id', escolta!.id)
-      if (error) throw new Error(error.message)
-
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta!.id,
-        status_anterior: escolta!.status,
-        status_novo: 'agendada',
-        observacao: `Reagendamento para ${new Date(novaDataHora).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}. Motivo: ${motivoReagendamento.trim()}`,
-        alterado_por: user?.id ?? null,
+      // Lote 2026-10 (onda F): status, nova data e histórico numa transação.
+      const { error } = await sb.rpc('registrar_etapa_escolta', {
+        p_escolta_id: escolta!.id,
+        p_status_atual: escolta!.status,
+        p_status_novo: 'agendada',
+        p_observacao: `Reagendamento para ${new Date(novaDataHora).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' }).replace(',', '')}. Motivo: ${motivoReagendamento.trim()}`,
+        p_data_hora_prevista: novaDataHora,
       })
+      if (error) throw new Error(error.message === 'ERRO_SEM_TRANSICAO' ? 'A escolta mudou de status em outro dispositivo. Recarregue a página.' : error.message)
 
       setDialogCancelar(false)
       setMotivoReagendamento('')
@@ -1526,8 +1492,9 @@ export default function EscoltaDetalhePage() {
     if (error) throw new Error(error.message)
     if (!data || data.status !== statusEsperado) throw new Error(ERRO_ETAPA_MUDOU)
   }
-  const ERRO_SEM_TRANSICAO =
-    'O registro do ponto de controle foi salvo, mas o status da escolta não mudou aqui. A etapa pode já ter sido avançada em outra tela ou por outra pessoa. Recarregue a página e confira a etapa atual antes de tentar de novo.'
+  // Lote 2026-10: com a gravacao atomica, transicao recusada nao deixa ponto nem historico.
+  const ERRO_TRANSICAO_NADA_GRAVADO =
+    'A etapa já tinha sido avançada em outra tela ou por outra pessoa. Nada foi gravado desta vez. Recarregue a página e confira a etapa atual antes de registrar de novo.'
 
   /**
    * Posicao a gravar no ponto de controle, no unico formato que o CHECK
@@ -1657,6 +1624,11 @@ export default function EscoltaDetalhePage() {
     endereco?: string | null
     /** KM por viatura, so na saida e na chegada na base. Vai para o ponto de auditoria. */
     km?: KmPorViatura
+    /**
+     * Lote 2026-10 (onda F): status e historico gravados na MESMA transacao dos pontos,
+     * pela RPC registrar_etapa_escolta. Se a transicao falhar, nada fica gravado.
+     */
+    transicao?: { statusNovo: string; observacao: string | null }
   }): Promise<string | null> => {
     const { pos } = params
     const enviadas: { viatura: ViaturaDetalhe; fotoIds: string[] }[] = []
@@ -1704,7 +1676,18 @@ export default function EscoltaDetalhePage() {
       sincronizado: true,
     }))
 
-    if (linhas.length > 0) {
+    if (params.transicao) {
+      const { error } = await sb.rpc('registrar_etapa_escolta', {
+        p_escolta_id: params.escoltaId,
+        p_pontos: linhas,
+        p_status_atual: params.statusEsperado,
+        p_status_novo: params.transicao.statusNovo,
+        p_observacao: params.transicao.observacao,
+        p_latitude: pos.latitude,
+        p_longitude: pos.longitude,
+      })
+      if (error) throw new Error(error.message === 'ERRO_SEM_TRANSICAO' ? ERRO_TRANSICAO_NADA_GRAVADO : error.message)
+    } else if (linhas.length > 0) {
       const { error } = await sb.from('pontos_controle').insert(linhas)
       if (error) throw new Error(error.message)
     }
@@ -1766,30 +1749,14 @@ export default function EscoltaDetalhePage() {
         observacao: obsStartBase,
         pos,
         km: kmStartBase,
+        transicao: { statusNovo: 'em_andamento', observacao: comporObservacao(obsStartBase) ?? 'Saída da base confirmada.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'em_andamento' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
       // Atualizar KM de saída de cada viatura vinculada
       await gravarKmViaturas('quilometragem_saida', kmStartBase)
 
-      // Registrar Histórico de Status
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'em_andamento',
-        observacao: comporObservacao(obsStartBase) ?? 'Saída da base confirmada.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
 
       notificarTelegram({
         titulo: 'Saída da Base',
@@ -2108,27 +2075,10 @@ export default function EscoltaDetalhePage() {
         tipoLabel: 'Chegada na Origem',
         observacao: observacaoOrigem,
         pos,
+        transicao: { statusNovo: 'na_origem', observacao: observacaoOrigem ?? 'Chegada na origem confirmada.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'na_origem' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
-
-      // Registrar Histórico
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'na_origem',
-        observacao: observacaoOrigem ?? 'Chegada na origem confirmada.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
       notificarTelegram({
         titulo: 'Chegada na Origem',
@@ -2170,27 +2120,10 @@ export default function EscoltaDetalhePage() {
         tipoLabel: 'Trânsito ao Destino',
         observacao: obsTransitoDestino,
         pos,
+        transicao: { statusNovo: 'em_transito_destino', observacao: comporObservacao(obsTransitoDestino) ?? 'Trânsito ao destino iniciado.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'em_transito_destino' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
-
-      // Registrar Histórico
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'em_transito_destino',
-        observacao: comporObservacao(obsTransitoDestino) ?? 'Trânsito ao destino iniciado.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
       notificarTelegram({
         titulo: 'Trânsito ao Destino Iniciado',
@@ -2231,27 +2164,10 @@ export default function EscoltaDetalhePage() {
         tipoLabel: 'Chegada no Destino',
         observacao: obsDestino,
         pos,
+        transicao: { statusNovo: 'no_destino', observacao: comporObservacao(obsDestino) ?? 'Chegada no destino confirmada.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'no_destino' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
-
-      // Registrar Histórico
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'no_destino',
-        observacao: comporObservacao(obsDestino) ?? 'Chegada no destino confirmada.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
       notificarTelegram({
         titulo: 'Chegada no Destino',
@@ -2294,26 +2210,10 @@ export default function EscoltaDetalhePage() {
         tipoLabel: 'Trânsito para o Retorno',
         observacao: obsTransitoRetorno,
         pos,
+        transicao: { statusNovo: 'em_transito_retorno', observacao: comporObservacao(obsTransitoRetorno) ?? 'Trânsito de retorno iniciado.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'em_transito_retorno' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
-
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'em_transito_retorno',
-        observacao: comporObservacao(obsTransitoRetorno) ?? 'Trânsito de retorno iniciado.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
       notificarTelegram({
         titulo: 'Trânsito de Retorno Iniciado',
@@ -2354,27 +2254,10 @@ export default function EscoltaDetalhePage() {
         tipoLabel: 'Retorno',
         observacao: obsRetorno,
         pos,
+        transicao: { statusNovo: 'retornando', observacao: comporObservacao(obsRetorno) ?? 'Retorno iniciado.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'retornando' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
-
-      // Registrar Histórico
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'retornando',
-        observacao: comporObservacao(obsRetorno) ?? 'Retorno iniciado.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
       notificarTelegram({
         titulo: 'Retorno Iniciado',
@@ -2433,30 +2316,14 @@ export default function EscoltaDetalhePage() {
         observacao: obsChegadaBase,
         pos,
         km: kmChegadaBase,
+        transicao: { statusNovo: 'na_base', observacao: comporObservacao(obsChegadaBase) ?? 'Chegada na base confirmada.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'na_base' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
       // Atualizar KM de retorno de cada viatura
       await gravarKmViaturas('quilometragem_retorno', kmChegadaBase)
 
-      // Registrar Histórico
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'na_base',
-        observacao: comporObservacao(obsChegadaBase) ?? 'Chegada na base confirmada.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
 
       notificarTelegram({
         titulo: 'Chegada na Base',
@@ -2711,31 +2578,22 @@ export default function EscoltaDetalhePage() {
       }
 
       // 2. Atualizar status da escolta para finalizada
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({
-          status: 'finalizada',
-          observacao_fechamento: relatorioFinal.trim(),
-          data_finalizacao: new Date().toISOString()
-        })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) {
-        throw new Error('O status da escolta mudou em outro dispositivo ou a regra do banco recusou a finalização. Recarregue a página e repita a etapa.')
-      }
-
-      // 3. Registrar Histórico de Status
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'finalizada',
-        // Antes dizia "gerado pelo supervisor" mesmo quando quem finalizava era outro
-        // participante. O autor ja vai em alterado_por.
-        observacao: `Escolta finalizada. Relatório final registrado por ${user?.nome_completo ?? 'usuário do sistema'}.`,
-        alterado_por: user?.id ?? null,
+      // 2 e 3. Status, relatório final e histórico numa transação (registrar_etapa_escolta,
+      // lote 2026-10). O autor vai em alterado_por, pela sessão.
+      const { error: escErr } = await sb.rpc('registrar_etapa_escolta', {
+        p_escolta_id: escolta.id,
+        p_status_atual: escolta.status,
+        p_status_novo: 'finalizada',
+        p_observacao: `Escolta finalizada. Relatório final registrado por ${user?.nome_completo ?? 'usuário do sistema'}.`,
+        p_observacao_fechamento: relatorioFinal.trim(),
+        p_latitude: pos.latitude,
+        p_longitude: pos.longitude,
       })
+      if (escErr) {
+        throw new Error(escErr.message === 'ERRO_SEM_TRANSICAO'
+          ? 'O status da escolta mudou em outro dispositivo ou a regra do banco recusou a finalização. Recarregue a página e repita a etapa.'
+          : escErr.message)
+      }
 
       // 4. Enviar relatório executivo completo ao Telegram
       enviarRelatorioFinalTelegram()
