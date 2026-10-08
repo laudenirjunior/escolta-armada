@@ -1380,6 +1380,11 @@ BEGIN;
 --      confirmar presença ficam em logs_auditoria; pedidos ficam em mural_pedidos.
 -- Concorrência: toda decisão trava primeiro a escolta e depois o pedido, e muda o status
 -- do pedido com UPDATE ... WHERE status = 'pendente'; só segue se uma linha mudar.
+-- Onda G (revisão adversarial, com os índices únicos da 210 aplicados logo depois desta):
+-- assumir_escolta recusa a placa de outra viatura da mesma escolta; _executar_substituicao
+-- invalida o pedido nesse caso e quando uma gravação esbarra num índice único;
+-- processar_pedidos_vencidos isola cada pedido num bloco próprio (um pedido com erro vira
+-- 'invalidado', com auditoria, e não trava os outros nem o cron).
 
 -- ── Auxiliares internas (sem GRANT a ninguém) ─────────────────────────────────────
 CREATE OR REPLACE FUNCTION public._hora_br(p timestamptz) RETURNS text
@@ -1526,30 +1531,48 @@ BEGIN
     WHEN EXISTS (SELECT 1 FROM unnest(p.acompanhantes) a WHERE NOT EXISTS
                  (SELECT 1 FROM public.vigilantes v WHERE v.id = a AND v.status = 'ativo')) THEN 'um acompanhante nao esta mais ativo'
     WHEN p.veiculo_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.veiculos WHERE id = p.veiculo_id AND status = 'ativo') THEN 'a viatura indicada nao esta mais ativa'
+    -- Onda G (210): a placa escolhida não pode estar em outra viatura da mesma escolta.
+    WHEN p.veiculo_id IS NOT NULL AND EXISTS (
+           SELECT 1 FROM public.escolta_veiculos ev WHERE ev.escolta_id = p.escolta_id AND ev.veiculo_id = p.veiculo_id
+              AND ev.id IS DISTINCT FROM (SELECT id FROM public.escolta_veiculos WHERE escolta_id = p.escolta_id ORDER BY criado_em LIMIT 1))
+      THEN 'a viatura indicada já está em outra viatura da escolta'
   END;
+
+  -- Onda G (210): os índices únicos do efetivo e das viaturas recusam repetição. Se uma
+  -- gravação esbarrar neles, a troca inteira é desfeita e o pedido é invalidado com o
+  -- motivo, em vez de o erro técnico subir para quem aprovou ou para o cron.
+  IF v_motivo IS NULL THEN
+    BEGIN
+      SELECT id INTO v_ev FROM public.escolta_veiculos WHERE escolta_id = p.escolta_id ORDER BY criado_em LIMIT 1;
+      IF p.veiculo_id IS NOT NULL THEN
+        UPDATE public.escolta_veiculos SET veiculo_id = p.veiculo_id, atualizado_em = now(), atualizado_por = p.solicitante_usuario_id
+         WHERE id = v_ev;
+      END IF;
+      DELETE FROM public.escolta_efetivo WHERE escolta_id = p.escolta_id;
+      INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
+      VALUES (p.escolta_id, v_ev, p.solicitante_vigilante_id, 'comandante', true, p.solicitante_usuario_id);
+      FOREACH v_acomp IN ARRAY p.acompanhantes LOOP
+        IF v_acomp IS DISTINCT FROM p.solicitante_vigilante_id THEN
+          INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
+          VALUES (p.escolta_id, v_ev, v_acomp, 'operador', false, p.solicitante_usuario_id) ON CONFLICT DO NOTHING;
+        END IF;
+      END LOOP;
+    EXCEPTION WHEN unique_violation THEN
+      v_motivo := 'a viatura ou um vigilante indicado já está na escolta';
+    END;
+  END IF;
+
   IF v_motivo IS NOT NULL THEN
     UPDATE public.mural_pedidos SET status = 'invalidado', decidido_em = coalesce(decidido_em, now()),
            observacao_decisao = trim(coalesce(observacao_decisao, '') || ' Invalidado: ' || v_motivo || '.')
      WHERE id = p.id;
+    INSERT INTO public.logs_auditoria (usuario_id, acao, entidade_afetada, registro_id, dados_antes, dados_depois, data_hora)
+    VALUES (p.decidido_por, 'pedido_substituicao_invalidado', 'escoltas', p.escolta_id, jsonb_build_object('pedido_id', p.id),
+            jsonb_build_object('pedido_id', p.id, 'via', p_via, 'motivo', v_motivo), now());
     PERFORM public._avisar_app(p.escolta_id, 'decisao_substituicao', ARRAY[p.solicitante_usuario_id],
       'Pedido de substituição invalidado', 'O pedido para a escolta ' || e.codigo_escolta || ' não foi executado: ' || v_motivo || '.', p.id);
     RETURN false;
   END IF;
-
-  SELECT id INTO v_ev FROM public.escolta_veiculos WHERE escolta_id = p.escolta_id ORDER BY criado_em LIMIT 1;
-  IF p.veiculo_id IS NOT NULL THEN
-    UPDATE public.escolta_veiculos SET veiculo_id = p.veiculo_id, atualizado_em = now(), atualizado_por = p.solicitante_usuario_id
-     WHERE id = v_ev;
-  END IF;
-  DELETE FROM public.escolta_efetivo WHERE escolta_id = p.escolta_id;
-  INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
-  VALUES (p.escolta_id, v_ev, p.solicitante_vigilante_id, 'comandante', true, p.solicitante_usuario_id);
-  FOREACH v_acomp IN ARRAY p.acompanhantes LOOP
-    IF v_acomp IS DISTINCT FROM p.solicitante_vigilante_id THEN
-      INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
-      VALUES (p.escolta_id, v_ev, v_acomp, 'operador', false, p.solicitante_usuario_id) ON CONFLICT DO NOTHING;
-    END IF;
-  END LOOP;
 
   SELECT nome_completo INTO v_nome FROM public.vigilantes WHERE id = p.solicitante_vigilante_id;
   INSERT INTO public.logs_auditoria (usuario_id, acao, entidade_afetada, registro_id, dados_antes, dados_depois, data_hora)
@@ -1581,16 +1604,33 @@ REVOKE ALL ON FUNCTION public._executar_substituicao(uuid, text) FROM PUBLIC, an
 -- ── Liberação por tempo (interna; pg_cron e consultas) ─────────────────────────────
 CREATE OR REPLACE FUNCTION public.processar_pedidos_vencidos() RETURNS integer
     LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $$
-DECLARE r record; n int := 0;
+DECLARE r record; n int := 0; v_estado text; v_erro text;
 BEGIN
-  FOR r IN SELECT id, escolta_id FROM public.mural_pedidos WHERE status = 'pendente' AND expira_em < now() ORDER BY criado_em LOOP
-    PERFORM 1 FROM public.escoltas WHERE id = r.escolta_id FOR UPDATE;
-    UPDATE public.mural_pedidos SET status = 'liberado_por_tempo', decidido_em = now()
-     WHERE id = r.id AND status = 'pendente' AND expira_em < now();
-    IF FOUND THEN
-      PERFORM public._executar_substituicao(r.id, 'liberado_por_tempo');
-      n := n + 1;
-    END IF;
+  FOR r IN SELECT id, escolta_id, solicitante_usuario_id FROM public.mural_pedidos
+            WHERE status = 'pendente' AND expira_em < now() ORDER BY criado_em LOOP
+    -- Onda G: cada pedido no próprio bloco. Um pedido com erro é desfeito sozinho, vira
+    -- 'invalidado' com o motivo e a auditoria, e os demais (e o cron) seguem.
+    BEGIN
+      PERFORM 1 FROM public.escoltas WHERE id = r.escolta_id FOR UPDATE;
+      UPDATE public.mural_pedidos SET status = 'liberado_por_tempo', decidido_em = now()
+       WHERE id = r.id AND status = 'pendente' AND expira_em < now();
+      IF FOUND THEN
+        PERFORM public._executar_substituicao(r.id, 'liberado_por_tempo');
+        n := n + 1;
+      END IF;
+    EXCEPTION WHEN others THEN
+      GET STACKED DIAGNOSTICS v_estado = RETURNED_SQLSTATE, v_erro = MESSAGE_TEXT;
+      UPDATE public.mural_pedidos SET status = 'invalidado', decidido_em = now(),
+             observacao_decisao = trim(coalesce(observacao_decisao, '') || ' Invalidado: erro na liberação automática (registrado na auditoria).')
+       WHERE id = r.id AND status = 'pendente';
+      INSERT INTO public.logs_auditoria (usuario_id, acao, entidade_afetada, registro_id, dados_antes, dados_depois, data_hora)
+      VALUES (NULL, 'pedido_substituicao_erro_liberacao', 'escoltas', r.escolta_id, jsonb_build_object('pedido_id', r.id),
+              jsonb_build_object('pedido_id', r.id, 'sqlstate', v_estado, 'erro', v_erro), now());
+      PERFORM public._avisar_app(r.escolta_id, 'decisao_substituicao', ARRAY[r.solicitante_usuario_id],
+        'Pedido de substituição invalidado',
+        'O pedido para a escolta ' || coalesce((SELECT codigo_escolta FROM public.escoltas WHERE id = r.escolta_id), '') ||
+        ' não pôde ser executado na liberação automática. Fale com o supervisor.', r.id);
+    END;
   END LOOP;
   RETURN n;
 END;
@@ -1634,6 +1674,13 @@ BEGIN
   IF p_veiculo_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.veiculos WHERE id = p_veiculo_id AND status = 'ativo') THEN
     RAISE EXCEPTION 'Viatura invalida ou fora de operacao.';
   END IF;
+  -- Onda G (210): a placa escolhida troca a primeira viatura; não pode ser a de outra
+  -- viatura da mesma escolta.
+  IF p_veiculo_id IS NOT NULL AND EXISTS (
+       SELECT 1 FROM public.escolta_veiculos ev WHERE ev.escolta_id = p_escolta_id AND ev.veiculo_id = p_veiculo_id
+          AND ev.id IS DISTINCT FROM (SELECT id FROM public.escolta_veiculos WHERE escolta_id = p_escolta_id ORDER BY criado_em LIMIT 1)) THEN
+    RAISE EXCEPTION 'Esta viatura já está em outra viatura desta escolta. Escolha outra placa ou mantenha a atual.';
+  END IF;
 
   SELECT * INTO cfg FROM public.configuracoes_mural WHERE id = 1;
   SELECT count(*) INTO v_qtd FROM public.escolta_efetivo WHERE escolta_id = p_escolta_id;
@@ -1647,15 +1694,19 @@ BEGIN
     END IF;
     SELECT id INTO v_ev FROM public.escolta_veiculos WHERE escolta_id = p_escolta_id ORDER BY criado_em LIMIT 1;
     IF v_ev IS NULL THEN RAISE EXCEPTION 'Escolta sem viatura vinculada. Fale com o supervisor.'; END IF;
-    IF p_veiculo_id IS NOT NULL THEN
-      UPDATE public.escolta_veiculos SET veiculo_id = p_veiculo_id, atualizado_em = now(), atualizado_por = v_usuario WHERE id = v_ev;
-    END IF;
-    INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
-    VALUES (p_escolta_id, v_ev, v_vigilante, 'comandante', true, v_usuario);
-    FOREACH v_acomp IN ARRAY v_acomp_limpo LOOP
+    BEGIN
+      IF p_veiculo_id IS NOT NULL THEN
+        UPDATE public.escolta_veiculos SET veiculo_id = p_veiculo_id, atualizado_em = now(), atualizado_por = v_usuario WHERE id = v_ev;
+      END IF;
       INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
-      VALUES (p_escolta_id, v_ev, v_acomp, 'operador', false, v_usuario) ON CONFLICT DO NOTHING;
-    END LOOP;
+      VALUES (p_escolta_id, v_ev, v_vigilante, 'comandante', true, v_usuario);
+      FOREACH v_acomp IN ARRAY v_acomp_limpo LOOP
+        INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
+        VALUES (p_escolta_id, v_ev, v_acomp, 'operador', false, v_usuario) ON CONFLICT DO NOTHING;
+      END LOOP;
+    EXCEPTION WHEN unique_violation THEN
+      RAISE EXCEPTION 'A viatura ou um vigilante escolhido já está nesta escolta. Revise a equipe e a viatura e tente de novo.';
+    END;
     PERFORM public._auditar_mural('assumiu_escolta_do_mural', p_escolta_id, '{"equipe": []}'::jsonb,
       jsonb_build_object('assumida_por', v_nome, 'acompanhantes',
         (SELECT coalesce(jsonb_agg(nome_completo), '[]'::jsonb) FROM public.vigilantes WHERE id = ANY (v_acomp_limpo)),
@@ -1813,8 +1864,12 @@ BEGIN
   IF v_dup > 0 THEN RAISE EXCEPTION 'Este vigilante ja esta na escolta.'; END IF;
   SELECT id INTO v_ev FROM public.escolta_veiculos WHERE escolta_id = p_escolta_id ORDER BY criado_em LIMIT 1;
   IF v_ev IS NULL THEN RAISE EXCEPTION 'Escolta sem viatura vinculada.'; END IF;
-  INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
-  VALUES (p_escolta_id, v_ev, p_vigilante_id, 'operador', false, v_usuario);
+  BEGIN
+    INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
+    VALUES (p_escolta_id, v_ev, p_vigilante_id, 'operador', false, v_usuario);
+  EXCEPTION WHEN unique_violation THEN
+    RAISE EXCEPTION 'Este vigilante ja esta na escolta.';
+  END;
   PERFORM public._auditar_mural('incluiu_vigilante', p_escolta_id, '{}'::jsonb,
     jsonb_build_object('vigilante', (SELECT nome_completo FROM public.vigilantes WHERE id = p_vigilante_id)));
   RETURN jsonb_build_object('ok', true);

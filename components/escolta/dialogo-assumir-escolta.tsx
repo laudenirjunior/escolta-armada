@@ -61,6 +61,9 @@ export function DialogoAssumirEscolta({
 
   const [equipeAtual, setEquipeAtual] = useState<Membro[]>([])
   const [viaturaAtual, setViaturaAtual] = useState<Viatura | null>(null)
+  // Onda G: placas das demais viaturas da escolta. A troca vale só para a primeira
+  // viatura, e a mesma placa não pode estar em duas viaturas da escolta (índice da 210).
+  const [placasOutrasViaturas, setPlacasOutrasViaturas] = useState<string[]>([])
 
   const [vigilantes, setVigilantes] = useState<VigilanteOpt[]>([])
   const [veiculos, setVeiculos] = useState<VeiculoOpt[]>([])
@@ -95,6 +98,7 @@ export function DialogoAssumirEscolta({
       }
       setEquipeAtual(equipe)
       setViaturaAtual(info?.viaturas?.[0] ?? null)
+      setPlacasOutrasViaturas(((info?.viaturas ?? []) as Viatura[]).slice(1).map(v => v.veiculo_id))
       setVigilantes(vigs ?? [])
       setVeiculos(veics ?? [])
 
@@ -119,6 +123,10 @@ export function DialogoAssumirEscolta({
     }
     if (trocarViatura && !veiculoNovo) {
       setErro('Selecione a viatura que será usada.')
+      return
+    }
+    if (trocarViatura && placasOutrasViaturas.includes(veiculoNovo)) {
+      setErro('Esta viatura já está em outra viatura desta escolta. Escolha outra placa ou mantenha a atual.')
       return
     }
     setEtapa('enviando')
@@ -305,7 +313,7 @@ export function DialogoAssumirEscolta({
                   <select value={veiculoNovo} onChange={e => setVeiculoNovo(e.target.value)}
                     className="input-light w-full mt-2 text-sm" style={{ minHeight: '44px' }}>
                     <option value="">Selecione a viatura</option>
-                    {veiculos.map(v => (
+                    {veiculos.filter(v => !placasOutrasViaturas.includes(v.id)).map(v => (
                       <option key={v.id} value={v.id}>{v.placa}{v.modelo ? ` · ${v.modelo}` : ''}</option>
                     ))}
                   </select>
