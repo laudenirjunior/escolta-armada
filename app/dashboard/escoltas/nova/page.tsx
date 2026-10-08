@@ -11,6 +11,9 @@ import { createClient } from '@/lib/supabase/client'
 import { periodicidadePadraoDoCliente } from '@/lib/checkin'
 import { useAuth } from '@/hooks/useAuth'
 import { AiTextButton } from '@/components/ui/ai-text-button'
+import { AtalhosLocais } from '@/components/endereco/atalhos-locais'
+import { ConferenciaCoordenada } from '@/components/endereco/conferencia-coordenada'
+import { LocalSalvo, carregarLocaisAtivos, PERFIS_CADASTRAM_LOCAL } from '@/lib/locais'
 
 // ─── Palette ──────────────────────────────────────────────────────────────────
 const P = {
@@ -120,6 +123,27 @@ interface MapboxFeature {
   id: string
   place_name: string
   center: [number, number]
+  // Lote 2026-10 (M1): para mostrar bairro e município e avisar sugestão sem número.
+  place_type?: string[]
+  address?: string
+  text?: string
+  context?: { id: string; text: string }[]
+}
+
+/** Sugestão que não é um endereço com número: a coordenada pode cair longe do portão. */
+function semNumero(f: MapboxFeature): boolean {
+  return !(f.place_type ?? []).includes('address') || !f.address
+}
+
+/** Bairro e município da sugestão, a partir do contexto da Mapbox v5. */
+function bairroMunicipio(f: MapboxFeature): { bairro: string | null; municipio: string | null } {
+  const ctx = f.context ?? []
+  const achar = (prefixos: string[]) => ctx.find(c => prefixos.some(p => c.id.startsWith(p + '.')))?.text ?? null
+  const proprio = (tipo: string) => (f.place_type ?? []).includes(tipo) ? (f.text ?? null) : null
+  return {
+    bairro: proprio('neighborhood') ?? achar(['neighborhood', 'locality']),
+    municipio: proprio('place') ?? achar(['place']),
+  }
 }
 
 function AddressAutocomplete({
@@ -129,7 +153,7 @@ function AddressAutocomplete({
   icon,
 }: {
   value: string
-  onChange: (address: string, lat?: number, lon?: number) => void
+  onChange: (address: string, lat?: number, lon?: number, meta?: { semNumero: boolean }) => void
   placeholder: string
   icon?: React.ReactNode
 }) {
@@ -242,7 +266,7 @@ function AddressAutocomplete({
     puloRef.current = true
     const [lon, lat] = f.center
     setQuery(f.place_name)
-    onChange(f.place_name, lat, lon)
+    onChange(f.place_name, lat, lon, { semNumero: semNumero(f) })
     setSuggestions([])
     setAberto(false)
     setErroApi(null)
@@ -307,7 +331,18 @@ function AddressAutocomplete({
                 onMouseLeave={e => (e.currentTarget as HTMLElement).style.backgroundColor = ''}
               >
                 <p style={{ fontSize: '12px', fontWeight: 600, color: P.text }}>{principal}</p>
+                {(() => {
+                  const { bairro, municipio } = bairroMunicipio(f)
+                  return (bairro || municipio) ? (
+                    <p style={{ fontSize: '11px', fontWeight: 700, color: P.steel, marginTop: '2px' }}>
+                      {[bairro, municipio].filter(Boolean).join(' · ')}
+                    </p>
+                  ) : null
+                })()}
                 {secundario && <p style={{ fontSize: '10px', color: P.light, marginTop: '2px' }}>{secundario}</p>}
+                {semNumero(f) && (
+                  <p style={{ fontSize: '10px', fontWeight: 700, color: '#8A5A10', marginTop: '2px' }}>Sem número: confira no mapa</p>
+                )}
               </button>
             )
           })}
@@ -382,6 +417,21 @@ function FormularioEscolta() {
   // Lote 2026-10 (T6): escala fixa só por supervisor ou acima; a trigger do banco barra o operador.
   const podeEscalaFixa = PERFIS_FINANCEIRO.includes((user?.perfil?.codigo ?? '') as any)
   const [escalaFixa, setEscalaFixa] = useState(false)
+  // Lote 2026-10 (M2 e M1): atalhos e conferência da coordenada no mapa antes de salvar.
+  const [locais, setLocais] = useState<LocalSalvo[]>([])
+  const confVazia = { conferida: false, semNumero: false, viaLocal: null as string | null, localId: null as string | null }
+  const [confOrigem, setConfOrigem] = useState(confVazia)
+  const [confDestino, setConfDestino] = useState(confVazia)
+  const podeSalvarLocal = PERFIS_CADASTRAM_LOCAL.includes((user?.perfil?.codigo ?? '') as string)
+  useEffect(() => { carregarLocaisAtivos(sb).then(setLocais) }, [])
+  const salvarComoLocal = async (nome: string, endereco: string, complemento: string, lat: number, lng: number): Promise<string | null> => {
+    const { data, error } = await sb.from('locais_salvos').insert({
+      nome, endereco, complemento: complemento || null, latitude: lat, longitude: lng,
+      situacao: 'aguardando_conferencia', fonte_coordenada: 'Busca da Mapbox no formulário de escolta, ajustada no pino',
+    }).select('id')
+    if (error || !data?.length) return `Não foi possível salvar: ${error?.message ?? 'sem permissão'}`
+    return `Local "${nome}" salvo, aguardando conferência por gestor ou administrador em Configurações, Locais salvos.`
+  }
 
   const carregar = useCallback(async () => {
     const [{ data: cls }, { data: vcs }, { data: vgs }] = await Promise.all([
@@ -478,6 +528,9 @@ function FormularioEscolta() {
         : [novaViatura()])
 
       setEscalaFixa(Boolean(e.escala_fixa))
+      // Coordenadas já gravadas valem como conferidas; mudar o endereço exige nova conferência.
+      setConfOrigem({ conferida: true, semNumero: false, viaLocal: null, localId: null })
+      setConfDestino({ conferida: true, semNumero: false, viaLocal: null, localId: null })
       // Editar não religa o check-in: nulo continua nulo.
       setPeriodicidadeCheckin(e.periodicidade_checkin_min != null ? String(e.periodicidade_checkin_min) : '')
       setValorCobrado(e.valor_cobrado != null ? String(e.valor_cobrado) : '')
@@ -500,10 +553,14 @@ function FormularioEscolta() {
     if (!dados.origem_endereco.trim())  e.push('Informe o endereço de origem.')
     // Coordenada zerada cai no golfo da Guiné e envenena mapa, rota e indicadores.
     else if (!dados.origem_lat || !dados.origem_lng)
-      e.push('Origem sem coordenada. Selecione o endereço na lista de sugestões para fixar as coordenadas.')
+      e.push('Origem sem coordenada. Escolha um atalho ou selecione o endereço na lista de sugestões.')
+    else if (!confOrigem.conferida)
+      e.push('Confira a origem no mapa e marque "Conferido no mapa".')
     if (!dados.destino_endereco.trim()) e.push('Informe o endereço de destino.')
     else if (!dados.destino_lat || !dados.destino_lng)
-      e.push('Destino sem coordenada. Selecione o endereço na lista de sugestões para fixar as coordenadas.')
+      e.push('Destino sem coordenada. Escolha um atalho ou selecione o endereço na lista de sugestões.')
+    else if (!confDestino.conferida)
+      e.push('Confira o destino no mapa e marque "Conferido no mapa".')
     return e
   }
 
@@ -866,19 +923,28 @@ function FormularioEscolta() {
             {/* Origem */}
             <div>
               <FieldLabel required>Endereço de Origem</FieldLabel>
+              <AtalhosLocais locais={locais} selecionadoId={confOrigem.localId} onEscolher={(l) => {
+                setDados(d => ({ ...d, origem_endereco: l.endereco, origem_complemento: l.complemento ?? '', origem_lat: l.latitude ?? 0, origem_lng: l.longitude ?? 0 }))
+                setConfOrigem({ conferida: true, semNumero: false, viaLocal: l.nome, localId: l.id })
+              }} />
               <AddressAutocomplete
                 value={dados.origem_endereco}
-                onChange={(addr, lat, lon) => setDados(d => ({
+                onChange={(addr, lat, lon, meta) => { setConfOrigem({ conferida: false, semNumero: Boolean(meta?.semNumero), viaLocal: null, localId: null }); setDados(d => ({
                   ...d,
                   origem_endereco: addr,
                   // Digitar depois de escolher invalida a coordenada: sem isto a escolta
                   // nasceria com o endereço de um lugar e a coordenada de outro.
                   origem_lat: lat ?? 0,
                   origem_lng: lon ?? 0,
-                }))}
+                })) }}
                 placeholder="Rua, número, bairro, cidade..."
                 icon={<MapPin size={15} />}
               />
+              <ConferenciaCoordenada lat={dados.origem_lat || null} lng={dados.origem_lng || null}
+                conferida={confOrigem.conferida} semNumero={confOrigem.semNumero} viaLocal={confOrigem.viaLocal} podeSalvarLocal={podeSalvarLocal}
+                onMover={(lat, lng) => setDados(d => ({ ...d, origem_lat: lat, origem_lng: lng }))}
+                onConferir={(v) => setConfOrigem(c => ({ ...c, conferida: v }))}
+                onSalvarLocal={(nome) => salvarComoLocal(nome, dados.origem_endereco, dados.origem_complemento, dados.origem_lat, dados.origem_lng)} />
             </div>
 
             {/* Complemento da origem: campo separado de propósito, para que digitar aqui
@@ -904,18 +970,27 @@ function FormularioEscolta() {
             {/* Destino */}
             <div>
               <FieldLabel required>Endereço de Destino</FieldLabel>
+              <AtalhosLocais locais={locais} selecionadoId={confDestino.localId} onEscolher={(l) => {
+                setDados(d => ({ ...d, destino_endereco: l.endereco, destino_complemento: l.complemento ?? '', destino_lat: l.latitude ?? 0, destino_lng: l.longitude ?? 0 }))
+                setConfDestino({ conferida: true, semNumero: false, viaLocal: l.nome, localId: l.id })
+              }} />
               <AddressAutocomplete
                 value={dados.destino_endereco}
-                onChange={(addr, lat, lon) => setDados(d => ({
+                onChange={(addr, lat, lon, meta) => { setConfDestino({ conferida: false, semNumero: Boolean(meta?.semNumero), viaLocal: null, localId: null }); setDados(d => ({
                   ...d,
                   destino_endereco: addr,
                   // Mesma regra da origem: texto editado à mão perde a coordenada antiga.
                   destino_lat: lat ?? 0,
                   destino_lng: lon ?? 0,
-                }))}
+                })) }}
                 placeholder="Rua, número, bairro, cidade..."
                 icon={<Flag size={15} />}
               />
+              <ConferenciaCoordenada lat={dados.destino_lat || null} lng={dados.destino_lng || null}
+                conferida={confDestino.conferida} semNumero={confDestino.semNumero} viaLocal={confDestino.viaLocal} podeSalvarLocal={podeSalvarLocal}
+                onMover={(lat, lng) => setDados(d => ({ ...d, destino_lat: lat, destino_lng: lng }))}
+                onConferir={(v) => setConfDestino(c => ({ ...c, conferida: v }))}
+                onSalvarLocal={(nome) => salvarComoLocal(nome, dados.destino_endereco, dados.destino_complemento, dados.destino_lat, dados.destino_lng)} />
             </div>
 
             {/* Complemento do destino: mesma regra da origem. */}
