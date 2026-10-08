@@ -8,6 +8,7 @@ import {
   Car, Shield, UserCheck, AlertTriangle, DollarSign
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { periodicidadePadraoDoCliente } from '@/lib/checkin'
 import { useAuth } from '@/hooks/useAuth'
 import { AiTextButton } from '@/components/ui/ai-text-button'
 
@@ -28,7 +29,7 @@ const P = {
 }
 
 // ─── Types ────────────────────────────────────────────────────────────────────
-interface ClienteOpt    { id: string; nome_cliente: string; cor_destaque: string; valor_padrao_escolta: number | null }
+interface ClienteOpt    { id: string; nome_cliente: string; cor_destaque: string; valor_padrao_escolta: number | null; metadados: Record<string, unknown> | null }
 interface VeiculoOpt    { id: string; placa: string; modelo: string | null; tipo: { nome: string } | null }
 interface VigilanteOpt  { id: string; nome_completo: string; funcao: { nome: string } | null; valor_padrao_pago: number | null }
 
@@ -375,12 +376,13 @@ function FormularioEscolta() {
   const [valorCobrado, setValorCobrado] = useState('')
   const [outrosCustos, setOutrosCustos] = useState('')
   const [obsFinanceiro, setObsFinanceiro] = useState('')
-  const [periodicidadeCheckin, setPeriodicidadeCheckin] = useState('30')
+  // Lote 2026-10 (M4): sem check-in obrigatório por padrão.
+  const [periodicidadeCheckin, setPeriodicidadeCheckin] = useState('')
   const verFinanceiro = PERFIS_FINANCEIRO.includes((user?.perfil?.codigo ?? '') as any)
 
   const carregar = useCallback(async () => {
     const [{ data: cls }, { data: vcs }, { data: vgs }] = await Promise.all([
-      sb.from('clientes').select('id, nome_cliente, cor_destaque, valor_padrao_escolta').eq('status', 'ativo').order('nome_cliente'),
+      sb.from('clientes').select('id, nome_cliente, cor_destaque, valor_padrao_escolta, metadados').eq('status', 'ativo').order('nome_cliente'),
       sb.from('veiculos').select('id, placa, modelo, tipo:dom_tipos_veiculo(nome)').eq('status', 'ativo').order('placa'),
       sb.from('vigilantes').select('id, nome_completo, funcao:dom_funcoes(nome), valor_padrao_pago').eq('status', 'ativo').order('nome_completo'),
     ])
@@ -472,7 +474,8 @@ function FormularioEscolta() {
           }))
         : [novaViatura()])
 
-      setPeriodicidadeCheckin(e.periodicidade_checkin_min != null ? String(e.periodicidade_checkin_min) : '30')
+      // Editar não religa o check-in: nulo continua nulo.
+      setPeriodicidadeCheckin(e.periodicidade_checkin_min != null ? String(e.periodicidade_checkin_min) : '')
       setValorCobrado(e.valor_cobrado != null ? String(e.valor_cobrado) : '')
       setOutrosCustos(e.outros_custos != null ? String(e.outros_custos) : '')
       setObsFinanceiro(e.observacao_financeira ?? '')
@@ -794,6 +797,8 @@ function FormularioEscolta() {
                   onChange={e => {
                     const cid = e.target.value
                     setDados(d => ({ ...d, cliente_id: cid }))
+                    const padraoCheckin = periodicidadePadraoDoCliente(clientes.find(c => c.id === cid)?.metadados)
+                    setPeriodicidadeCheckin(padraoCheckin ? String(padraoCheckin) : '')
                     if (verFinanceiro) {
                       const cli = clientes.find(c => c.id === cid)
                       if (cli?.valor_padrao_escolta != null) setValorCobrado(cli.valor_padrao_escolta.toString())
@@ -948,7 +953,8 @@ function FormularioEscolta() {
               </div>
             </div>
 
-            {/* Periodicidade de check-in */}
+            {/* Periodicidade de check-in: escondida, salvo escolta que já tem ou cliente religado */}
+            {(periodicidadeCheckin !== '' || periodicidadePadraoDoCliente(clientes.find(c => c.id === dados.cliente_id)?.metadados) != null) && (
             <div>
               <FieldLabel>Periodicidade de Check-in em Rota</FieldLabel>
               <FieldWrap icon={<Radio size={13} />}>
@@ -967,6 +973,7 @@ function FormularioEscolta() {
                 Define com que frequência o operador deve confirmar a posição da escolta. Gera alerta no painel e no Telegram quando o prazo vence.
               </p>
             </div>
+            )}
 
             {/* Seção Financeira — supervisor+ */}
             {verFinanceiro && (
