@@ -34,7 +34,7 @@ const P = {
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface ClienteOpt    { id: string; nome_cliente: string; cor_destaque: string; valor_padrao_escolta: number | null; metadados: Record<string, unknown> | null }
 interface VeiculoOpt    { id: string; placa: string; modelo: string | null; tipo: { nome: string } | null }
-interface VigilanteOpt  { id: string; nome_completo: string; funcao: { nome: string } | null; valor_padrao_pago: number | null }
+interface VigilanteOpt  { id: string; nome_completo: string; funcao: { nome: string } | null; valor_padrao_pago: number | null; usuario_id: string | null }
 
 interface MembroForm    { uid: string; vigilante_id: string; papel_na_escolta: 'comandante' | 'operador'; valor_pago: string }
 
@@ -444,7 +444,7 @@ function FormularioEscolta() {
     const [{ data: cls }, { data: vcs }, { data: vgs }] = await Promise.all([
       sb.from('clientes').select('id, nome_cliente, cor_destaque, valor_padrao_escolta, metadados').eq('status', 'ativo').order('nome_cliente'),
       sb.from('veiculos').select('id, placa, modelo, tipo:dom_tipos_veiculo(nome)').eq('status', 'ativo').order('placa'),
-      sb.from('vigilantes').select('id, nome_completo, funcao:dom_funcoes(nome), valor_padrao_pago').eq('status', 'ativo').order('nome_completo'),
+      sb.from('vigilantes').select('id, nome_completo, funcao:dom_funcoes(nome), valor_padrao_pago, usuario_id').eq('status', 'ativo').order('nome_completo'),
     ])
     setClientes(cls ?? [])
     setVeiculos(vcs ?? [])
@@ -594,8 +594,32 @@ function FormularioEscolta() {
       if (v.membros.length > 0 && !v.membros.some(m => m.papel_na_escolta === 'comandante'))
         e.push(`Viatura ${i+1}: defina um Comandante entre os vigilantes escalados.`)
     })
+    // Onda G: a mesma pessoa não pode estar duas vezes na escolta (em qualquer viatura),
+    // nem a mesma placa em duas viaturas. O banco recusa também (migration 210).
+    const vistosVig = new Map<string, number>()
+    const vistosVei = new Map<string, number>()
+    viaturas.forEach((v, i) => {
+      if (v.veiculo_id) {
+        const antes = vistosVei.get(v.veiculo_id)
+        if (antes !== undefined) {
+          const placa = veiculos.find(x => x.id === v.veiculo_id)?.placa ?? 'selecionado'
+          e.push(`Viatura ${i+1}: o veículo ${placa} já está na viatura ${antes+1}. Escolha outro veículo.`)
+        } else vistosVei.set(v.veiculo_id, i)
+      }
+      v.membros.forEach(m => {
+        if (!m.vigilante_id) return
+        const antes = vistosVig.get(m.vigilante_id)
+        if (antes !== undefined) {
+          const nome = vigilantes.find(x => x.id === m.vigilante_id)?.nome_completo ?? 'selecionado'
+          e.push(`Viatura ${i+1}: o vigilante ${nome} já está escalado${antes === i ? ' nesta viatura' : ` na viatura ${antes+1}`}. Cada vigilante entra uma vez só na escolta.`)
+        } else vistosVig.set(m.vigilante_id, i)
+      })
+    })
     return e
   }
+
+  /** Vigilantes já escolhidos em qualquer viatura: o seletor de cada linha os esconde. */
+  const vigilantesEscolhidos = new Set(viaturas.flatMap(v => v.membros.map(m => m.vigilante_id)).filter(Boolean))
 
   /** Verdadeiro quando nenhuma viatura tem gente: a escolta vai para o mural. */
   const iraParaOMural = viaturas.every(v => v.membros.length === 0)
@@ -1255,13 +1279,20 @@ function FormularioEscolta() {
                                 className={inputCls} style={{ ...inputStyle, cursor: 'pointer', height: '44px' }}
                               >
                                 <option value="">Selecione o vigilante...</option>
-                                {vigilantes.map(v => (
+                                {vigilantes.filter(v => v.id === m.vigilante_id || !vigilantesEscolhidos.has(v.id)).map(v => (
                                   <option key={v.id} value={v.id}>
                                     {v.nome_completo}{v.funcao?.nome ? ` · ${v.funcao.nome}` : ''}
                                   </option>
                                 ))}
                               </select>
                             </FieldWrap>
+                            {/* Onda G: sem conta de usuário, o vigilante nunca vê a escolta no aplicativo. */}
+                            {m.vigilante_id && vigilantes.some(v => v.id === m.vigilante_id && !v.usuario_id) && (
+                              <p className="mt-1 text-[11px] font-bold leading-snug" data-aviso="vigilante-sem-conta"
+                                style={{ color: '#8A5A10' }}>
+                                Este vigilante não tem acesso ao aplicativo e não verá a escolta.
+                              </p>
+                            )}
                           </div>
 
                           {/* Papel + valor + botão remover em linha no mobile */}
