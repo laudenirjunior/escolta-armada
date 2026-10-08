@@ -54,10 +54,10 @@ export function MapaPino({ lat, lng, onMover, altura = 220 }: {
         <p style={{ fontSize: '11px', color: '#5A6A80' }}>Mapa indisponível neste ambiente. Confira a coordenada pelos números.</p>
         <div className="grid grid-cols-2 gap-2">
           <label style={{ fontSize: '10px', color: '#5A6A80' }}>Latitude
-            <input type="number" step="0.000001" value={lat ?? ''} onChange={e => onMover(Number(e.target.value), lng ?? 0)} className="input-light w-full text-xs mt-0.5" />
+            <input type="number" step="0.000001" value={lat ?? ''} onChange={e => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) onMover(v, lng ?? 0) }} className="input-light w-full text-xs mt-0.5" />
           </label>
           <label style={{ fontSize: '10px', color: '#5A6A80' }}>Longitude
-            <input type="number" step="0.000001" value={lng ?? ''} onChange={e => onMover(lat ?? 0, Number(e.target.value))} className="input-light w-full text-xs mt-0.5" />
+            <input type="number" step="0.000001" value={lng ?? ''} onChange={e => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) onMover(lat ?? 0, v) }} className="input-light w-full text-xs mt-0.5" />
           </label>
         </div>
       </div>

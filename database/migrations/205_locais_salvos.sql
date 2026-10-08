@@ -66,8 +66,12 @@ BEGIN
     NEW.conferido_por := NULL; NEW.conferido_em := NULL;
   ELSE
     NEW.criado_por := OLD.criado_por; NEW.criado_em := OLD.criado_em;
-    IF OLD.situacao = 'ativo' AND (NEW.latitude IS DISTINCT FROM OLD.latitude OR NEW.longitude IS DISTINCT FROM OLD.longitude)
-       AND NEW.situacao = 'ativo' THEN
+    -- Local ativo que muda de coordenada, nome, endereço ou complemento volta para
+    -- conferência (o texto e o pino são o que a conferência atestou).
+    IF OLD.situacao = 'ativo' AND NEW.situacao = 'ativo'
+       AND (NEW.latitude IS DISTINCT FROM OLD.latitude OR NEW.longitude IS DISTINCT FROM OLD.longitude
+            OR NEW.nome IS DISTINCT FROM OLD.nome OR NEW.endereco IS DISTINCT FROM OLD.endereco
+            OR NEW.complemento IS DISTINCT FROM OLD.complemento) THEN
       NEW.situacao := 'aguardando_conferencia';
     END IF;
     IF NEW.situacao = 'ativo' AND OLD.situacao IS DISTINCT FROM 'ativo' THEN

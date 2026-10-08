@@ -56,3 +56,18 @@ BEGIN
   END;
 END $$;
 ROLLBACK;
+
+-- Revisão adversarial da onda D: mudar o texto de um local ativo exige nova conferência.
+BEGIN;
+INSERT INTO public.locais_salvos (nome, endereco, latitude, longitude, situacao) VALUES ('QA ativo', 'Rua Z, 1', -22.9, -43.3, 'ativo')
+RETURNING set_config('t.local', id::text, true);
+SELECT qa.como('qa_supervisor');
+DO $$
+DECLARE v text;
+BEGIN
+  UPDATE public.locais_salvos SET endereco = 'Outra rua, 2' WHERE id = current_setting('t.local')::uuid;
+  SELECT situacao INTO v FROM public.locais_salvos WHERE id = current_setting('t.local')::uuid;
+  IF v = 'aguardando_conferencia' THEN RAISE NOTICE 'PASSOU: mudar o endereco de local ativo devolve para conferencia';
+  ELSE RAISE NOTICE 'FALHOU: local continuou %', v; END IF;
+END $$;
+ROLLBACK;

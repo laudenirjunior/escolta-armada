@@ -41,7 +41,7 @@ export default function LocaisSalvosPage() {
   }, [])
   useEffect(() => { if (podeEditar) carregar() }, [podeEditar, carregar])
 
-  const salvar = async () => {
+  const salvar = async (ativarDepois = false) => {
     if (!edicao) return
     setOcupado(true); setMsg(null)
     const campos = { nome: edicao.nome.trim(), endereco: edicao.endereco.trim(), complemento: edicao.complemento?.trim() || null, latitude: edicao.latitude, longitude: edicao.longitude }
@@ -49,6 +49,11 @@ export default function LocaisSalvosPage() {
       ? await sb.from('locais_salvos').update(campos).eq('id', edicao.id).select('id')
       : await sb.from('locais_salvos').insert({ ...campos, situacao: 'aguardando_conferencia', fonte_coordenada: 'Cadastrado na tela de locais salvos' }).select('id')
     setMsg(r.error || !r.data?.length ? { ok: false, texto: r.error?.message ?? 'Sem permissão.' } : { ok: true, texto: edicao.id ? 'Local salvo. Se a coordenada mudou, ele volta para conferência.' : 'Local criado, aguardando conferência.' })
+    if (!r.error && r.data?.length && ativarDepois) {
+      // Conferência com o mapa aberto: salva o pino e ativa na mesma ação (decisão 6).
+      const a = await sb.from('locais_salvos').update({ situacao: 'ativo' }).eq('id', r.data[0].id).select('id')
+      setMsg(a.error || !a.data?.length ? { ok: false, texto: a.error?.message ?? 'Sem permissão para ativar.' } : { ok: true, texto: `"${edicao.nome}" conferido no mapa e ativo: já aparece como atalho.` })
+    }
     setOcupado(false)
     if (!r.error) { setEdicao(null); await carregar() }
   }
@@ -96,12 +101,18 @@ export default function LocaisSalvosPage() {
             </label>
           </div>
           <p className="text-xs font-bold" style={{ color: '#1E2D35' }}>Arraste o pino até o ponto exato (portão, doca).</p>
-          <MapaPino lat={edicao.latitude} lng={edicao.longitude} onMover={(lat, lng) => setEdicao({ ...edicao, latitude: lat, longitude: lng })} altura={300} />
+          <MapaPino key={edicao.id ?? "novo"} lat={edicao.latitude} lng={edicao.longitude} onMover={(lat, lng) => setEdicao({ ...edicao, latitude: lat, longitude: lng })} altura={300} />
           <div className="flex gap-2">
-            <button type="button" onClick={salvar} disabled={ocupado || edicao.nome.trim().length < 2 || !edicao.endereco.trim()}
+            <button type="button" onClick={() => salvar()} disabled={ocupado || edicao.nome.trim().length < 2 || !edicao.endereco.trim()}
               className="inline-flex items-center gap-1.5 px-4 text-xs font-black uppercase text-white disabled:opacity-50" style={{ minHeight: '40px', backgroundColor: '#1E7C52' }}>
               <Save size={14} /> Salvar local
             </button>
+            {podeAtivar && edicao.id && (
+              <button type="button" onClick={() => salvar(true)} disabled={ocupado || edicao.latitude == null || edicao.longitude == null || edicao.nome.trim().length < 2}
+                className="inline-flex items-center gap-1.5 px-4 text-xs font-black uppercase text-white disabled:opacity-50" style={{ minHeight: '40px', backgroundColor: '#1E2D35' }}>
+                <CheckCircle2 size={14} /> Conferi no mapa, ativar
+              </button>
+            )}
             <button type="button" onClick={() => setEdicao(null)} className="px-4 text-xs font-bold" style={{ minHeight: '40px', border: '1px solid #C8D5DC', color: '#5A6A80' }}>Cancelar</button>
           </div>
         </div>
@@ -128,14 +139,9 @@ export default function LocaisSalvosPage() {
               </div>
               <div className="flex gap-2 flex-wrap">
                 <button type="button" onClick={() => setEdicao({ id: l.id, nome: l.nome, endereco: l.endereco, complemento: l.complemento, latitude: l.latitude, longitude: l.longitude })}
-                  className="px-3 text-xs font-bold" style={{ minHeight: '36px', border: '1px solid #C8D5DC', color: '#1E2D35' }}>Editar e pôr o pino</button>
-                {podeAtivar && l.situacao !== 'ativo' && (
-                  <button type="button" disabled={ocupado || l.latitude == null} onClick={() => mudarSituacao(l, 'ativo')}
-                    className="inline-flex items-center gap-1 px-3 text-xs font-black uppercase text-white disabled:opacity-50" style={{ minHeight: '36px', backgroundColor: '#1E7C52' }}
-                    title={l.latitude == null ? 'Ponha o pino antes de ativar' : 'Conferi o pino no mapa'}>
-                    <CheckCircle2 size={13} /> Conferido, ativar
-                  </button>
-                )}
+                  className="px-3 text-xs font-bold" style={{ minHeight: '36px', border: '1px solid #C8D5DC', color: '#1E2D35' }}>
+                  {podeAtivar && l.situacao !== 'ativo' ? 'Conferir no mapa' : 'Editar e pôr o pino'}
+                </button>
                 {l.situacao !== 'inativo' && (
                   <button type="button" disabled={ocupado} onClick={() => mudarSituacao(l, 'inativo')}
                     className="inline-flex items-center gap-1 px-3 text-xs font-bold disabled:opacity-50" style={{ minHeight: '36px', border: '1px solid #B83832', color: '#B83832' }}>

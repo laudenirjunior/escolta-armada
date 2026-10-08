@@ -192,7 +192,14 @@ function AddressAutocomplete({
     )
   }, [])
 
-  useEffect(() => { setQuery(value) }, [value])
+  // Valor trocado por fora (atalho de local salvo, carga da edição) não dispara a busca:
+  // o atalho preenche sem chamar a Mapbox (lote 2026-10, M2).
+  useEffect(() => {
+    setQuery(q => {
+      if (q !== value) puloRef.current = true
+      return value
+    })
+  }, [value])
 
   useEffect(() => {
     if (puloRef.current) { puloRef.current = false; return }
@@ -924,7 +931,7 @@ function FormularioEscolta() {
             <div>
               <FieldLabel required>Endereço de Origem</FieldLabel>
               <AtalhosLocais locais={locais} selecionadoId={confOrigem.localId} onEscolher={(l) => {
-                setDados(d => ({ ...d, origem_endereco: l.endereco, origem_complemento: l.complemento ?? '', origem_lat: l.latitude ?? 0, origem_lng: l.longitude ?? 0 }))
+                setDados(d => ({ ...d, origem_endereco: l.endereco, origem_complemento: l.complemento ?? d.origem_complemento, origem_lat: l.latitude ?? 0, origem_lng: l.longitude ?? 0 }))
                 setConfOrigem({ conferida: true, semNumero: false, viaLocal: l.nome, localId: l.id })
               }} />
               <AddressAutocomplete
@@ -971,7 +978,7 @@ function FormularioEscolta() {
             <div>
               <FieldLabel required>Endereço de Destino</FieldLabel>
               <AtalhosLocais locais={locais} selecionadoId={confDestino.localId} onEscolher={(l) => {
-                setDados(d => ({ ...d, destino_endereco: l.endereco, destino_complemento: l.complemento ?? '', destino_lat: l.latitude ?? 0, destino_lng: l.longitude ?? 0 }))
+                setDados(d => ({ ...d, destino_endereco: l.endereco, destino_complemento: l.complemento ?? d.destino_complemento, destino_lat: l.latitude ?? 0, destino_lng: l.longitude ?? 0 }))
                 setConfDestino({ conferida: true, semNumero: false, viaLocal: l.nome, localId: l.id })
               }} />
               <AddressAutocomplete
