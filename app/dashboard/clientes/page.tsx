@@ -12,6 +12,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
+import { urlsAssinadas, urlDoMapa } from '@/lib/fotos-url'
 
 interface ClienteRow {
   id: string
@@ -73,6 +74,7 @@ export default function ClientesPage() {
   const [erro, setErro] = useState<string | null>(null)
   const [logoFile, setLogoFile] = useState<File | null>(null)
   const [logoPreview, setLogoPreview] = useState<string>('')
+  const [logosAssinadas, setLogosAssinadas] = useState<Record<string, string>>({})
   const { user } = useAuth()
   const supabase = createClient()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -87,6 +89,9 @@ export default function ClientesPage() {
       .select('id, nome_cliente, cnpj, contato, telefone, cor_destaque, telegram_chat_id, observacoes, status, valor_padrao_escolta, km_franquia, valor_km_excedente, criado_em, metadados')
       .order('nome_cliente') as { data: ClienteRow[] | null }
     setClientes(data ?? [])
+    // Lote 2026-10: bucket privado; a logo é exibida por URL assinada.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setLogosAssinadas(await urlsAssinadas(sb, (data ?? []).map((c: any) => c.metadados?.logo_url)))
     setLoading(false)
   }, [sb])
 
@@ -117,7 +122,7 @@ export default function ClientesPage() {
       valor_km_excedente: c.valor_km_excedente?.toString() ?? '',
     })
     setLogoFile(null)
-    setLogoPreview(c.metadados?.logo_url ?? '')
+    setLogoPreview(urlDoMapa(logosAssinadas, c.metadados?.logo_url) ?? '')
     setErro(null)
     setDialogAberto(true)
   }
@@ -176,10 +181,10 @@ export default function ClientesPage() {
       const path = `logos/clientes/${clienteId}/logo.${ext}`
       const { error: upErr } = await sb.storage.from('fotos').upload(path, logoFile, { upsert: true })
       if (!upErr) {
-        const { data: pub } = sb.storage.from('fotos').getPublicUrl(path)
+        // Lote 2026-10: grava o caminho no bucket, não a URL pública (o bucket é privado).
         const metaAtual = editando?.metadados ?? {}
         await sb.from('clientes').update({
-          metadados: { ...metaAtual, logo_url: pub.publicUrl },
+          metadados: { ...metaAtual, logo_url: path },
         }).eq('id', clienteId)
       }
     } else if (!logoPreview && editando?.metadados?.logo_url) {
@@ -256,8 +261,8 @@ export default function ClientesPage() {
             >
               {/* Logo do cliente */}
               <div style={{ width: '40px', height: '40px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)', overflow: 'hidden', flexShrink: 0, backgroundColor: 'rgba(255,255,255,0.04)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                {c.metadados?.logo_url
-                  ? <img src={c.metadados.logo_url} alt={c.nome_cliente} style={{ width: '100%', height: '100%', objectFit: 'contain', padding: '4px' }} />
+                {urlDoMapa(logosAssinadas, c.metadados?.logo_url)
+                  ? <img src={urlDoMapa(logosAssinadas, c.metadados?.logo_url) ?? undefined} alt={c.nome_cliente} style={{ width: '100%', height: '100%', objectFit: 'contain', padding: '4px' }} />
                   : <ImageIcon size={16} style={{ color: 'rgba(255,255,255,0.15)' }} />}
               </div>
               <div className="flex-1 min-w-0">

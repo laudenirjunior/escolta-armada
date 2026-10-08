@@ -42,6 +42,7 @@ import {
   modeloRelatorioFinal,
 } from '@/lib/textos-padrao'
 import { serializarObservacao, lerObservacao, fotoIdsDoPonto } from '@/lib/pontos-controle'
+import { urlsAssinadas, urlDoMapa, urlAssinada } from '@/lib/fotos-url'
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -892,10 +893,10 @@ export default function EscoltaDetalhePage() {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const getFotoUrl = (foto: any) => {
       if (!foto) return null
-      const path = foto.caminho_arquivo as string
-      if (path.startsWith('http://') || path.startsWith('https://')) return path
-      return supabase.storage.from('fotos').getPublicUrl(path).data.publicUrl
+      // Lote 2026-10: bucket privado; a URL vem do lote assinado logo abaixo.
+      return urlDoMapa(urlsFotos, foto.caminho_arquivo as string)
     }
+    const urlsFotos: Record<string, string> = {}
 
     // ── Fotos dos pontos de controle, em lote ─────────────────────────────────
     // A coleta antes era feita so para os pontos filtrados como parada, entao as
@@ -915,6 +916,17 @@ export default function EscoltaDetalhePage() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       fotosData?.forEach((f: any) => { fotoPathMap[f.id] = f.caminho_arquivo })
     }
+
+    // Uma chamada só para assinar todas as fotos da tela (pontos, presenças, checklists).
+    Object.assign(urlsFotos, await urlsAssinadas(sb, [
+      ...Object.values(fotoPathMap),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...(pts ?? []).map((p: any) => p.foto?.caminho_arquivo),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...(pres ?? []).map((p: any) => p.foto?.caminho_arquivo),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...(chks ?? []).flatMap((c: any) => (c.respostas ?? []).map((r: any) => r.foto?.caminho_arquivo)),
+    ]))
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const urlsDoPonto = (p: any): string[] => {
@@ -1079,7 +1091,7 @@ export default function EscoltaDetalhePage() {
     })
     setParadas(paradasProcessadas)
     setLoading(false)
-  }, [id, sb, supabase])
+  }, [id, sb])
 
   useEffect(() => { carregar() }, [carregar])
 
@@ -1910,8 +1922,8 @@ export default function EscoltaDetalhePage() {
       if (params.fotoId) {
         const { data: f } = await sb.from('fotos').select('caminho_arquivo').eq('id', params.fotoId).maybeSingle()
         if (f?.caminho_arquivo) {
-          const { data: pub } = sb.storage.from('fotos').getPublicUrl(f.caminho_arquivo)
-          fotoUrl = pub?.publicUrl ?? null
+          // Lote 2026-10: URL assinada; o Telegram baixa a foto na hora do envio.
+          fotoUrl = await urlAssinada(sb, f.caminho_arquivo)
         }
       }
       const viatIds = viaturas.map(v => v.id)
