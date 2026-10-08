@@ -179,8 +179,8 @@ function popupHTML(e: EscoltaAtiva): string {
   const pt = e.ultimo_ponto
   return `
     <div style="font-family:system-ui;padding:4px 0;min-width:160px">
-      <div style="font-size:12px;font-weight:800;color:#0E1A33">${esc(e.codigo_escolta ?? '—')}</div>
-      <div style="font-size:11px;color:#5A6A80;margin:2px 0 4px">${esc(e.cliente?.nome_cliente ?? '—')}</div>
+      <div style="font-size:12px;font-weight:800;color:#0E1A33">${esc(e.codigo_escolta ?? '-')}</div>
+      <div style="font-size:11px;color:#5A6A80;margin:2px 0 4px">${esc(e.cliente?.nome_cliente ?? '-')}</div>
       <span style="font-size:9px;font-weight:700;padding:1px 6px;background:${s.color}22;color:${s.color};text-transform:uppercase">${esc(s.label)}</span>
       ${pt ? `
         <div style="margin-top:6px;padding-top:5px;border-top:1px solid #f0f0f0">
