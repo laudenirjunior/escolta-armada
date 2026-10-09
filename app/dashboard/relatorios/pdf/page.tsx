@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { urlAssinada, VALIDADE_IMPRESSAO_S } from '@/lib/fotos-url'
 import { useAuth } from '@/hooks/useAuth'
 import { EMBED_CONCLUSAO, linhasPendencias, type ConclusaoEmbutida } from '@/lib/gestao'
+import { textoInterestadual } from '@/lib/uf-endereco'
 
 const sb = createClient() as any
 
@@ -28,6 +29,11 @@ interface EscoltaPDF {
   // Onda I: conclusão antecipada válida (etiqueta "com pendências" na lista e a lista de
   // pendências logo abaixo, adendo 4.3.6).
   conclusao?: ConclusaoEmbutida[] | null
+  // Onda K (migration 216): etiqueta Interestadual.
+  origem_uf?: string | null
+  destino_uf?: string | null
+  uf_estimada?: boolean | null
+  interestadual?: boolean | null
 }
 interface OcorrenciaPDF {
   id: string; descricao: string; data_hora: string
@@ -205,6 +211,11 @@ function SecaoEscoltas({ escoltas }: { escoltas: EscoltaPDF[] }) {
                 <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {(e.origem_endereco ?? '—').split(',')[0]} → {(e.destino_endereco ?? '—').split(',')[0]}
                 </span>
+                {e.interestadual === true && (
+                  <span data-teste="etiqueta-interestadual" style={{ display: 'inline-block', marginTop: '2px', padding: '0 5px', borderRadius: '2px', background: '#FFF7E6', color: '#8A5A10', fontSize: '9px', fontWeight: 800, textTransform: 'uppercase' }}>
+                    {textoInterestadual(e)}
+                  </span>
+                )}
               </td>
               <td><span className={`status-badge status-${e.status}`}>{STATUS_LABEL[e.status] ?? e.status}{(e.conclusao ?? []).some(c => !c.anulado_em) ? ' (com pendências)' : ''}</span></td>
               <td style={{ fontVariantNumeric: 'tabular-nums', fontSize: '10px' }}>{fmt(e.data_hora_prevista)}</td>
@@ -605,6 +616,7 @@ function RelatoriosPDFConteudo() {
       let escoltasQ = sb.from('escoltas').select(`
         id, codigo_escolta, status, data_hora_prevista, data_finalizacao,
         origem_endereco, destino_endereco, valor_cobrado, outros_custos,
+        origem_uf, destino_uf, uf_estimada, interestadual,
         cliente:clientes(id, nome_cliente, cor_destaque),
         veiculos:escolta_veiculos(
           id, veiculo_id,

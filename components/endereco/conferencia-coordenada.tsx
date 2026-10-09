@@ -17,7 +17,7 @@ export function ConferenciaCoordenada({
   semNumero: boolean
   /** Veio de um local salvo ativo: coordenada já conferida. */
   viaLocal: string | null
-  /** UF preenchida pelo atalho (onda D2). */
+  /** UF do endereço (atalho ou sugestão com region); a estimada pela coordenada não vem (onda K, 15.1 item 5). */
   uf?: string
   onMover: (lat: number, lng: number) => void
   onConferir: (v: boolean) => void
@@ -38,6 +38,7 @@ export function ConferenciaCoordenada({
           A sugestão escolhida não tem número: a busca pode ter posto o ponto no meio da rua, no bairro ou na cidade. Confira e arraste o pino até o portão.
         </p>
       )}
+      {uf && <p style={{ fontSize: '11px', color: '#5A6A80' }} data-teste="uf-campo">UF {uf}.</p>}
       <MapaPino lat={lat} lng={lng} onMover={(a, b) => { onMover(a, b); onConferir(false) }} />
       <label className="flex items-center gap-2 font-bold" style={{ fontSize: '12px', color: conferida ? '#1E7C52' : '#1E2D35' }}>
         <input type="checkbox" checked={conferida} onChange={e => onConferir(e.target.checked)} />

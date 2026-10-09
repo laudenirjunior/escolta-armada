@@ -8,6 +8,7 @@ import { STATUS, LABELS_STATUS, TIPO_PONTO_POR_STATUS } from '@/lib/fluxo-escolt
 import { urlsAssinadas, urlDoMapa, VALIDADE_IMPRESSAO_S } from '@/lib/fotos-url'
 import { carregarLocaisAtivos } from '@/lib/locais'
 import { rotuloDoPonto } from '@/lib/rotulo-ponto'
+import { textoInterestadual } from '@/lib/uf-endereco'
 import { COLUNAS_ANULACAO, textoAnulado, horaBR, type ConclusaoAntecipada } from '@/lib/gestao'
 
 const sb = createClient() as any
@@ -26,6 +27,11 @@ interface PrintData {
     cliente: { nome_cliente: string; telefone: string } | null
     valor_cobrado: number | null
     outros_custos: number | null
+    // Onda K (migration 216).
+    origem_uf?: string | null
+    destino_uf?: string | null
+    uf_estimada?: boolean | null
+    interestadual?: boolean | null
   }
   viaturas: Array<{
     id: string
@@ -157,7 +163,7 @@ export default function EscoltaPrintPage() {
           .from('escoltas')
           .select(`id, codigo_escolta, status, data_hora_prevista, data_finalizacao,
             origem_endereco, destino_endereco, observacao_fechamento, criado_em,
-            valor_cobrado, outros_custos,
+            valor_cobrado, outros_custos, origem_uf, destino_uf, uf_estimada, interestadual,
             cliente:clientes(nome_cliente, telefone)`)
           .eq('id', id)
           .maybeSingle()
@@ -623,6 +629,11 @@ export default function EscoltaPrintPage() {
             <div style={{ fontSize: '13px', color: '#3A6A8A', fontWeight: 600, marginTop: '4px' }}>
               {escolta.cliente?.nome_cliente ?? '—'}
             </div>
+            {escolta.interestadual === true && (
+              <div data-teste="etiqueta-interestadual" style={{ display: 'inline-block', marginTop: '6px', padding: '2px 8px', borderRadius: '3px', background: '#FFF7E6', color: '#8A5A10', fontSize: '10px', fontWeight: 800, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+                {textoInterestadual(escolta)}
+              </div>
+            )}
           </div>
           <div style={{ textAlign: 'right' }}>
             <div style={{

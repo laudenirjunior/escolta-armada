@@ -18,6 +18,8 @@ import { LocalSalvo, carregarLocaisAtivos, mensagemErroLocal, PERFIS_CADASTRAM_L
 import { PODE_PODER_TOTAL, temPermissao } from '@/lib/permissions'
 import { MSG_ATUALIZACAO, ehFuncaoAusente } from '@/lib/gestao'
 import { rotuloStatus } from '@/lib/fluxo-escolta'
+import { ufDaSugestaoMapbox } from '@/lib/uf-endereco'
+import { corDoCliente } from '@/lib/paleta-clientes'
 
 // ─── Palette ──────────────────────────────────────────────────────────────────
 const P = {
@@ -59,9 +61,15 @@ interface DadosBasicos  {
   destino_lat: number
   destino_lng: number
   observacoes: string
-  /** Onda D2: UF preenchida pelo atalho do local salvo; fica só no formulário (a escolta grava a UF na onda K). */
+  /**
+   * Onda K (docs/14, 15.2 item 4): UF de cada lado, gravada em escoltas.origem_uf e
+   * destino_uf. Vazia vira nula. `_uf_estimada`: a UF veio da coordenada (RPC
+   * uf_da_coordenada), não da sugestão com region nem do local salvo.
+   */
   origem_uf: string
   destino_uf: string
+  origem_uf_estimada: boolean
+  destino_uf_estimada: boolean
 }
 
 const sb = createClient() as any
@@ -135,7 +143,9 @@ interface MapboxFeature {
   place_type?: string[]
   address?: string
   text?: string
-  context?: { id: string; text: string }[]
+  context?: { id: string; text: string; short_code?: string }[]
+  // Onda K: sugestão do tipo region traz a UF em properties.short_code.
+  properties?: { short_code?: string } | null
 }
 
 /** Sugestão que não é um endereço com número: a coordenada pode cair longe do portão. */
@@ -161,7 +171,7 @@ function AddressAutocomplete({
   icon,
 }: {
   value: string
-  onChange: (address: string, lat?: number, lon?: number, meta?: { semNumero: boolean }) => void
+  onChange: (address: string, lat?: number, lon?: number, meta?: { semNumero: boolean; uf: string | null }) => void
   placeholder: string
   icon?: React.ReactNode
 }) {
@@ -281,7 +291,7 @@ function AddressAutocomplete({
     puloRef.current = true
     const [lon, lat] = f.center
     setQuery(f.place_name)
-    onChange(f.place_name, lat, lon, { semNumero: semNumero(f) })
+    onChange(f.place_name, lat, lon, { semNumero: semNumero(f), uf: ufDaSugestaoMapbox(f) })
     setSuggestions([])
     setAberto(false)
     setErroApi(null)
@@ -403,7 +413,7 @@ function FormularioEscolta() {
     origem_endereco: '', origem_complemento: '', origem_lat: 0, origem_lng: 0,
     destino_endereco: '', destino_complemento: '', destino_lat: 0, destino_lng: 0,
     observacoes: OBS_PADRAO,
-    origem_uf: '', destino_uf: '',
+    origem_uf: '', destino_uf: '', origem_uf_estimada: false, destino_uf_estimada: false,
   })
   const [viaturas,    setViaturas]    = useState<ViaturaForm[]>([novaViatura()])
   const [clientes,    setClientes]    = useState<ClienteOpt[]>([])
@@ -448,6 +458,28 @@ function FormularioEscolta() {
   // escolta em edição). O complemento é desse endereço: escolher outro (atalho ou busca)
   // troca ou limpa o complemento; o digitado antes da primeira escolha fica.
   const enderecoEscolhido = useRef({ origem: '', destino: '' })
+  // Onda K: UF de cada lado. Toda escolha nova (busca, atalho, pino, digitação) avança a
+  // sequência do lado; a resposta da RPC que chegar depois de uma escolha mais nova é
+  // descartada, para nunca gravar a UF de um endereço que já não está no campo.
+  const ufSeq = useRef({ origem: 0, destino: 0 })
+  const definirUf = useCallback((lado: 'origem' | 'destino', uf: string | null, estimada: boolean) => {
+    ufSeq.current[lado]++
+    setDados(d => ({ ...d, [`${lado}_uf`]: uf ?? '', [`${lado}_uf_estimada`]: Boolean(uf) && estimada }))
+  }, [])
+  /** UF pela coordenada (RPC da 216): pino movido, sugestão sem region, local sem UF. */
+  const ufPelaCoordenada = useCallback(async (lado: 'origem' | 'destino', lat: number, lng: number) => {
+    const seq = ++ufSeq.current[lado]
+    setDados(d => ({ ...d, [`${lado}_uf`]: '', [`${lado}_uf_estimada`]: false }))
+    if (!lat || !lng) return
+    let uf: string | null = null
+    try {
+      const { data, error } = await sb.rpc('uf_da_coordenada', { p_lat: lat, p_lng: lng })
+      // Sem a 216 (função ausente) ou qualquer erro: UF nula, a escolta grava sem ela.
+      if (!error) uf = (Array.isArray(data) ? data[0]?.uf : data?.uf) ?? null
+    } catch { uf = null }
+    if (seq !== ufSeq.current[lado]) return
+    setDados(d => ({ ...d, [`${lado}_uf`]: uf ?? '', [`${lado}_uf_estimada`]: Boolean(uf) }))
+  }, [])
   // "Salvar este endereço" ao lado do campo (onda D2): endereço, complemento, coordenada e UF
   // do campo; nasce aguardando conferência (a trigger da 205 garante, mesmo pedindo ativo).
   const salvarComoLocal = async (nome: string, endereco: string, complemento: string, lat: number, lng: number, uf: string): Promise<{ ok: boolean; texto: string }> => {
@@ -493,6 +525,7 @@ function FormularioEscolta() {
           id, cliente_id, status, data_hora_prevista, metadados,
           origem_endereco, origem_lat, origem_lng,
           destino_endereco, destino_lat, destino_lng,
+          origem_uf, destino_uf, uf_estimada,
           periodicidade_checkin_min, valor_cobrado, outros_custos, observacao_financeira, escala_fixa,
           veiculos:escolta_veiculos(
             id, veiculo_id, criado_em,
@@ -536,8 +569,10 @@ function FormularioEscolta() {
         destino_complemento: destComp,
         destino_lat: Number(e.destino_lat ?? 0), destino_lng: Number(e.destino_lng ?? 0),
         observacoes: meta.observacoes ?? '',
-        // A UF gravada não é lida nem gravada aqui na D2: é da onda K (docs/14, 15.2 item 4).
-        origem_uf: '', destino_uf: '',
+        // Onda K: a UF gravada volta ao formulário; só muda se o endereço daquele lado mudar.
+        origem_uf: e.origem_uf ?? '', destino_uf: e.destino_uf ?? '',
+        origem_uf_estimada: Boolean(e.uf_estimada && e.origem_uf),
+        destino_uf_estimada: Boolean(e.uf_estimada && e.destino_uf),
       })
       enderecoEscolhido.current = { origem: tirarSufixo(e.origem_endereco ?? '', origComp), destino: tirarSufixo(e.destino_endereco ?? '', destComp) }
 
@@ -697,8 +732,12 @@ function FormularioEscolta() {
           observacao_financeira: obsFinanceiro.trim() ? obsFinanceiro.trim() : null,
         } : {}),
         ...(podeEscalaFixa ? { escala_fixa: escalaFixa } : {}),
-        // Onda D2: a UF do atalho fica só no formulário. Gravar origem_uf, destino_uf e
-        // uf_estimada (na criação e na edição, por qualquer caminho) é da onda K.
+        // Onda K: UF de cada lado (vazia vira nula) e se alguma veio da coordenada. Vai
+        // sempre, na criação e na edição: o estado do formulário já foi regravado pelo
+        // caminho que mudou o endereço (nunca a UF antiga mantida por omissão).
+        origem_uf:   dados.origem_uf || null,
+        destino_uf:  dados.destino_uf || null,
+        uf_estimada: (dados.origem_uf_estimada && !!dados.origem_uf) || (dados.destino_uf_estimada && !!dados.destino_uf),
       }
 
       let escoltaId: string
@@ -1030,7 +1069,10 @@ function FormularioEscolta() {
                 // mas mantém o digitado antes de qualquer escolha.
                 const havia = enderecoEscolhido.current.origem
                 enderecoEscolhido.current.origem = l.endereco
-                setDados(d => ({ ...d, origem_endereco: l.endereco, origem_complemento: l.complemento ?? (havia ? '' : d.origem_complemento), origem_lat: l.latitude ?? 0, origem_lng: l.longitude ?? 0, origem_uf: l.uf ?? '' }))
+                setDados(d => ({ ...d, origem_endereco: l.endereco, origem_complemento: l.complemento ?? (havia ? '' : d.origem_complemento), origem_lat: l.latitude ?? 0, origem_lng: l.longitude ?? 0 }))
+                // Onda K: UF do local (conferida); local sem UF e com coordenada: pela coordenada.
+                if (l.uf) definirUf('origem', l.uf, false)
+                else ufPelaCoordenada('origem', l.latitude ?? 0, l.longitude ?? 0)
                 setConfOrigem({ conferida: true, semNumero: false, viaLocal: l.nome, localId: l.id })
               }} />
               <AddressAutocomplete
@@ -1048,14 +1090,19 @@ function FormularioEscolta() {
                   // nasceria com o endereço de um lugar e a coordenada de outro.
                   origem_lat: lat ?? 0,
                   origem_lng: lon ?? 0,
-                  origem_uf: '',
-                })) }}
+                }))
+                  // Onda K: sugestão com region dá a UF; sem region, pela coordenada;
+                  // texto digitado (sem coordenada) fica sem UF.
+                  if (lat != null && meta?.uf) definirUf('origem', meta.uf, false)
+                  else if (lat != null && lon != null) ufPelaCoordenada('origem', lat, lon)
+                  else definirUf('origem', null, false)
+                }}
                 placeholder="Rua, número, bairro, cidade..."
                 icon={<MapPin size={15} />}
               />
               <ConferenciaCoordenada lat={dados.origem_lat || null} lng={dados.origem_lng || null}
-                conferida={confOrigem.conferida} semNumero={confOrigem.semNumero} viaLocal={confOrigem.viaLocal} uf={dados.origem_uf}
-                onMover={(lat, lng) => setDados(d => ({ ...d, origem_lat: lat, origem_lng: lng }))}
+                conferida={confOrigem.conferida} semNumero={confOrigem.semNumero} viaLocal={confOrigem.viaLocal} uf={dados.origem_uf_estimada ? '' : dados.origem_uf}
+                onMover={(lat, lng) => { setDados(d => ({ ...d, origem_lat: lat, origem_lng: lng })); ufPelaCoordenada('origem', lat, lng) }}
                 onConferir={(v) => setConfOrigem(c => ({ ...c, conferida: v }))} />
             </div>
 
@@ -1093,7 +1140,10 @@ function FormularioEscolta() {
                 // mas mantém o digitado antes de qualquer escolha.
                 const havia = enderecoEscolhido.current.destino
                 enderecoEscolhido.current.destino = l.endereco
-                setDados(d => ({ ...d, destino_endereco: l.endereco, destino_complemento: l.complemento ?? (havia ? '' : d.destino_complemento), destino_lat: l.latitude ?? 0, destino_lng: l.longitude ?? 0, destino_uf: l.uf ?? '' }))
+                setDados(d => ({ ...d, destino_endereco: l.endereco, destino_complemento: l.complemento ?? (havia ? '' : d.destino_complemento), destino_lat: l.latitude ?? 0, destino_lng: l.longitude ?? 0 }))
+                // Onda K: UF do local (conferida); local sem UF e com coordenada: pela coordenada.
+                if (l.uf) definirUf('destino', l.uf, false)
+                else ufPelaCoordenada('destino', l.latitude ?? 0, l.longitude ?? 0)
                 setConfDestino({ conferida: true, semNumero: false, viaLocal: l.nome, localId: l.id })
               }} />
               <AddressAutocomplete
@@ -1108,14 +1158,19 @@ function FormularioEscolta() {
                   // Mesma regra da origem: texto editado à mão perde a coordenada antiga.
                   destino_lat: lat ?? 0,
                   destino_lng: lon ?? 0,
-                  destino_uf: '',
-                })) }}
+                }))
+                  // Onda K: sugestão com region dá a UF; sem region, pela coordenada;
+                  // texto digitado (sem coordenada) fica sem UF.
+                  if (lat != null && meta?.uf) definirUf('destino', meta.uf, false)
+                  else if (lat != null && lon != null) ufPelaCoordenada('destino', lat, lon)
+                  else definirUf('destino', null, false)
+                }}
                 placeholder="Rua, número, bairro, cidade..."
                 icon={<Flag size={15} />}
               />
               <ConferenciaCoordenada lat={dados.destino_lat || null} lng={dados.destino_lng || null}
-                conferida={confDestino.conferida} semNumero={confDestino.semNumero} viaLocal={confDestino.viaLocal} uf={dados.destino_uf}
-                onMover={(lat, lng) => setDados(d => ({ ...d, destino_lat: lat, destino_lng: lng }))}
+                conferida={confDestino.conferida} semNumero={confDestino.semNumero} viaLocal={confDestino.viaLocal} uf={dados.destino_uf_estimada ? '' : dados.destino_uf}
+                onMover={(lat, lng) => { setDados(d => ({ ...d, destino_lat: lat, destino_lng: lng })); ufPelaCoordenada('destino', lat, lng) }}
                 onConferir={(v) => setConfDestino(c => ({ ...c, conferida: v }))} />
             </div>
 
@@ -1493,7 +1548,7 @@ function FormularioEscolta() {
               <div className="p-4 space-y-0">
                 {cliente && (
                   <div className="flex items-center gap-2 py-3" style={{ borderBottom: `1px solid ${P.border}` }}>
-                    <div style={{ width: '10px', height: '10px', backgroundColor: cliente.cor_destaque, borderRadius: '2px', flexShrink: 0 }} />
+                    <div style={{ width: '10px', height: '10px', backgroundColor: corDoCliente(cliente.cor_destaque), borderRadius: '2px', flexShrink: 0 }} />
                     <span className="text-sm font-black" style={{ color: P.navy }}>{cliente.nome_cliente}</span>
                   </div>
                 )}
@@ -1508,6 +1563,13 @@ function FormularioEscolta() {
                     <p className="text-xs font-semibold" style={{ color: P.text }}>{r.value}</p>
                   </div>
                 ))}
+                {/* Onda K: mesma regra da coluna gerada interestadual (origem ou destino fora do RJ). */}
+                {((dados.origem_uf && dados.origem_uf !== 'RJ') || (dados.destino_uf && dados.destino_uf !== 'RJ')) && (
+                  <div className="py-2.5" style={{ borderBottom: `1px solid ${P.border}` }}>
+                    <span data-teste="etiqueta-interestadual" className="text-[10px] font-black uppercase tracking-widest px-1.5 py-0.5"
+                      style={{ backgroundColor: '#FFF7E6', color: '#8A5A10', borderRadius: '2px' }}>Interestadual</span>
+                  </div>
+                )}
                 {dados.observacoes && (
                   <div className="py-2.5">
                     <p className="text-[9px] font-black uppercase tracking-widest mb-1" style={{ color: P.sub }}>Observações</p>
