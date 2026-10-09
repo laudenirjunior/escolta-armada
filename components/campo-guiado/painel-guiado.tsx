@@ -26,6 +26,7 @@ import { EstouNaBase } from './estou-na-base'
 import { AvisosMural } from '@/components/escolta/avisos-mural'
 import { CartaoEscolta } from '@/components/escolta/cartao-escolta'
 import type { CartaoEscolta as CartaoDados } from '@/lib/cartao-escolta'
+import { ContadorFila } from '@/components/offline/offline-provider'
 
 // ─── Paleta Navy (app/globals.css), sem migrar paleta ─────────────────────────
 const COR = {
@@ -413,6 +414,7 @@ export function PainelGuiado(p: PainelGuiadoProps) {
       <div className="max-w-xl mx-auto space-y-4">
         <h1 className="font-black" style={{ fontSize: '22px', color: COR.texto }}>Painel Operacional Guiado</h1>
         <AvisosMural />
+        <ContadorFila />
         {p.semVinculoCadastro ? (
           <Cartao borda="#E9C46A">
             <p className="font-black" style={{ fontSize: '18px', color: COR.texto }}>Seu cadastro não está ligado a um vigilante</p>
@@ -645,6 +647,9 @@ export function PainelGuiado(p: PainelGuiadoProps) {
           )}
         </div>
       )}
+
+      {/* Onda L: registros guardados no aparelho, não aceitos e recusados (some com zero). */}
+      <ContadorFila />
 
       {/* Pendencias */}
       <Cartao>

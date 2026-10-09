@@ -13,6 +13,7 @@ import { TopBar } from '@/components/layout/topbar'
 import { TelegramNotificacoesProvider } from '@/components/telegram-notificacoes-provider'
 import { AvisosProvider, useAvisos } from '@/components/avisos-provider'
 import { InstalarAppProvider } from '@/components/instalar-app-provider'
+import { OfflineProvider } from '@/components/offline/offline-provider'
 import { useAuth } from '@/hooks/useAuth'
 import { ModoGuiadoProvider, useModoGuiado } from '@/hooks/useModoGuiado'
 import type { Perfil } from '@/types'
@@ -100,7 +101,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 }
 
 function DashboardLayoutInterno({ children, auth }: { children: React.ReactNode; auth: ReturnType<typeof useAuth> }) {
-  const { user, loading, isAuthenticated, logout, precisaTrocarSenha } = auth
+  const { user, loading, isAuthenticated, logout, precisaTrocarSenha, authUserId, modoOffline } = auth
   const { ligado: modoGuiado } = useModoGuiado()
   const router = useRouter()
   const pathname = usePathname()
@@ -169,6 +170,9 @@ function DashboardLayoutInterno({ children, auth }: { children: React.ReactNode;
         paddingRight: 'env(safe-area-inset-right)',
       }}
     >
+
+      {/* Onda L: faixa fixa de conexão e envio da fila de campo (some com tudo em dia). */}
+      <OfflineProvider authUserId={authUserId} modoOffline={modoOffline} />
 
       <TopBarComAvisos
         userInfo={{
