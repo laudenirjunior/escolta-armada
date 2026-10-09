@@ -347,11 +347,11 @@ O pré-início **não acontece pela tela de Campo**. Ele é um assistente de tr�
 
   `[PRINT P28]`
 
-- **Passo 2, Viatura:** as **cinco fotos obrigatórias da viatura**, em cinco ângulos com significado individual: **Frontal, Traseira, Lateral Esquerda, Lateral Direita e Painel/Interior**. Em seguida, um checklist de condições (pneus, óleo, faróis, armas no cofre, combustível, cintos, documentação, limpeza). A viatura só é liberada quando o passo é concluído inteiro.
+- **Passo 2, Viatura:** as **cinco fotos obrigatórias da viatura**, em cinco ângulos com significado individual: **Frontal, Traseira, Lateral Esquerda, Lateral Direita e Painel/Interior**. Em seguida, um checklist de condições (pneus, óleo, faróis, armas no cofre, combustível, cintos, documentação, limpeza). Depois, o bloco **Por viatura**: um cartão para cada viatura da escolta, identificado pela placa, com o **KM inicial** (obrigatório, número maior que zero) e a **foto do painel com o hodômetro** (obrigatória, pela câmera). A viatura só é liberada quando o passo é concluído inteiro; se faltar o KM ou a foto de alguma viatura, a mensagem diz qual placa está pendente. Numa escolta com mais de uma viatura, as cinco fotos de ângulo e o checklist de condições continuam registrando só a primeira viatura; o KM e a foto do painel são de cada uma.
 
   `[PRINT P29]`
 
-- **Passo 3, Saída:** a **quilometragem inicial**, a **foto do hodômetro** e as observações de saída. O botão **Confirmar e Iniciar Escolta** coloca a operação em campo.
+- **Passo 3, Saída:** só as **observações gerais de saída** (obrigatórias), com um resumo, só para conferência, do KM inicial de cada viatura informado no Passo 2. Para corrigir o KM ou a foto, use **Voltar**: o que foi preenchido no Passo 2 continua lá. O botão **Confirmar e Iniciar Escolta** coloca a operação em campo e grava o ponto de saída da base de cada viatura, com o KM e a foto do painel daquela viatura.
 
   `[PRINT P30]`
 
