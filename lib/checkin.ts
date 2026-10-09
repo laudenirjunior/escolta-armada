@@ -87,39 +87,51 @@ export function minutosAteCheckin(params: {
  * Le as linhas afetadas, porque insert negado pela RLS pode voltar sem erro e sem
  * linha.
  */
+export interface DadosCheckin {
+  escoltaVeiculoId: string
+  fotoIds: string[]
+  gps: { lat: number; lng: number; precisao: number }
+  observacao: string | null
+  endereco?: string | null
+  userId: string | null
+  /**
+   * Lote 2026-10 (onda L, 16.3.11): hora da ação (o toque de confirmar). Antes o ponto levava
+   * a hora do envio, depois do upload das fotos.
+   */
+  dataHora?: string
+}
+
+/** A linha do check-in em pontos_controle (a mesma do insert direto e do envelope da onda L). */
+export function linhaCheckin(dados: DadosCheckin): Record<string, unknown> {
+  return {
+    escolta_veiculo_id: dados.escoltaVeiculoId,
+    tipo_ponto_id: TIPO_PONTO_PARADA_ID,
+    data_hora: dados.dataHora ?? new Date().toISOString(),
+    latitude: dados.gps.lat,
+    longitude: dados.gps.lng,
+    precisao_metros: dados.gps.precisao,
+    sem_sinal_gps: false,
+    foto_id: dados.fotoIds[0] ?? null,
+    lancado_por: dados.userId,
+    observacoes: serializarObservacao({
+      tipo: TIPO_CHECKIN,
+      tipoLabel: ROTULO_CHECKIN,
+      observacao: dados.observacao,
+      fotoIds: dados.fotoIds,
+      endereco: dados.endereco ?? null,
+    }),
+    sincronizado: true,
+  }
+}
+
 export async function registrarCheckin(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   sb: any,
-  dados: {
-    escoltaVeiculoId: string
-    fotoIds: string[]
-    gps: { lat: number; lng: number; precisao: number }
-    observacao: string | null
-    endereco?: string | null
-    userId: string | null
-  },
+  dados: DadosCheckin,
 ): Promise<string> {
   const { data, error } = await sb
     .from('pontos_controle')
-    .insert({
-      escolta_veiculo_id: dados.escoltaVeiculoId,
-      tipo_ponto_id: TIPO_PONTO_PARADA_ID,
-      data_hora: new Date().toISOString(),
-      latitude: dados.gps.lat,
-      longitude: dados.gps.lng,
-      precisao_metros: dados.gps.precisao,
-      sem_sinal_gps: false,
-      foto_id: dados.fotoIds[0] ?? null,
-      lancado_por: dados.userId,
-      observacoes: serializarObservacao({
-        tipo: TIPO_CHECKIN,
-        tipoLabel: ROTULO_CHECKIN,
-        observacao: dados.observacao,
-        fotoIds: dados.fotoIds,
-        endereco: dados.endereco ?? null,
-      }),
-      sincronizado: true,
-    })
+    .insert(linhaCheckin(dados))
     .select('id')
   if (error) throw new Error(error.message)
   if (!data || data.length === 0) {

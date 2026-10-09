@@ -46,6 +46,8 @@ export interface AvisoPosEnvio {
   corpo: Record<string, unknown>
   /** Caminho no bucket da foto que vai na mensagem (a URL assinada é gerada no envio). */
   fotoCaminho?: string | null
+  /** Etapa: só avisa se a etapa avançou (comboio com outra viatura faltando não avisa, como antes). */
+  soSeAvancou?: boolean
 }
 
 export interface RegistroFila {

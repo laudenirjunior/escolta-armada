@@ -358,7 +358,10 @@ async function enviarUm(deps: DependenciasEnvio, reg: RegistroFila): Promise<Res
       data_hora_acao: reg.data_hora_acao, recebido_em: d.recebido_em ?? null, resultado: 'aplicado',
       texto_offline: d.texto_offline ?? null, resposta: (resp.data ?? null) as Record<string, unknown> | null,
     })
-    if (reg.aviso) await avisarTelegram(deps, reg.client_id, reg.aviso, d.texto_offline ?? null, reg.data_hora_acao)
+    const avancou = (d as { resposta?: { avancou?: boolean } | null }).resposta?.avancou === true
+    if (reg.aviso && (!reg.aviso.soSeAvancou || avancou)) {
+      await avisarTelegram(deps, reg.client_id, reg.aviso, d.texto_offline ?? null, reg.data_hora_acao)
+    }
     return 'aplicado'
   }
   // Conflito (o servidor guardou no livro e avisou a supervisão): o aparelho para de reenviar.
