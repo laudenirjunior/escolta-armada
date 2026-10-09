@@ -1668,7 +1668,7 @@ COMMIT;
 -- 209_historico_sem_trigger:
 -- (conferência: ver o cabeçalho da migration)
 -- 211_central_avisos e 212_aviso_checkin_servidor: ver a consulta abaixo (central, lote_interno e cron).
-SELECT 'funcoes novas' AS item, count(*)::text AS valor FROM pg_proc WHERE proname IN ('escolta_do_caminho','registrar_etapa_escolta','enfileirar_alerta_checkin','reservar_aviso_presenca','avisos_pelo_banco_ativos','locais_salvos_regras','impedir_combustivel_por_operador','proteger_escala_fixa')
+SELECT 'funcoes novas' AS item, count(*)::text AS valor FROM pg_proc WHERE proname IN ('escolta_do_caminho','registrar_etapa_escolta','enfileirar_alerta_checkin','reservar_aviso_presenca','avisos_pelo_banco_ativos','locais_salvos_regras','impedir_combustivel_por_operador','proteger_escala_fixa') AND pronamespace = 'public'::regnamespace
 UNION ALL SELECT 'tabelas novas', count(*)::text FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('alertas_dispensados','avisos_telegram','configuracao_avisos','configuracoes_mural','mural_presencas','mural_pedidos','locais_salvos','avisos_reservados')
 UNION ALL SELECT 'escoltas abertas com periodicidade', count(*)::text FROM public.escoltas WHERE status NOT IN ('finalizada','cancelada') AND periodicidade_checkin_min IS NOT NULL
 UNION ALL SELECT 'locais salvos', string_agg(nome || '=' || situacao, ', ') FROM public.locais_salvos
