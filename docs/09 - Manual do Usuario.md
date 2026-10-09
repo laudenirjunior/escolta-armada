@@ -133,6 +133,8 @@ O controle de armas fica em tela própria: **Armamentos** (menu Gestão). O bot�
 
 Na aba **Clientes**, o botão **Novo Cliente** pede nome (obrigatório), CNPJ, telefone, contato, uma **cor de destaque** que identifica o cliente na lista e na timeline, status e observações.
 
+**Cor do cliente (outubro de 2026).** A cor é escolhida numa **paleta fechada de 12 cores** (Azul, Verde, Vermelho, Mostarda, Violeta, Rosa escuro, Oliva, Grafite, Marinho, Ameixa, Petróleo e Marrom), todas escuras o bastante para texto branco por cima. A mesma tela existe em **Clientes** e em **Cadastros**. A cor não é exclusiva: se outro cliente ativo já usa a cor escolhida, aparece o aviso "Cor já usada por ..." e o cadastro pode seguir assim. Na atualização de outubro, as cores antigas foram trocadas pela cor mais próxima da paleta, sem repetir entre os clientes ativos enquanto houve cor livre. É essa cor que aparece na faixa lateral do cartão da escolta em todas as telas.
+
 Na aba **Vigilantes** acontece o ponto mais importante do cadastro: **ao cadastrar o vigilante, o sistema provisiona o acesso dele ao aplicativo, na hora.** Os campos são nome (obrigatório), CPF (obrigatório), telefone, **Função**, CNV, extensão EEA e valor padrão.
 
 Assim que o nome é digitado, aparece um aviso azul: **"Login gerado: primeironome_ultimonome, senha inicial 123456"**. O botão de salvar se chama **Cadastrar e Provisionar**.
@@ -170,6 +172,8 @@ Bloco **Identificação da Missão**. Aqui entram **Cliente Contratante**, **Dat
 
 **Configurações, Locais salvos.** Supervisor, gestor e administrador cadastram e editam; só **gestor e administrador** conferem o pino e ativam. Só local ativo vira atalho. Cada local mostra a **UF** (editável no cadastro) e quantas vezes é usado em escoltas: é o número de escoltas não canceladas que têm o local como origem ou destino (cada lado conta uma vez), calculado sozinho pelo sistema; trocar a origem e voltar não conta duas vezes, cancelar a escolta desconta, mudar status ou KM não muda nada. Essa contagem ordena os atalhos. Mudar o nome, o endereço, o complemento, o pino ou a UF de um local ativo devolve o local para conferência, e a tela avisa quando isso acontece. Nome repetido é recusado com a mensagem "Já existe um local com esse nome. Escolha outro nome.". Se a contagem falhar alguma vez, gestor e administrador veem um aviso no alto da tela com o total e a data da última falha (horário de Brasília); a escolta é gravada mesmo assim.
 
+**UF de origem e destino e etiqueta Interestadual (outubro de 2026).** A escolta grava a UF de origem e a de destino junto com o endereço: pelo atalho, a UF do local salvo; pela busca, a UF que a sugestão traz; quando a sugestão não traz a UF, ou quando o pino é movido, o sistema calcula a UF pela coordenada (pela malha oficial dos estados do IBGE) e a marca como estimada. Endereço digitado à mão, sem escolher sugestão, fica sem UF. Na edição, trocar o endereço de um lado, por qualquer caminho, troca a UF daquele lado; mudar só a data ou a equipe não mexe na UF. Escolta com origem ou destino fora do RJ recebe a etiqueta **Interestadual** no cartão, no cabeçalho da escolta, na impressão e no relatório em PDF; escolta só dentro do RJ não recebe. Quando a UF é estimada, a tela mostra só a etiqueta, sem o nome do estado vizinho. As escoltas que já existiam receberam a UF pela coordenada gravada; as que ficam perto da divisa (menos de 5 km) ou no mar e em ilha foram para uma lista de conferência da gestão.
+
 **Pontos de controle.** A coordenada do GPS é a verdade. Ponto a até 100 metros de um local salvo ativo aparece como "Local: nome, endereço"; os demais mostram o endereço por extenso marcado como aproximado, com a precisão do GPS.
 
 `[PRINT P11]`
@@ -194,7 +198,7 @@ A tela de detalhe da escolta é o centro de tudo. Abre em `/dashboard/escoltas/<
 
 ### A3.1 O cabeçalho e a Jornada
 
-No topo: o código da escolta, o status atual, o cliente, e os botões **PDF** e **Cancelar**. Logo abaixo, a **Jornada**: a faixa das **9 etapas**, com a etapa concluída em verde, a atual destacada e pulsando com o rótulo "ATUAL", e as futuras apagadas. Em uma olhada, sabe-se onde a escolta está.
+No topo: o código da escolta, o status atual, o cliente, e os botões **PDF** e **Cancelar**. Escolta com origem ou destino fora do RJ mostra, numa linha, a etiqueta **Interestadual** (com as UFs, por exemplo "Interestadual: RJ para SP", quando elas não são estimadas). Logo abaixo, a **Jornada**: a faixa das **9 etapas**, com a etapa concluída em verde, a atual destacada e pulsando com o rótulo "ATUAL", e as futuras apagadas. Em uma olhada, sabe-se onde a escolta está.
 
 `[PRINT P14]`
 
@@ -260,11 +264,19 @@ Além da tela de detalhe, o Supervisor tem duas telas de monitoramento.
 
   `[PRINT P23]`
 
+- **Lista de escoltas** (`/dashboard/escoltas`): ver A5.
+
 **Sino e aviso de 2 segundos (outubro de 2026).** O número no sino (e no item **Avisos** da barra inferior do celular) é a quantidade de avisos **não lidos** da sua Central; ele não zera ao clicar, só quando você marca os avisos como lidos (inclusive pelo **Ciente** do mural, que já baixa o número na hora). Mensagem do Chat Interno não entra mais no sino. Cada aviso novo aparece no canto da tela por **2 segundos** e some sozinho, sem botão de fechar; tocar nele abre a escolta (no check-in atrasado, abre direto o registro do check-in). Quem não viu o aviso no canto encontra a mesma linha na Central. Com duas abas abertas no mesmo navegador, o aviso aparece numa só; em dois aparelhos, aparece nos dois, mas a Central continua com um aviso só.
 
 Quando o check-in periódico está ligado para a escolta, o **sistema** (não mais o navegador) confere a cada minuto se a escolta passou da periodicidade sem reportar e gera **um aviso por período vencido** para a equipe escalada, o supervisor, a central, o gestor e o administrador. O primeiro aviso sai assim que a periodicidade vence, com o mesmo atraso que o Painel mostra. A mensagem do Telegram ao cliente sai uma vez por período e **depende do envio pelo banco** (segredos do Telegram no Vault do Supabase): com ele ativo, sai mesmo que ninguém esteja com o sistema aberto; sem ele, quem manda é o navegador de quem está com o sistema aberto (gestão ou equipe da escolta), uma vez só por período, como reserva, e sem nenhum navegador aberto a mensagem não sai. Os avisos do mural (pedido de substituição, decisão e substituição de equipe) também caem na Central e no sino.
 
 `[PRINT P24]`
+
+## A5. Cartão da escolta e filtros (outubro de 2026)
+
+Toda escolta aparece no mesmo **cartão** na lista de escoltas, no mural, no painel inicial, no Modo Guiado (agendadas e escolta ativa), na lista lateral do mapa e nas arquivadas: código, cliente com a **faixa lateral na cor do cliente**, data e hora prevista **no horário de Brasília** (DD/MM/AAAA HH:MM), origem e destino resumidos (bairro e município), quem criou, a equipe (quantidade e comandante; para o operador, só "Sem equipe" ou "Com equipe" no mural), o status e as etiquetas: **Interestadual**, **Escala fixa**, **Concluída com pendências**, **Reiniciada pela gestão** e **Arquivada** (esta só para o administrador). No mapa, o marcador continua na cor do status, e a janela do marcador traz a faixa do cliente. No mural, o operador vê a cor do cliente da escolta de outra equipe, mas não o nome do cliente (como antes).
+
+**Filtros.** Na lista e no mural: **status**, **cliente**, **período** (hoje, amanhã, esta semana ou um intervalo de datas, sempre no horário de Brasília), **quem criou**, **equipe** (com ou sem), **interestadual** (sim, não ou não determinado, que é a escolta antiga sem UF) e a **busca** por código, endereço, cliente ou quem criou. Os filtros se combinam. Ficam **lembrados neste aparelho, para o seu usuário**: ao voltar à tela, eles continuam; outra pessoa que entrar no mesmo aparelho começa com os filtros dela. **Limpar filtros** volta tudo ao padrão.
 
 ---
 
@@ -276,7 +288,7 @@ O Operador é o registrador da escolta. Ele trabalha no celular, em movimento. E
 
 Desde 29/09/2026 a tela de Campo abre no **Modo Guiado**, ligado por padrão. Ele mostra uma coisa por vez, em letra grande:
 
-- **A escolta e a etapa**: cliente, código e "Etapa N de 9", com a barra das etapas.
+- **A escolta e a etapa**: o cartão da escolta (o mesmo da lista, com a faixa na cor do cliente) e "Etapa N de 9", com a barra das etapas. As escoltas agendadas também aparecem no cartão.
 - **Próxima Ação**: uma frase curta e um botão grande com o que fazer agora, por exemplo **Registrar Chegada no Destino**.
 - **Pendências da Escolta**: check-in atrasado ou perto de vencer, e viatura que ainda falta registrar.
 - **Outras Ações**: Registrar Check-in, Registrar Parada, Registrar Ocorrência, Abrir Rota no Mapa e Ver Detalhes da Escolta.
@@ -323,6 +335,7 @@ A tela abre em **Minhas Escoltas** sempre que o Operador tem escolta ativa. Só 
 - **Outra viatura:** ao puxar ou pedir, "Vamos usar outra viatura" troca a primeira viatura da escolta. A lista não oferece a placa que já está em outra viatura da mesma escolta, e o sistema recusa essa troca com mensagem. Se a placa escolhida num pedido passar a estar em outra viatura antes da decisão, o pedido é invalidado com o motivo, sem travar os pedidos das outras escoltas.
 - Escolta **já escalada:** badge "já escalada". Antes da janela aparece "Substituição a partir das HH:MM"; dentro dela, o botão **Pedir**.
 - Escolta de **escala fixa** não aparece no mural: a equipe é definida pela supervisão.
+- **Cartão e filtros:** cada escolta do mural vem no cartão padrão, com a faixa na cor do cliente e a etiqueta Interestadual quando for o caso; os filtros do topo (por exemplo, só interestaduais) ficam lembrados no aparelho para o seu usuário (ver A5).
 
 `[PRINT P26]`
 
