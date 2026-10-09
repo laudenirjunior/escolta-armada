@@ -49,7 +49,7 @@ const ACAO_POR_DESTINO: Record<string, string> = {
 const INSTRUCAO_POR_STATUS: Record<string, string> = {
   [STATUS.RASCUNHO]: 'Esta escolta ainda está em planejamento. Aguarde a liberação.',
   [STATUS.AGENDADA]: 'Com a equipe na base, inicie o pré-início da escolta.',
-  [STATUS.EM_PRE_INICIO]: 'Confira os equipamentos e as fotos da viatura; no Passo 2, informe o KM inicial e a foto do painel de cada viatura.',
+  [STATUS.EM_PRE_INICIO]: 'Confira os equipamentos e as fotos da viatura; no Passo 2, informe o KM inicial e a foto do painel de cada viatura da escolta.',
   [STATUS.EM_ANDAMENTO]: 'Ao chegar na origem, tire a foto e registre a chegada.',
   [STATUS.NA_ORIGEM]: 'Ao sair para o destino, tire a foto e registre a saída.',
   [STATUS.EM_TRANSITO_DESTINO]: 'Ao chegar no destino, tire a foto e registre a chegada.',
@@ -126,7 +126,7 @@ export function rotuloAcao(statusDestino: string): string {
  * A Proxima Acao da escolta. Check-in atrasado passa na frente de tudo, porque e a
  * unica pendencia com prazo vencido; o avanco de etapa volta a ser a acao seguinte.
  */
-export function proximaAcao(status: string, opcoes: { minutosAteCheckin?: number | null } = {}): ProximaAcao {
+export function proximaAcao(status: string, opcoes: { minutosAteCheckin?: number | null; viaturas?: number } = {}): ProximaAcao {
   const base = {
     etapaNumero: numeroEtapa(status),
     etapaNome: nomeEtapa(status),
@@ -151,7 +151,10 @@ export function proximaAcao(status: string, opcoes: { minutosAteCheckin?: number
   const proximo = PROXIMO_STATUS[status]
   // em_pre_inicio e null na fonte unica porque atravessa pelo wizard.
   const destino = status === STATUS.EM_PRE_INICIO ? STATUS.EM_ANDAMENTO : proximo?.status ?? null
-  const instrucao = INSTRUCAO_POR_STATUS[status] ?? ''
+  // Onda H: com uma viatura só, o texto do pré-início fica no singular.
+  const instrucao = status === STATUS.EM_PRE_INICIO && opcoes.viaturas === 1
+    ? 'Confira os equipamentos e as fotos da viatura; no Passo 2, informe o KM inicial e a foto do painel da viatura.'
+    : INSTRUCAO_POR_STATUS[status] ?? ''
 
   if (!destino || status === STATUS.RASCUNHO) {
     return { ...base, instrucao, botao: null, onde: 'nenhum' }

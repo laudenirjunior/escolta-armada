@@ -169,6 +169,9 @@ export default function EscoltaPrintPage() {
           .select(`id, quilometragem_saida, quilometragem_retorno,
             veiculo:veiculos(placa, modelo, tipo:dom_tipos_veiculo(nome))`)
           .eq('escolta_id', id)
+          // Mesma ordem do detalhe e do Campo: a primeira viatura é a mais antiga (onda H).
+          .order('criado_em')
+          .order('id')
         const viatIds = (viats ?? []).map((v: any) => v.id)
 
         // Efetivos

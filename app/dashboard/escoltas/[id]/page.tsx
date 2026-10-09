@@ -277,12 +277,17 @@ function CameraInput({
   onChange,
   max = 1,
   prefixoNome = 'foto',
+  iniciais,
 }: {
   onChange: (files: File[]) => void
   max?: number
   prefixoNome?: string
+  /** Fotos já registradas no estado do pai: o componente volta mostrando as miniaturas ao ser remontado. */
+  iniciais?: File[]
 }) {
-  const [fotos, setFotos] = useState<Array<{ file: File; url: string }>>([])
+  const [fotos, setFotos] = useState<Array<{ file: File; url: string }>>(
+    () => (iniciais ?? []).map((file) => ({ file, url: URL.createObjectURL(file) })),
+  )
   const [aberto, setAberto] = useState(false)
   const [stream, setStream] = useState<MediaStream | null>(null)
   const [erro, setErro] = useState<string | null>(null)
@@ -477,6 +482,25 @@ type FotosPorViatura = Record<string, File[]>
 /** KM digitado por viatura, chaveado pelo id de `escolta_veiculos`. */
 type KmPorViatura = Record<string, string>
 
+/** Onda H: mesma frase do aviso de FotosViaturasInput, para o wizard sem viatura vinculada. */
+const ERRO_SEM_VIATURA_WIZARD = 'Escolta sem viatura vinculada. Vincule a viatura na aba Veículos antes de continuar.'
+
+/** Onda H: miniatura de um arquivo local (a foto do painel no resumo do Passo 3). */
+function MiniaturaArquivo({ arquivo, rotulo }: { arquivo?: File; rotulo: string }) {
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    if (!arquivo) { setUrl(null); return }
+    const u = URL.createObjectURL(arquivo)
+    setUrl(u)
+    return () => URL.revokeObjectURL(u)
+  }, [arquivo])
+  if (!url) {
+    return <div style={{ width: 48, height: 48, flexShrink: 0, border: '1.5px dashed #D6DAE5', backgroundColor: '#FFFFFF' }} />
+  }
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={url} alt={rotulo} data-miniatura-painel style={{ width: 48, height: 48, flexShrink: 0, objectFit: 'cover', border: '1px solid #D6DAE5' }} />
+}
+
 /** Rotulo curto da viatura, para titulo de secao e mensagem de erro. */
 function rotuloViatura(v: ViaturaDetalhe): string {
   return v.veiculo?.placa ? formatarPlaca(v.veiculo.placa) : 'Viatura sem placa'
@@ -494,12 +518,15 @@ function FotosViaturasInput({
   onChange,
   prefixoNome,
   max = FOTOS_POR_PONTO.max,
+  manterRegistradas = false,
 }: {
   viaturas: ViaturaDetalhe[]
   valor: FotosPorViatura
   onChange: (viaturaId: string, files: File[]) => void
   prefixoNome: string
   max?: number
+  /** Onda H: ao remontar (Voltar do wizard), mostra as fotos já registradas em `valor`. */
+  manterRegistradas?: boolean
 }) {
   const varias = viaturas.length > 1
 
@@ -546,6 +573,7 @@ function FotosViaturasInput({
             <CameraInput
               max={max}
               prefixoNome={prefixoNome}
+              iniciais={manterRegistradas ? valor[v.id] : undefined}
               onChange={(fs) => onChange(v.id, fs)}
             />
             {max > 1 && (
@@ -845,6 +873,9 @@ export default function EscoltaDetalhePage() {
         veiculo:veiculos(placa, modelo, tipo:dom_tipos_veiculo(nome))
       `)
       .eq('escolta_id', id)
+      // Ordem estável: a "primeira viatura" é a mais antiga, como nas RPCs (ORDER BY criado_em), na impressão e no Campo.
+      .order('criado_em')
+      .order('id')
 
     const viatsNorm = (viats ?? []) as Omit<ViaturaDetalhe, 'efetivo'>[]
     const viaturaIds = viatsNorm.map((v) => v.id)
@@ -1620,6 +1651,7 @@ export default function EscoltaDetalhePage() {
    * o hodômetro. Usada no avanço do Passo 2 e de novo no "Confirmar e iniciar escolta".
    */
   const erroPorViaturaPasso2 = (): string | null => {
+    if (viaturas.length === 0) return ERRO_SEM_VIATURA_WIZARD
     const varias = viaturas.length > 1
     const semKm = viaturas.filter((v) => !(kmPartida[v.id] ?? '').trim())
     if (semKm.length > 0) {
@@ -2330,11 +2362,16 @@ export default function EscoltaDetalhePage() {
 
     // Cada viatura tem o proprio hodometro: conferir o retorno contra a saida dela,
     // e nao contra a da primeira do comboio.
+    // Onda H: viatura sem KM de saída gravado na coluna (a gravação depois do ponto pode ter
+    // falhado) não é conferida contra zero em silêncio: a chegada é aceita, como antes da
+    // onda, e a tela avisa que o KM de retorno ficou sem conferência.
+    const semKmSaida: string[] = []
     for (const v of viaturas) {
       const digitado = kmChegadaBase[v.id]
       if (!digitado) continue
       const kmRetorno = Number(digitado)
-      const kmSaida = v.quilometragem_saida ?? 0
+      if (v.quilometragem_saida == null) { semKmSaida.push(rotuloViatura(v)); continue }
+      const kmSaida = v.quilometragem_saida
       if (kmRetorno < kmSaida) {
         const prefixo = viaturas.length > 1 ? `Viatura ${rotuloViatura(v)}: ` : ''
         setErro(`${prefixo}KM de chegada (${kmRetorno.toLocaleString('pt-BR')}) não pode ser menor que o KM de saída (${kmSaida.toLocaleString('pt-BR')}).`)
@@ -2367,6 +2404,12 @@ export default function EscoltaDetalhePage() {
 
       // Atualizar KM de retorno de cada viatura
       await gravarKmViaturas('quilometragem_retorno', kmChegadaBase)
+      if (semKmSaida.length > 0) {
+        const msg = viaturas.length > 1
+          ? `${semKmSaida.length > 1 ? 'Viaturas' : 'Viatura'} ${semKmSaida.join(', ')} sem KM de saída gravado: o KM de chegada foi aceito sem conferência. Avise a central.`
+          : 'Viatura sem KM de saída gravado: o KM de chegada foi aceito sem conferência. Avise a central.'
+        setAvisoKm((prev) => (prev ? `${prev} ${msg}` : msg))
+      }
 
 
       notificarTelegram({
@@ -2975,6 +3018,7 @@ export default function EscoltaDetalhePage() {
                         </div>
                         <CameraInput
                           prefixoNome={`vtr_${def.key}`}
+                          iniciais={fotosViatura[def.key] ? [fotosViatura[def.key] as File] : undefined}
                           onChange={(fs) => setFotosViatura(prev => ({ ...prev, [def.key]: fs[0] ?? null }))}
                         />
                       </div>
@@ -3017,12 +3061,35 @@ export default function EscoltaDetalhePage() {
                 </div>
               </div>
 
+              {/* Observações */}
+              <div>
+                <label className="block text-xs font-bold mb-1.5 uppercase tracking-wide" style={{ color: '#5A6A80' }}>
+                  Observações / Não Conformidades *
+                </label>
+                <TextAreaWithTools
+                  value={obsViatura}
+                  onChange={(v) => setObsViatura(v)}
+                  placeholder={PLACEHOLDER.obsViatura}
+                  rows={3}
+                  textareaClassName="input-light resize-none text-xs"
+                  contextoAI="Inspeção de viatura para escolta armada"
+                />
+              </div>
+
               {/* Onda H (lote 2026-10): KM inicial e foto do painel, um cartão por viatura. */}
               <div>
                 <div className="flex items-center gap-2 mb-3 pb-2" style={{ borderBottom: '1px solid #EEF1F7' }}>
                   <div style={{ width: '3px', height: '14px', backgroundColor: '#1A294A' }} />
                   <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: '#1A294A' }}>Por viatura: KM inicial e foto do painel</span>
                 </div>
+                {viaturas.length === 0 && (
+                  <div className="p-3" style={{ border: '1.5px solid rgba(184,56,50,0.35)', backgroundColor: 'rgba(184,56,50,0.05)' }}>
+                    <div className="flex items-start gap-2">
+                      <AlertCircle size={14} style={{ color: '#B83832', flexShrink: 0, marginTop: 1 }} />
+                      <p className="text-[11px] leading-relaxed" style={{ color: '#B83832' }}>{ERRO_SEM_VIATURA_WIZARD}</p>
+                    </div>
+                  </div>
+                )}
                 <div className="space-y-3">
                   {viaturas.map((v) => {
                     const kmOk = Number(kmPartida[v.id]) > 0
@@ -3050,15 +3117,22 @@ export default function EscoltaDetalhePage() {
                             onChange={(viaturaId, km) => setKmPartida((prev) => ({ ...prev, [viaturaId]: km }))}
                           />
                           <div>
-                            <label className="block text-xs font-bold mb-1.5 text-[#5A6A80] uppercase tracking-wide">
-                              Foto do painel com o hodômetro * (use a câmera){fotoOk ? ': registrada' : ''}
-                            </label>
+                            <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 mb-1.5">
+                              <label className="block text-xs font-bold text-[#5A6A80] uppercase tracking-wide">
+                                Foto do painel com o hodômetro * (use a câmera)
+                              </label>
+                              <span data-estado-foto-painel className="text-[10px] font-black uppercase tracking-wide px-1.5 py-0.5"
+                                style={{ color: fotoOk ? '#1E7C52' : '#B83832', backgroundColor: fotoOk ? 'rgba(30,124,82,0.08)' : 'rgba(184,56,50,0.06)' }}>
+                                {fotoOk ? 'Registrada' : 'Pendente'}
+                              </span>
+                            </div>
                             {/* Uma foto por viatura: vai no ponto de saída daquela viatura, no Passo 3. */}
                             <FotosViaturasInput
                               viaturas={[v]}
                               valor={fotosPartida}
                               prefixoNome="wizard_partida"
                               max={1}
+                              manterRegistradas
                               onChange={(viaturaId, fs) => setFotosPartida((prev) => ({ ...prev, [viaturaId]: fs }))}
                             />
                           </div>
@@ -3067,21 +3141,6 @@ export default function EscoltaDetalhePage() {
                     )
                   })}
                 </div>
-              </div>
-
-              {/* Observações */}
-              <div>
-                <label className="block text-xs font-bold mb-1.5 uppercase tracking-wide" style={{ color: '#5A6A80' }}>
-                  Observações / Não Conformidades *
-                </label>
-                <TextAreaWithTools
-                  value={obsViatura}
-                  onChange={(v) => setObsViatura(v)}
-                  placeholder={PLACEHOLDER.obsViatura}
-                  rows={3}
-                  textareaClassName="input-light resize-none text-xs"
-                  contextoAI="Inspeção de viatura para escolta armada"
-                />
               </div>
 
               <div className="flex flex-col-reverse sm:flex-row justify-between gap-2 pt-3 border-t">
@@ -3114,14 +3173,16 @@ export default function EscoltaDetalhePage() {
               
               {/* Onda H: KM e foto do painel vêm do Passo 2; aqui só a conferência. */}
               <div data-resumo-km-partida className="p-3" style={{ border: '1px solid #D6DAE5', backgroundColor: '#F8FAFC' }}>
-                <p className="text-[10px] font-black uppercase tracking-widest mb-1.5" style={{ color: '#1A294A' }}>KM inicial informado no Passo 2</p>
-                <ul className="space-y-0.5">
+                <p className="text-[10px] font-black uppercase tracking-widest mb-1.5" style={{ color: '#1A294A' }}>KM inicial e foto do painel informados no Passo 2</p>
+                <ul className="space-y-2">
                   {viaturas.map((v) => (
-                    <li key={v.id} className="text-xs" style={{ color: '#0E1A33' }}>
-                      {rotuloViatura(v)}: <strong>{Number(kmPartida[v.id] || 0).toLocaleString('pt-BR')} km</strong>
+                    <li key={v.id} data-resumo-viatura={rotuloViatura(v)} className="flex items-center gap-3 text-xs" style={{ color: '#0E1A33' }}>
+                      <MiniaturaArquivo arquivo={fotosPartida[v.id]?.[0]} rotulo={`Foto do painel de ${rotuloViatura(v)}`} />
+                      <span>{rotuloViatura(v)}: <strong>{Number(kmPartida[v.id] || 0).toLocaleString('pt-BR')} km</strong></span>
                     </li>
                   ))}
                 </ul>
+                <p className="text-[10px] mt-2" style={{ color: '#5A6A80' }}>Para corrigir o KM ou trocar a foto, use Voltar.</p>
               </div>
 
               <div>
@@ -3139,7 +3200,7 @@ export default function EscoltaDetalhePage() {
               </div>
 
               <div className="flex flex-col-reverse sm:flex-row justify-between gap-2 pt-3 border-t">
-                <button type="button" onClick={() => setWizardStep(2)} className="btn-outline px-5 w-full sm:w-auto">
+                <button type="button" onClick={() => { setErro(null); setWizardStep(2) }} className="btn-outline px-5 w-full sm:w-auto">
                   Voltar
                 </button>
                 <button

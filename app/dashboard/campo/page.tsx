@@ -516,15 +516,18 @@ export default function CampoPage() {
     // A viatura entra na consulta porque sem `escolta_veiculo_id` o ponto de controle
     // era descartado em silencio para administrador, gestor, supervisor e central: a
     // escolta avancava de etapa e nao sobrava prova nenhuma.
-    const SELECT_ESCOLTA = 'id, codigo_escolta, status, origem_endereco, destino_endereco, data_hora_prevista, periodicidade_checkin_min, arquivada_em, cliente:clientes(nome_cliente, cor_destaque), escolta_veiculos(id, veiculo:veiculos(placa, modelo))'
+    const SELECT_ESCOLTA = 'id, codigo_escolta, status, origem_endereco, destino_endereco, data_hora_prevista, periodicidade_checkin_min, arquivada_em, cliente:clientes(nome_cliente, cor_destaque), escolta_veiculos(id, criado_em, veiculo:veiculos(placa, modelo))'
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const normalizar = (e: any, minhaViaturaId?: string | null): EscoltaAtiva => {
       // Decisao de Pecanha em 2026-08-19: cada viatura tem o proprio ponto de
       // controle, com foto e localizacao proprias. Por isso a tela carrega TODAS as
       // viaturas da escolta, e nao mais so a primeira.
+      // Onda H: ordem estável (criado_em, depois id), a mesma do detalhe, da impressão e das RPCs.
+      const ordenadas = [...((e.escolta_veiculos ?? []) as Array<{ id: string; criado_em?: string | null }>)]
+        .sort((a, b) => (a.criado_em ?? '') < (b.criado_em ?? '') ? -1 : (a.criado_em ?? '') > (b.criado_em ?? '') ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const viaturas: ViaturaEscolta[] = ((e.escolta_veiculos ?? []) as any[]).map((v: any) => ({
+      const viaturas: ViaturaEscolta[] = (ordenadas as any[]).map((v: any) => ({
         id: v.id,
         placa: v.veiculo?.placa ?? null,
         modelo: v.veiculo?.modelo ?? null,
@@ -1617,7 +1620,7 @@ export default function CampoPage() {
         agora,
       })
     : null
-  const proxima = escoltaAtiva ? proximaAcao(status, { minutosAteCheckin: minutosCheckin }) : null
+  const proxima = escoltaAtiva ? proximaAcao(status, { minutosAteCheckin: minutosCheckin, viaturas: escoltaAtiva.viaturas?.length }) : null
   // Viaturas que ja registraram a etapa que o botao principal registra.
   const tipoPontoDaAcao = proximoStatus ? STATUS_TO_TIPO_PONTO[proximoStatus] : undefined
   const viaturasJaRegistradas = tipoPontoDaAcao
@@ -1692,7 +1695,7 @@ export default function CampoPage() {
           semVinculoCadastro={semVinculoCadastro}
           proxima={proxima}
           acaoEtapa={escoltaAtiva
-            ? (() => { const a = proximaAcao(status); return etapaSoFaltaStatus ? { ...a, exigeFoto: false } : a })()
+            ? (() => { const a = proximaAcao(status, { viaturas: escoltaAtiva.viaturas?.length }); return etapaSoFaltaStatus ? { ...a, exigeFoto: false } : a })()
             : null}
           pendencias={pendencias}
           checkinDisponivel={STATUS_COM_CHECKIN.includes(status)}
