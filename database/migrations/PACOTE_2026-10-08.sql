@@ -1351,7 +1351,13 @@ DECLARE v_tipo uuid; v_n int;
 BEGIN
   SELECT id INTO v_tipo FROM public.dom_tipos_evento WHERE codigo = p_tipo;
   IF v_tipo IS NULL THEN RAISE EXCEPTION 'Tipo de aviso desconhecido: %', p_tipo; END IF;
-  IF p_escolta_id IS NULL OR p_usuarios IS NULL THEN RETURN 0; END IF;
+  -- notificacoes.escolta_id é NOT NULL (com FK em cascata): aviso sem escolta não é gravado.
+  -- A onda L (conflito de escolta apagada) precisa tratar isso na própria migration.
+  IF p_escolta_id IS NULL THEN
+    RAISE WARNING 'lote_interno.notificar: aviso % sem escolta não gravado (notificacoes exige escolta_id).', p_tipo;
+    RETURN 0;
+  END IF;
+  IF p_usuarios IS NULL THEN RETURN 0; END IF;
   INSERT INTO public.notificacoes (escolta_id, canal, tipo_evento_id, destino, payload, usuario_dest_id, status_envio,
                                    titulo, texto, evento_chave)
   SELECT p_escolta_id, 'app', v_tipo, 'app',
@@ -1366,16 +1372,22 @@ $$;
 REVOKE ALL ON FUNCTION lote_interno.notificar(text, uuid, text, uuid[], text, text, jsonb) FROM PUBLIC, anon, authenticated;
 
 -- 5. RPCs do app. Cada um só vê e marca os próprios avisos.
+--    Paginação por cursor (criado_em, id): os avisos gravados numa mesma execução do cron
+--    têm o mesmo criado_em, e o corte só pela data pulava os que ficavam na página seguinte.
+--    Versões anteriores desta branch (sem p_antes_id e marcar_todos_lidos sem escolta) saem
+--    antes, para não ficarem duas assinaturas.
+DROP FUNCTION IF EXISTS public.meus_avisos(text, uuid, boolean, integer, timestamptz);
+DROP FUNCTION IF EXISTS public.marcar_todos_lidos(text);
 CREATE OR REPLACE FUNCTION public.meus_avisos(p_tipo text DEFAULT NULL, p_escolta_id uuid DEFAULT NULL,
                                               p_so_nao_lidas boolean DEFAULT false, p_limite integer DEFAULT 50,
-                                              p_antes timestamptz DEFAULT NULL)
+                                              p_antes timestamptz DEFAULT NULL, p_antes_id uuid DEFAULT NULL)
     RETURNS jsonb
     LANGUAGE plpgsql STABLE SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
     AS $$
 DECLARE v_eu uuid; v jsonb;
 BEGIN
-  IF public.get_meu_perfil() IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+  IF public.get_meu_perfil() IS NULL THEN RAISE EXCEPTION 'Sessão inválida.'; END IF;
   v_eu := public.get_meu_usuario_id();
   SELECT coalesce(jsonb_agg(x.j ORDER BY x.criado_em DESC, x.id DESC), '[]'::jsonb) INTO v
   FROM (
@@ -1392,7 +1404,8 @@ BEGIN
       AND (p_tipo IS NULL OR t.codigo = p_tipo)
       AND (p_escolta_id IS NULL OR n.escolta_id = p_escolta_id)
       AND (NOT coalesce(p_so_nao_lidas, false) OR n.lida IS NOT TRUE)
-      AND (p_antes IS NULL OR n.criado_em < p_antes)
+      AND (p_antes IS NULL
+           OR (n.criado_em, n.id) < (p_antes, coalesce(p_antes_id, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid)))
     ORDER BY n.criado_em DESC, n.id DESC
     LIMIT least(greatest(coalesce(p_limite, 50), 1), 200)
   ) x;
@@ -1405,22 +1418,24 @@ CREATE OR REPLACE FUNCTION public.contar_avisos_nao_lidos() RETURNS integer
     SET search_path TO 'public', 'pg_temp'
     AS $$
 BEGIN
-  IF public.get_meu_perfil() IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+  IF public.get_meu_perfil() IS NULL THEN RAISE EXCEPTION 'Sessão inválida.'; END IF;
   RETURN (SELECT count(*) FROM public.notificacoes
           WHERE usuario_dest_id = public.get_meu_usuario_id() AND canal = 'app' AND lida IS NOT TRUE);
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.marcar_todos_lidos(p_tipo text DEFAULT NULL) RETURNS integer
+-- Marcar todas respeita os filtros da Central: tipo e escolta (nulos = todos).
+CREATE OR REPLACE FUNCTION public.marcar_todos_lidos(p_tipo text DEFAULT NULL, p_escolta_id uuid DEFAULT NULL) RETURNS integer
     LANGUAGE plpgsql VOLATILE SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
     AS $$
 DECLARE v_n int;
 BEGIN
-  IF public.get_meu_perfil() IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+  IF public.get_meu_perfil() IS NULL THEN RAISE EXCEPTION 'Sessão inválida.'; END IF;
   UPDATE public.notificacoes n SET lida_em = now()
    WHERE n.usuario_dest_id = public.get_meu_usuario_id() AND n.canal = 'app' AND n.lida IS NOT TRUE
-     AND (p_tipo IS NULL OR n.tipo_evento_id = (SELECT id FROM public.dom_tipos_evento WHERE codigo = p_tipo));
+     AND (p_tipo IS NULL OR n.tipo_evento_id = (SELECT id FROM public.dom_tipos_evento WHERE codigo = p_tipo))
+     AND (p_escolta_id IS NULL OR n.escolta_id = p_escolta_id);
   GET DIAGNOSTICS v_n = ROW_COUNT;
   RETURN v_n;
 END;
@@ -1429,8 +1444,8 @@ $$;
 DO $$
 DECLARE f text;
 BEGIN
-  FOREACH f IN ARRAY ARRAY['meus_avisos(text, uuid, boolean, integer, timestamptz)', 'contar_avisos_nao_lidos()',
-                           'marcar_todos_lidos(text)']
+  FOREACH f IN ARRAY ARRAY['meus_avisos(text, uuid, boolean, integer, timestamptz, uuid)', 'contar_avisos_nao_lidos()',
+                           'marcar_todos_lidos(text, uuid)']
   LOOP
     EXECUTE format('REVOKE ALL ON FUNCTION public.%s FROM PUBLIC, anon', f);
     EXECUTE format('GRANT EXECUTE ON FUNCTION public.%s TO authenticated', f);
@@ -1470,16 +1485,37 @@ REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.notificacoes FROM authenticate
 --
 -- Regra (porte de minutosAteCheckin, lib/checkin.ts): status em STATUS_COM_CHECKIN, com
 -- periodicidade; referência = último ponto PARADA com observacoes JSON tipo
--- reporte_periodico, senão o primeiro ponto da escolta, senão a data prevista; vencido
--- quando o atraso passa de 1 minuto. Um aviso por período vencido (S3): chave
--- checkin:<escolta>:<epoch da referência>:<n do período>. Destinatários (S2): efetivo da
--- escolta, administrador, gestor, supervisor e central ativos.
--- Telegram (S4): mesma regra e mesmo texto da 208 (regra antiga, pendência 0.3), agora
--- chamado pelo cron; enfileirar_alerta_checkin (208) continua para o app e passa a
--- delegar à função interna depois da guarda de perfil.
+-- reporte_periodico, senão o primeiro ponto da escolta, senão a data prevista. Atraso com
+-- o mesmo arredondamento da tela (-floor((periodicidade - decorrido) / 1 min)): o primeiro
+-- aviso sai logo que a periodicidade vence (atraso 1, como o Painel e o detalhe mostram),
+-- e os seguintes a cada periodicidade (período n cobre de n a n+1 periodicidades). Um
+-- aviso por período vencido (S3): chave checkin:<escolta>:<epoch da referência>:<n>.
+-- Destinatários (S2): efetivo da escolta, administrador, gestor, supervisor e central ativos.
+-- Cada escolta do ciclo roda no próprio bloco BEGIN ... EXCEPTION: erro numa não desfaz
+-- os avisos das outras, o Telegram nem a limpeza.
+-- Telegram (S4): mesma regra e mesmo texto da 208 (regra antiga, pendência 0.3). Quem manda:
+-- - o cron, só com o envio pelo banco ativo (avisos_pelo_banco_ativos) E
+--   configuracao_avisos.checkin_telegram_pelo_cron ligada. A coluna nasce falsa aqui
+--   (bloco 1) e a 217 (bloco 2, depois do deploy) a liga: até o deploy, quem manda é o
+--   navegador da master (CheckinAlertProvider), e o cron não pode mandar junto (dobraria);
+-- - fora disso (Vault sem segredo, pg_net ou pg_cron recusados, envio desligado), o
+--   navegador de quem recebe o aviso (gestão ou equipe da escolta) pelo /api/telegram, como
+--   a master fazia, mas só depois de reservar a chave do evento no banco por
+--   reservar_alertas_checkin() (padrão da reservar_aviso_presenca da 208): uma mensagem por
+--   evento, mesmo com vários navegadores abertos (item 6.2.3: não calar o Telegram de hoje).
+-- A chave reservada pelo navegador e a enfileirada pelo cron são a mesma: quem chega
+-- depois não manda (troca de caminho sem mensagem dobrada).
+-- enfileirar_alerta_checkin (208) continua para o app e passa a delegar à função interna
+-- depois da guarda de perfil.
 -- Arquivamento e anulação (onda I) não existem aqui: a 214 recria gerar_avisos_checkin
 -- com os dois filtros.
 -- Limpeza: avisos lidos há mais de 90 dias são apagados pelo mesmo cron.
+
+-- Quem manda o Telegram do check-in (ver o cabeçalho). Falsa até a 217 (bloco 2).
+ALTER TABLE public.configuracao_avisos
+  ADD COLUMN IF NOT EXISTS checkin_telegram_pelo_cron boolean NOT NULL DEFAULT false;
+COMMENT ON COLUMN public.configuracao_avisos.checkin_telegram_pelo_cron IS
+  'Lote 2026-10 (onda J): o cron enfileira o Telegram do check-in vencido. Ligada pela 217 (bloco 2), depois do deploy; antes, o navegador da master manda.';
 
 -- Tipo da observação JSON do ponto; texto legado ou JSON quebrado nunca derruba o cron.
 CREATE OR REPLACE FUNCTION lote_interno.tipo_da_observacao(p_obs text) RETURNS text
@@ -1500,7 +1536,7 @@ CREATE OR REPLACE FUNCTION lote_interno.enfileirar_alerta_checkin(p_escolta_id u
     LANGUAGE plpgsql VOLATILE SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
     AS $$
-DECLARE e record; v_ultima timestamptz; v_atraso int; v_ok boolean;
+DECLARE e record; v_ultima timestamptz; v_atraso int; v_ok boolean; v_chave text;
 BEGIN
   SELECT es.id, es.codigo_escolta, es.status, es.periodicidade_checkin_min, c.nome_cliente INTO e
   FROM public.escoltas es JOIN public.clientes c ON c.id = es.cliente_id WHERE es.id = p_escolta_id;
@@ -1517,8 +1553,13 @@ BEGIN
   IF v_atraso < 1 THEN RETURN jsonb_build_object('enfileirado', false, 'motivo', 'em dia'); END IF;
   -- Uma mensagem por período vencido sem check-in (chave: escolta, última parada e
   -- número do período).
-  v_ok := public._enfileirar_aviso('checkin:' || p_escolta_id || ':' || extract(epoch FROM v_ultima)::bigint
-                                   || ':' || floor(v_atraso::numeric / e.periodicidade_checkin_min)::int, 'cliente', p_escolta_id,
+  v_chave := 'checkin:' || p_escolta_id || ':' || extract(epoch FROM v_ultima)::bigint
+             || ':' || floor(v_atraso::numeric / e.periodicidade_checkin_min)::int;
+  -- Já mandada por um navegador (reservar_alertas_checkin): não manda de novo.
+  IF EXISTS (SELECT 1 FROM public.avisos_reservados WHERE chave = v_chave) THEN
+    RETURN jsonb_build_object('enfileirado', false, 'motivo', 'enviado pelo navegador');
+  END IF;
+  v_ok := public._enfileirar_aviso(v_chave, 'cliente', p_escolta_id,
     '<b>Alerta: check-in em atraso</b>' || E'\n'
     || 'Escolta: <code>' || public.escapar_html(e.codigo_escolta) || '</code> · ' || public.escapar_html(e.nome_cliente) || E'\n'
     || 'Sem check-in há ' || (v_atraso + e.periodicidade_checkin_min) || ' minutos (periodicidade de '
@@ -1537,9 +1578,9 @@ CREATE OR REPLACE FUNCTION public.enfileirar_alerta_checkin(p_escolta_id uuid) R
 DECLARE v_perfil text;
 BEGIN
   SELECT public.get_meu_perfil() INTO v_perfil;
-  IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+  IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessão inválida.'; END IF;
   IF v_perfil NOT IN ('administrador', 'gestor', 'supervisor', 'central') AND NOT public.sou_do_efetivo(p_escolta_id) THEN
-    RAISE EXCEPTION 'Sem permissao para esta escolta.';
+    RAISE EXCEPTION 'Sem permissão para esta escolta.';
   END IF;
   RETURN lote_interno.enfileirar_alerta_checkin(p_escolta_id);
 END;
@@ -1547,18 +1588,74 @@ $$;
 REVOKE ALL ON FUNCTION public.enfileirar_alerta_checkin(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.enfileirar_alerta_checkin(uuid) TO authenticated;
 
+-- Telegram do check-in pelo navegador, quando o cron não manda (ver o cabeçalho). Devolve as
+-- escoltas cujo alerta este navegador acabou de reservar, com o que a mensagem antiga leva
+-- (mesmo texto e destino da master: /api/telegram com escolta_id, chat do cliente). Só a
+-- gestão (todas as escoltas) e a equipe (as próprias) recebem algo; a chave é a mesma do
+-- cron, e só o primeiro navegador a reserva.
+CREATE OR REPLACE FUNCTION public.reservar_alertas_checkin() RETURNS jsonb
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $$
+DECLARE
+  v_perfil text; v_eu uuid; v_gestao boolean; r record; v_ultima timestamptz; v_atraso int;
+  v_chave text; v_n int; v_saida jsonb := '[]'::jsonb;
+BEGIN
+  SELECT public.get_meu_perfil() INTO v_perfil;
+  IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessão inválida.'; END IF;
+  -- O cron manda: nada para o navegador.
+  IF public.avisos_pelo_banco_ativos()
+     AND coalesce((SELECT checkin_telegram_pelo_cron FROM public.configuracao_avisos WHERE id = 1), false) THEN
+    RETURN v_saida;
+  END IF;
+  v_eu := public.get_meu_usuario_id();
+  v_gestao := v_perfil IN ('administrador', 'gestor', 'supervisor', 'central');
+  FOR r IN
+    SELECT e.id, e.codigo_escolta, e.status, e.periodicidade_checkin_min AS per, c.nome_cliente
+    FROM public.escoltas e JOIN public.clientes c ON c.id = e.cliente_id
+    WHERE e.periodicidade_checkin_min > 0
+      AND e.status IN ('em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando')
+      AND (v_gestao OR public.sou_do_efetivo(e.id))
+  LOOP
+    -- Regra antiga (pendência 0.3), a mesma de lote_interno.enfileirar_alerta_checkin.
+    SELECT max(pc.data_hora) INTO v_ultima
+    FROM public.pontos_controle pc JOIN public.escolta_veiculos ev ON ev.id = pc.escolta_veiculo_id
+    WHERE ev.escolta_id = r.id AND pc.tipo_ponto_id = 'e1601f15-5ef9-44e8-abd0-17f65b3aa760';
+    CONTINUE WHEN v_ultima IS NULL;
+    v_atraso := floor(extract(epoch FROM (now() - v_ultima)) / 60) - r.per;
+    CONTINUE WHEN v_atraso < 1;
+    v_chave := 'checkin:' || r.id || ':' || extract(epoch FROM v_ultima)::bigint || ':' || floor(v_atraso::numeric / r.per)::int;
+    -- Já enfileirada pelo cron (envio pelo banco ligado há pouco): não manda de novo.
+    CONTINUE WHEN EXISTS (SELECT 1 FROM public.avisos_telegram WHERE evento_chave = v_chave);
+    INSERT INTO public.avisos_reservados (chave, usuario_id) VALUES (v_chave, v_eu) ON CONFLICT (chave) DO NOTHING;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    CONTINUE WHEN v_n = 0;
+    v_saida := v_saida || jsonb_build_object(
+      'escolta_id', r.id, 'codigo', r.codigo_escolta, 'cliente', r.nome_cliente, 'status', r.status,
+      'atraso_min', v_atraso, 'periodicidade_min', r.per,
+      'efetivos', coalesce((SELECT jsonb_agg(v.nome_completo || coalesce(' (' || ee.papel_na_escolta || ')', '') ORDER BY ee.papel_na_escolta, v.nome_completo)
+                            FROM public.escolta_efetivo ee JOIN public.vigilantes v ON v.id = ee.vigilante_id
+                            WHERE ee.escolta_id = r.id), '[]'::jsonb));
+  END LOOP;
+  RETURN v_saida;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.reservar_alertas_checkin() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.reservar_alertas_checkin() TO authenticated;
+
 -- Ciclo do cron. p_agora existe só para o teste avançar o relógio; o cron usa now().
 CREATE OR REPLACE FUNCTION lote_interno.gerar_avisos_checkin(p_agora timestamptz DEFAULT now()) RETURNS integer
     LANGUAGE plpgsql VOLATILE SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
     AS $$
 DECLARE
-  r record; v_gestao uuid[]; v_n int := 0; v_atraso int; v_periodo int; v_telegram boolean;
+  r record; v_gestao uuid[]; v_n int := 0; v_decorrido numeric; v_atraso int; v_periodo int; v_telegram boolean;
 BEGIN
   SELECT coalesce(array_agg(u.id), '{}') INTO v_gestao
   FROM public.usuarios u JOIN public.dom_perfis p ON p.id = u.perfil_id
   WHERE u.status = 'ativo' AND p.codigo IN ('administrador', 'gestor', 'supervisor', 'central');
-  v_telegram := public.avisos_pelo_banco_ativos();
+  v_telegram := public.avisos_pelo_banco_ativos()
+                AND coalesce((SELECT checkin_telegram_pelo_cron FROM public.configuracao_avisos WHERE id = 1), false);
 
   FOR r IN
     SELECT e.id, e.codigo_escolta, e.periodicidade_checkin_min AS per, c.nome_cliente,
@@ -1575,23 +1672,32 @@ BEGIN
     WHERE e.periodicidade_checkin_min > 0
       AND e.status IN ('em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando')
   LOOP
-    IF r.referencia IS NOT NULL THEN
-      v_atraso := floor(extract(epoch FROM (p_agora - r.referencia)) / 60) - r.per;
-      IF v_atraso >= 1 THEN
-        v_periodo := floor(extract(epoch FROM (p_agora - r.referencia)) / 60 / r.per)::int;
-        v_n := v_n + lote_interno.notificar(
-          'checkin:' || r.id || ':' || floor(extract(epoch FROM r.referencia))::bigint || ':' || v_periodo,
-          r.id, 'checkin_vencido',
-          ARRAY(SELECT v.usuario_id FROM public.escolta_efetivo ee JOIN public.vigilantes v ON v.id = ee.vigilante_id
-                 WHERE ee.escolta_id = r.id AND v.usuario_id IS NOT NULL) || v_gestao,
-          'Check-in atrasado: ' || r.codigo_escolta,
-          'Escolta ' || r.codigo_escolta || ' · ' || r.nome_cliente || ': sem check-in há ' || (v_atraso + r.per)
-            || ' min (periodicidade de ' || r.per || ' min, ' || v_atraso || ' min de atraso). Prazo vencido em '
-            || to_char((r.referencia + make_interval(mins => r.per * v_periodo)) AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY HH24:MI')
-            || ' (Brasília).',
-          jsonb_build_object('referencia', r.referencia, 'periodo', v_periodo, 'periodicidade_min', r.per));
+    -- Aviso na central: erro numa escolta (usuário apagado entre a leitura e o INSERT, tipo
+    -- ausente) fica nela e vira WARNING; o ciclo segue.
+    BEGIN
+      IF r.referencia IS NOT NULL THEN
+        v_decorrido := extract(epoch FROM (p_agora - r.referencia));
+        -- Mesmo arredondamento de minutosAteCheckin: atraso = -floor((per*60 - decorrido) / 60).
+        v_atraso := -floor((r.per * 60 - v_decorrido) / 60)::int;
+        IF v_atraso >= 1 THEN
+          -- Período n: de n a n+1 periodicidades decorridas (o 1º vence com a periodicidade).
+          v_periodo := ceil(v_decorrido / (r.per * 60))::int - 1;
+          v_n := v_n + lote_interno.notificar(
+            'checkin:' || r.id || ':' || floor(extract(epoch FROM r.referencia))::bigint || ':' || v_periodo,
+            r.id, 'checkin_vencido',
+            ARRAY(SELECT v.usuario_id FROM public.escolta_efetivo ee JOIN public.vigilantes v ON v.id = ee.vigilante_id
+                   WHERE ee.escolta_id = r.id AND v.usuario_id IS NOT NULL) || v_gestao,
+            'Check-in atrasado: ' || r.codigo_escolta,
+            'Escolta ' || r.codigo_escolta || ' · ' || r.nome_cliente || ': sem check-in há ' || (v_atraso + r.per)
+              || ' min (periodicidade de ' || r.per || ' min, ' || v_atraso || ' min de atraso). Prazo vencido em '
+              || to_char((r.referencia + make_interval(mins => r.per * v_periodo)) AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY HH24:MI')
+              || ' (Brasília).',
+            jsonb_build_object('referencia', r.referencia, 'periodo', v_periodo, 'periodicidade_min', r.per));
+        END IF;
       END IF;
-    END IF;
+    EXCEPTION WHEN others THEN
+      RAISE WARNING 'gerar_avisos_checkin: aviso da escolta % falhou: %', r.id, SQLERRM;
+    END;
     -- Telegram pela regra antiga (a função decide); erro numa escolta não para o ciclo.
     IF v_telegram THEN
       BEGIN
@@ -1618,6 +1724,7 @@ END $$;
 
 -- Conferência:
 -- SELECT jobname, schedule, command FROM cron.job WHERE jobname = 'lote2026_avisos_checkin';   -- 1 linha
+-- SELECT checkin_telegram_pelo_cron FROM configuracao_avisos;   -- false até a 217 (bloco 2)
 -- SELECT lote_interno.gerar_avisos_checkin();   -- 0 enquanto nenhuma escolta aberta tiver periodicidade
 -- SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'lote_interno'
 --   AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE')); -- 0
@@ -1668,7 +1775,7 @@ COMMIT;
 -- 209_historico_sem_trigger:
 -- (conferência: ver o cabeçalho da migration)
 -- 211_central_avisos e 212_aviso_checkin_servidor: ver a consulta abaixo (central, lote_interno e cron).
-SELECT 'funcoes novas' AS item, count(*)::text AS valor FROM pg_proc WHERE proname IN ('escolta_do_caminho','registrar_etapa_escolta','enfileirar_alerta_checkin','reservar_aviso_presenca','avisos_pelo_banco_ativos','locais_salvos_regras','impedir_combustivel_por_operador','proteger_escala_fixa') AND pronamespace = 'public'::regnamespace
+SELECT 'funcoes novas' AS item, count(*)::text AS valor FROM pg_proc WHERE proname IN ('escolta_do_caminho','registrar_etapa_escolta','enfileirar_alerta_checkin','reservar_aviso_presenca','avisos_pelo_banco_ativos','locais_salvos_regras','impedir_combustivel_por_operador','proteger_escala_fixa','reservar_alertas_checkin') AND pronamespace = 'public'::regnamespace
 UNION ALL SELECT 'tabelas novas', count(*)::text FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('alertas_dispensados','avisos_telegram','configuracao_avisos','configuracoes_mural','mural_presencas','mural_pedidos','locais_salvos','avisos_reservados')
 UNION ALL SELECT 'escoltas abertas com periodicidade', count(*)::text FROM public.escoltas WHERE status NOT IN ('finalizada','cancelada') AND periodicidade_checkin_min IS NOT NULL
 UNION ALL SELECT 'locais salvos', string_agg(nome || '=' || situacao, ', ') FROM public.locais_salvos
@@ -1678,9 +1785,12 @@ UNION ALL SELECT 'envio pelo banco ativo (true so depois dos segredos no Vault)'
 UNION ALL SELECT 'colunas da central em notificacoes (esperado 4)', count(*)::text FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'notificacoes' AND column_name IN ('lida_em','titulo','texto','evento_chave')
 UNION ALL SELECT 'policies de notificacoes (esperado notificacoes_select)', string_agg(polname, ', ') FROM pg_policy WHERE polrelid = 'public.notificacoes'::regclass
 UNION ALL SELECT 'funções do lote_interno executáveis por anon ou authenticated (esperado 0)', count(*)::text FROM pg_proc p WHERE p.pronamespace = 'lote_interno'::regnamespace AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE'))
-UNION ALL SELECT 'anon com acesso a notificacoes (esperado false)', (has_table_privilege('anon', 'public.notificacoes', 'SELECT') OR has_table_privilege('anon', 'public.notificacoes', 'TRUNCATE'))::text;
--- Esperado: 8 funções, 8 tabelas, 0 abertas com periodicidade, 5 locais aguardando_conferencia,
--- troca true,true, cron lote2026_avisos_telegram e lote2026_avisos_checkin; 4; notificacoes_select; 0; false.
+UNION ALL SELECT 'anon com acesso a notificacoes (esperado false)', (has_table_privilege('anon', 'public.notificacoes', 'SELECT') OR has_table_privilege('anon', 'public.notificacoes', 'TRUNCATE'))::text
+UNION ALL SELECT 'Telegram do check-in pelo cron (esperado false até o bloco 2)', checkin_telegram_pelo_cron::text FROM public.configuracao_avisos WHERE id = 1;
+-- Esperado: 9 funções, 8 tabelas, 0 abertas com periodicidade, 5 locais aguardando_conferencia,
+-- troca true,true, cron lote2026_avisos_telegram e lote2026_avisos_checkin; 4; notificacoes_select; 0; false; false.
+-- 'envio pelo banco ativo' falso: o Telegram do check-in sai pelo navegador (reserva no banco,
+-- reservar_alertas_checkin), não pelo cron; anotar no relatório qual caminho valeu.
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- BLOCO 2 (logo depois do deploy das ondas A, C, G e J)
@@ -2653,7 +2763,8 @@ CREATE POLICY alertas_dispensados_proprio ON public.alertas_dispensados FOR ALL 
 -- ──────── 217_mural_central.sql ────────
 -- 217_mural_central.sql
 -- Lote 2026-10, onda J (ajuste da onda C). Idempotente. Bloco 2, depois da 204 (recria
--- funções dela) e da 211 (usa lote_interno.notificar e as colunas da central).
+-- funções dela), da 211 (usa lote_interno.notificar e as colunas da central) e da 212
+-- (liga a coluna checkin_telegram_pelo_cron).
 --
 -- Por quê (docs/14, seções 11.3a e 17): os avisos do mural (pedido, decisão e
 -- substituição) passam a cair na central de avisos e no sino, gravados uma vez por
@@ -2664,7 +2775,10 @@ CREATE POLICY alertas_dispensados_proprio ON public.alertas_dispensados FOR ALL 
 --    não muda (avisos-mural.tsx e a central chamam por ele).
 -- 3. devolver_escolta: a auditoria pedida pela onda G ('devolveu_escolta_ao_mural', por
 --    _auditar_mural) já está no corpo da 204 desta branch; nada a mudar aqui.
--- Reversão: 217_mural_central_reverter.sql recria os corpos da 204.
+-- 4. Liga configuracao_avisos.checkin_telegram_pelo_cron (coluna da 212): a partir daqui,
+--    com o envio pelo banco ativo, o Telegram do check-in vencido sai pelo cron. Antes
+--    (bloco 1, master no ar), o navegador da master mandava, e o cron não podia mandar junto.
+-- Reversão: 217_mural_central_reverter.sql recria os corpos da 204 e desliga a coluna.
 
 CREATE OR REPLACE FUNCTION public._avisar_app(p_escolta_id uuid, p_tipo text, p_usuarios uuid[], p_titulo text, p_texto text, p_pedido_id uuid)
     RETURNS void
@@ -2681,7 +2795,7 @@ REVOKE ALL ON FUNCTION public._avisar_app(uuid, text, uuid[], text, text, uuid) 
 CREATE OR REPLACE FUNCTION public.marcar_aviso_lido(p_notificacao_id uuid) RETURNS boolean
     LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $$
 BEGIN
-  IF public.get_meu_perfil() IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+  IF public.get_meu_perfil() IS NULL THEN RAISE EXCEPTION 'Sessão inválida.'; END IF;
   UPDATE public.notificacoes SET lida_em = coalesce(lida_em, now())
    WHERE id = p_notificacao_id AND usuario_dest_id = public.get_meu_usuario_id();
   RETURN FOUND;
@@ -2690,9 +2804,12 @@ $$;
 REVOKE ALL ON FUNCTION public.marcar_aviso_lido(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.marcar_aviso_lido(uuid) TO authenticated;
 
+UPDATE public.configuracao_avisos SET checkin_telegram_pelo_cron = true WHERE id = 1;
+
 -- Conferência:
 -- SELECT prosrc LIKE '%lote_interno.notificar%' FROM pg_proc WHERE proname = '_avisar_app';     -- true
 -- SELECT prosrc LIKE '%lida_em%' FROM pg_proc WHERE proname = 'marcar_aviso_lido';             -- true
+-- SELECT checkin_telegram_pelo_cron FROM configuracao_avisos;                                -- true
 
 COMMIT;
 
@@ -2704,8 +2821,11 @@ UNION ALL SELECT 'policies de leitura do storage', string_agg(policyname, ', ') 
 UNION ALL SELECT 'escoltas abertas com periodicidade (esperado 0)', count(*)::text FROM public.escoltas WHERE status NOT IN ('finalizada','cancelada') AND periodicidade_checkin_min IS NOT NULL
 UNION ALL SELECT 'índices únicos do efetivo (esperado 2)', count(*)::text FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
   WHERE c.relname IN ('escolta_efetivo_escolta_vigilante_uk', 'escolta_veiculos_escolta_veiculo_uk') AND i.indisunique
-UNION ALL SELECT 'avisos do mural pela central (esperado true)', (prosrc LIKE '%lote_interno.notificar%')::text FROM pg_proc WHERE oid = 'public._avisar_app(uuid, text, uuid[], text, text, uuid)'::regprocedure;
--- Esperado: true; lote2026_avisos_telegram, lote2026_pedidos_vencidos, lote2026_avisos_checkin; false; fotos_leitura_autenticada; 0; 2; true.
+UNION ALL SELECT 'avisos do mural pela central (esperado true)', (prosrc LIKE '%lote_interno.notificar%')::text FROM pg_proc WHERE oid = 'public._avisar_app(uuid, text, uuid[], text, text, uuid)'::regprocedure
+UNION ALL SELECT 'Telegram do check-in pelo cron (esperado true)', checkin_telegram_pelo_cron::text FROM public.configuracao_avisos WHERE id = 1;
+-- Esperado: true; lote2026_avisos_telegram, lote2026_pedidos_vencidos, lote2026_avisos_checkin; false; fotos_leitura_autenticada; 0; 2; true; true.
+-- Com 'envio pelo banco ativo' falso (conferência do bloco 1), o Telegram do check-in continua
+-- saindo pelo navegador, com reserva no banco (reservar_alertas_checkin); registrar no relatório.
 -- Teste rápido sem escrever dado: abrir em aba anônima a URL pública antiga de uma foto (deve falhar).
 
 -- ════════════════════════════════════════════════════════════════════════════
@@ -2717,7 +2837,8 @@ UNION ALL SELECT 'avisos do mural pela central (esperado true)', (prosrc LIKE '%
 -- -- 217_mural_central_reverter.sql
 -- -- ORDEM: primeiro o git revert do código da onda J e o deploy; depois este arquivo; a 211
 -- -- só depois dele. Recria os corpos da 204 (_avisar_app grava direto em notificacoes, só
--- -- com o payload; marcar_aviso_lido faz SET lida = true).
+-- -- com o payload; marcar_aviso_lido faz SET lida = true) e desliga o Telegram do check-in
+-- -- pelo cron (configuracao_avisos.checkin_telegram_pelo_cron = false).
 -- -- Aviso no aplicativo (tabela notificacoes, canal app).
 -- CREATE OR REPLACE FUNCTION public._avisar_app(p_escolta_id uuid, p_tipo text, p_usuarios uuid[], p_titulo text, p_texto text, p_pedido_id uuid)
 --     RETURNS void
@@ -2743,6 +2864,15 @@ UNION ALL SELECT 'avisos do mural pela central (esperado true)', (prosrc LIKE '%
 -- $$;
 -- REVOKE ALL ON FUNCTION public.marcar_aviso_lido(uuid) FROM PUBLIC, anon;
 -- GRANT EXECUTE ON FUNCTION public.marcar_aviso_lido(uuid) TO authenticated;
+--
+-- -- O Telegram do check-in volta a ser do navegador (reservar_alertas_checkin) até a 217 voltar.
+-- DO $$
+-- BEGIN
+--   IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public'
+--               AND table_name = 'configuracao_avisos' AND column_name = 'checkin_telegram_pelo_cron') THEN
+--     UPDATE public.configuracao_avisos SET checkin_telegram_pelo_cron = false WHERE id = 1;
+--   END IF;
+-- END $$;
 
 -- ──────── reverter 200_fechar_bucket_fotos ────────
 -- -- 200_fechar_bucket_fotos_reverter.sql
@@ -3084,8 +3214,10 @@ UNION ALL SELECT 'avisos do mural pela central (esperado true)', (prosrc LIKE '%
 -- -- 212_aviso_checkin_servidor_reverter.sql
 -- -- ORDEM: primeiro o git revert do código da onda J e o deploy (o alerta volta a ser
 -- -- calculado no navegador); depois este arquivo; a 211 só depois dele.
--- -- Desagenda o cron, remove as funções internas e devolve enfileirar_alerta_checkin ao
--- -- corpo da 208. Os avisos de check-in já gravados ficam (a reversão da 211 os guarda).
+-- -- Desagenda o cron, remove as funções internas e a reservar_alertas_checkin, devolve
+-- -- enfileirar_alerta_checkin ao corpo da 208 e tira a coluna checkin_telegram_pelo_cron.
+-- -- Os avisos de check-in já gravados ficam (a reversão da 211 os guarda). As reservas do
+-- -- navegador (avisos_reservados, chave checkin:...) ficam: a tabela é da 208.
 -- DO $$
 -- BEGIN
 --   IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
@@ -3132,9 +3264,11 @@ UNION ALL SELECT 'avisos do mural pela central (esperado true)', (prosrc LIKE '%
 -- REVOKE ALL ON FUNCTION public.enfileirar_alerta_checkin(uuid) FROM PUBLIC, anon;
 -- GRANT EXECUTE ON FUNCTION public.enfileirar_alerta_checkin(uuid) TO authenticated;
 --
+-- DROP FUNCTION IF EXISTS public.reservar_alertas_checkin();
 -- DROP FUNCTION IF EXISTS lote_interno.gerar_avisos_checkin(timestamptz);
 -- DROP FUNCTION IF EXISTS lote_interno.enfileirar_alerta_checkin(uuid);
 -- DROP FUNCTION IF EXISTS lote_interno.tipo_da_observacao(text);
+-- ALTER TABLE public.configuracao_avisos DROP COLUMN IF EXISTS checkin_telegram_pelo_cron;
 
 -- ──────── reverter 211_central_avisos ────────
 -- -- 211_central_avisos_reverter.sql
@@ -3191,8 +3325,10 @@ UNION ALL SELECT 'avisos do mural pela central (esperado true)', (prosrc LIKE '%
 -- DELETE FROM public.dom_tipos_evento WHERE codigo IN ('checkin_vencido', 'edicao_escolta', 'reset_escolta',
 --   'conclusao_antecipada', 'arquivamento_escolta', 'recuperacao_escolta', 'conflito_offline');
 --
+-- DROP FUNCTION IF EXISTS public.meus_avisos(text, uuid, boolean, integer, timestamptz, uuid);
 -- DROP FUNCTION IF EXISTS public.meus_avisos(text, uuid, boolean, integer, timestamptz);
 -- DROP FUNCTION IF EXISTS public.contar_avisos_nao_lidos();
+-- DROP FUNCTION IF EXISTS public.marcar_todos_lidos(text, uuid);
 -- DROP FUNCTION IF EXISTS public.marcar_todos_lidos(text);
 --
 -- DROP TRIGGER IF EXISTS tr_notificacoes_sincronizar_lida ON public.notificacoes;
