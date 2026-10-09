@@ -181,6 +181,34 @@ export default function NotificacoesPage() {
   const [buscaUser, setBuscaUser] = useState('')
   const msgEndRef = useRef<HTMLDivElement>(null)
 
+  // Onda J: o sino conta só os avisos da Central. Mensagem nova do Chat Interno tem o
+  // contador próprio, na aba Chat: mensagens para mim depois da última vez que abri a aba
+  // (marca em localStorage por usuário; no primeiro acesso do aparelho começa do zero).
+  const [chatNovas, setChatNovas] = useState(0)
+  useEffect(() => {
+    const eu = user?.id
+    if (!eu) return
+    const chave = `ea_chat_visto:${eu}`
+    const ler = () => { try { return window.localStorage.getItem(chave) } catch { return null } }
+    const gravar = (v: string) => { try { window.localStorage.setItem(chave, v) } catch { /* modo privado */ } }
+    let ativo = true
+    const conferir = async () => {
+      if (tab === 'chat') { gravar(new Date().toISOString()); setChatNovas(0); return }
+      let visto = ler()
+      if (!visto) { visto = new Date().toISOString(); gravar(visto) }
+      const { count, error } = await sb.from('chat_mensagens').select('id', { count: 'exact', head: true })
+        .eq('para_usuario_id', eu).gt('criado_em', visto)
+      if (ativo && !error) setChatNovas(count ?? 0)
+    }
+    conferir()
+    const t = setInterval(conferir, 20_000)
+    return () => {
+      ativo = false
+      clearInterval(t)
+      if (tab === 'chat') gravar(new Date().toISOString())
+    }
+  }, [user?.id, tab])
+
   // Lote 2026-10: bucket privado. Aqui guarda só o caminho; a URL assinada é gerada em
   // lote no fim de carregarNotificacoes.
   const toPublicUrl = useCallback((path: string | null): string | null => path || null, [])
@@ -442,6 +470,11 @@ export default function NotificacoesPage() {
               }}
             >
               {t.icon}<span>{t.label}</span>
+              {t.key === 'chat' && chatNovas > 0 && (
+                <span data-teste="chat-novas" aria-label={`${chatNovas} mensagens novas`} style={{ backgroundColor: '#B83832', color: '#fff', borderRadius: '10px', fontSize: '9px', fontWeight: 900, padding: '1px 6px', minWidth: '18px', textAlign: 'center' }}>
+                  {chatNovas > 99 ? '99+' : chatNovas}
+                </span>
+              )}
               {t.key === 'central' && naoLidas > 0 && (
                 <span style={{ backgroundColor: tab === 'central' ? 'rgba(255,255,255,0.2)' : '#B83832', color: '#fff', borderRadius: '10px', fontSize: '9px', fontWeight: 900, padding: '1px 6px', minWidth: '18px', textAlign: 'center' }}>
                   {naoLidas > 99 ? '99+' : naoLidas}

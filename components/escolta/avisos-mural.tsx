@@ -3,11 +3,13 @@
 /**
  * Avisos do mural no aplicativo (T4, lote 2026-10): pedido de substituição para a
  * supervisão, decisão para quem pediu e substituição para a equipe substituída.
- * "Ciente" marca como lido pela RPC marcar_aviso_lido, que só altera o próprio aviso.
+ * "Ciente" marca como lido pela RPC marcar_aviso_lido, que só altera o próprio aviso, e
+ * atualiza na hora o sino e o item Avisos (contador do AvisosProvider, onda J).
  */
 import { useCallback, useEffect, useState } from 'react'
 import { BellRing, Check } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { useAvisos } from '@/components/avisos-provider'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const sb = createClient() as any
@@ -16,6 +18,7 @@ interface AvisoMural { id: string; escolta_id: string; titulo: string; texto: st
 
 export function AvisosMural({ intervaloMs = 30_000 }: { intervaloMs?: number }) {
   const [avisos, setAvisos] = useState<AvisoMural[]>([])
+  const { atualizar } = useAvisos()
   const carregar = useCallback(async () => {
     const { data, error } = await sb.rpc('meus_avisos_mural')
     if (!error) setAvisos((data ?? []) as AvisoMural[])
@@ -29,6 +32,7 @@ export function AvisosMural({ intervaloMs = 30_000 }: { intervaloMs?: number }) 
   const ciente = async (id: string) => {
     setAvisos(a => a.filter(x => x.id !== id))
     await sb.rpc('marcar_aviso_lido', { p_notificacao_id: id })
+    atualizar()
   }
 
   if (avisos.length === 0) return null

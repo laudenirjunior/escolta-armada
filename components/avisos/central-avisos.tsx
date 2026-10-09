@@ -3,7 +3,7 @@
 /**
  * Central de avisos (lote 2026-10, onda J): a caixa pessoal de cada usuário, na tabela
  * notificacoes. Lista paginada (meus_avisos), filtro por tipo e por código da escolta,
- * marcar como lida (marcar_aviso_lido), marcar todas (marcar_todos_lidos), link para a
+ * marcar como lida (marcar_aviso_lido), marcar todas com os filtros ativos (marcar_todos_lidos), link para a
  * escolta e "Registrar check-in" no aviso de check-in vencido. Cada um vê só os próprios
  * avisos (decisão S5); a auditoria da gestão continua em logs_auditoria.
  */
@@ -16,6 +16,8 @@ import { type AvisoCentral, horaBrasilia, useAbrirAviso, useAvisos } from '@/com
 const sb = createClient() as any
 
 const POR_PAGINA = 30
+// Função ausente no PostgREST (PGRST202) ou no banco (42883).
+const FUNCAO_AUSENTE = ['PGRST202', '42883']
 
 const TIPOS: { codigo: string; rotulo: string }[] = [
   { codigo: '', rotulo: 'Todos os tipos' },
@@ -48,13 +50,15 @@ export function CentralAvisos({ perfil }: { perfil?: string | null }) {
   const [marcandoTodas, setMarcandoTodas] = useState(false)
   const paginasRef = useRef(1)
 
-  const buscar = useCallback(async (antes: string | null) => {
+  // Cursor (criado_em, id): avisos do mesmo ciclo do cron têm o mesmo criado_em.
+  const buscar = useCallback(async (antes: AvisoCentral | null) => {
     const { data, error } = await sb.rpc('meus_avisos', {
       p_tipo: tipo || null,
       p_escolta_id: escoltaFiltro?.id ?? null,
       p_so_nao_lidas: soNaoLidas,
       p_limite: POR_PAGINA,
-      p_antes: antes,
+      p_antes: antes?.criado_em ?? null,
+      p_antes_id: antes?.id ?? null,
     })
     if (error) throw new Error(error.message)
     return (data ?? []) as AvisoCentral[]
@@ -88,7 +92,7 @@ export function CentralAvisos({ perfil }: { perfil?: string | null }) {
     const ultimo = avisos[avisos.length - 1]
     if (!ultimo) return
     try {
-      const mais = await buscar(ultimo.criado_em)
+      const mais = await buscar(ultimo)
       setAvisos(a => [...a, ...mais.filter(m => !a.some(x => x.id === m.id))])
       setTemMais(mais.length === POR_PAGINA)
       paginasRef.current += 1
@@ -111,6 +115,11 @@ export function CentralAvisos({ perfil }: { perfil?: string | null }) {
 
   const marcarLida = async (a: AvisoCentral) => {
     const { data, error } = await sb.rpc('marcar_aviso_lido', { p_notificacao_id: a.id })
+    // marcar_aviso_lido é do bloco 2 (204/217): entre o deploy e o bloco 2 ela não existe.
+    if (error && FUNCAO_AUSENTE.includes(error.code ?? '')) {
+      setErro('Atualização em andamento: marcar um aviso por vez volta em instantes. Enquanto isso, use "Marcar todas como lidas".')
+      return
+    }
     if (error || data !== true) { setErro('O aviso não foi marcado como lido. Tente de novo.'); return }
     const agora = new Date().toISOString()
     setAvisos(lista => soNaoLidas ? lista.filter(x => x.id !== a.id) : lista.map(x => x.id === a.id ? { ...x, lida_em: agora } : x))
@@ -119,7 +128,8 @@ export function CentralAvisos({ perfil }: { perfil?: string | null }) {
 
   const marcarTodas = async () => {
     setMarcandoTodas(true)
-    const { error } = await sb.rpc('marcar_todos_lidos', { p_tipo: tipo || null })
+    // Respeita os filtros ativos (tipo e escolta): só marca o que a lista mostra.
+    const { error } = await sb.rpc('marcar_todos_lidos', { p_tipo: tipo || null, p_escolta_id: escoltaFiltro?.id ?? null })
     setMarcandoTodas(false)
     if (error) { setErro('Não foi possível marcar todos como lidos.'); return }
     atualizar()
@@ -175,7 +185,7 @@ export function CentralAvisos({ perfil }: { perfil?: string | null }) {
             className="flex items-center gap-1"
             style={{ minHeight: '40px', padding: '0 12px', border: `1px solid ${C.steel}`, borderRadius: '2px', fontSize: '12px', fontWeight: 800,
                      color: naoLidas === 0 ? C.muted : C.steel, backgroundColor: '#fff', opacity: naoLidas === 0 ? 0.6 : 1 }}>
-            <CheckCheck size={14} /> Marcar todas como lidas
+            <CheckCheck size={14} /> {tipo || escoltaFiltro ? 'Marcar todas como lidas (filtro atual)' : 'Marcar todas como lidas'}
           </button>
         </div>
       </div>
