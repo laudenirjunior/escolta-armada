@@ -855,7 +855,7 @@ export default function EscoltasPage() {
           ) : null}
 
           {/* Seção 3: Histórico */}
-          {filtroStatus === 'todos' || ['finalizada', 'cancelada'].includes(filtroStatus) ? (
+          {filtroStatus === 'todos' || ['finalizada', 'cancelada', 'com_pendencias'].includes(filtroStatus) ? (
             <div className="space-y-0">
               <div className="cc-panel-header">
                 <div style={{ width: '6px', height: '6px', borderRadius: '1px', backgroundColor: '#ABB5C9', flexShrink: 0 }} />
