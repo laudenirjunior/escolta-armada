@@ -10,6 +10,7 @@ import {
   CheckSquare, Square, ChevronUp, Layers,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { EMBED_CONCLUSAO, linhasPendencias, type ConclusaoEmbutida } from '@/lib/gestao'
 
 // ─── Paleta ───────────────────────────────────────────────────────────────────
 const P = {
@@ -78,8 +79,9 @@ interface EscoltaRelatorio {
   destino_endereco: string | null
   cliente: { id: string; nome_cliente: string; cor_destaque: string | null } | null
   veiculos: { quilometragem_saida: number; quilometragem_retorno: number | null }[]
-  // Onda I: conclusão antecipada válida vira etiqueta "Concluída com pendências".
-  conclusao?: { id: string; anulado_em: string | null }[] | null
+  // Onda I: conclusão antecipada válida vira etiqueta "Concluída com pendências" e a lista
+  // de pendências aparece na seção própria (adendo 4.3.6).
+  conclusao?: ConclusaoEmbutida[] | null
 }
 const comPendencias = (e: EscoltaRelatorio) => (e.conclusao ?? []).some(c => !c.anulado_em)
 interface OcorrenciaRelatorio {
@@ -382,7 +384,7 @@ export default function RelatoriosPage() {
       origem_endereco, destino_endereco,
       cliente:clientes(id, nome_cliente, cor_destaque),
       veiculos:escolta_veiculos(quilometragem_saida, quilometragem_retorno),
-      conclusao:escolta_conclusoes_antecipadas(id, anulado_em)
+      ${EMBED_CONCLUSAO}
     `)
     .gte('data_hora_prevista', from)
     .lte('data_hora_prevista', to)
@@ -490,6 +492,9 @@ export default function RelatoriosPage() {
       (e.destino_endereco ?? '').toLowerCase().includes(q)
     )
   })
+
+  // Onda I: pendências das concluídas antes do fim, das escoltas que estão na tabela.
+  const pendenciasTabela = linhasPendencias(escFiltradas)
 
   const escOrdenadas = [...escFiltradas].sort((a, b) => {
     if (!sortDir) return 0
@@ -1149,6 +1154,39 @@ export default function RelatoriosPage() {
               </div>
             )}
           </div>
+
+          {/* Onda I (adendo 4.3.6): lista das pendências das escoltas concluídas antes do fim. */}
+          {!loading && pendenciasTabela.length > 0 && (
+            <div style={cardStyle} data-teste="relatorio-pendencias">
+              <div style={{ padding: '12px 16px', borderBottom: `1px solid ${P.border}` }}>
+                <h3 style={{ fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B7791F' }}>Pendências de conclusão</h3>
+                <p style={{ fontSize: '11px', color: P.textSub, marginTop: '2px' }}>
+                  O que não foi feito nas escoltas concluídas pela gestão antes do fim ({pendenciasTabela.length} item(ns)).
+                </p>
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table className="table-content">
+                  <thead>
+                    <tr>
+                      {['Escolta', 'Etapa', 'Viatura', 'Item não feito', 'Concluída por', 'Quando (Brasília)'].map(h => <th key={h}>{h}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pendenciasTabela.map((l, i) => (
+                      <tr key={`${l.escolta_id}:${i}`} data-teste="relatorio-pendencia">
+                        <td><span style={{ fontFamily: 'monospace', fontSize: '12px', fontWeight: 700, color: P.text }}>{l.codigo}</span></td>
+                        <td style={{ fontSize: '11px', color: P.text }}>{l.etapa}</td>
+                        <td style={{ fontSize: '11px', fontFamily: 'monospace', color: P.text }}>{l.placa}</td>
+                        <td style={{ fontSize: '11px', color: P.text }}>{l.item}</td>
+                        <td style={{ fontSize: '11px', color: P.textSub }}>{l.quem}</td>
+                        <td style={{ fontSize: '11px', color: P.textSub, whiteSpace: 'nowrap' }}>{l.quando}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

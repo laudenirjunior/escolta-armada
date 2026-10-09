@@ -65,6 +65,10 @@ interface EscoltaDetalhe {
   checklist_pendente_no_inicio: boolean
   criada_por: string
   criado_em: string
+  // Onda I: arquivada só aparece para o administrador (faixa e só Recuperar).
+  arquivada_em?: string | null
+  motivo_arquivamento?: string | null
+  arquivador?: { nome_completo: string | null } | null
   cliente: { id: string; nome_cliente: string; cor_destaque: string; telefone: string; metadados?: Record<string, unknown> | null } | null
   valor_cobrado: number | null
   outros_custos: number | null
@@ -808,6 +812,7 @@ export default function EscoltaDetalhePage() {
         checklist_pendente_no_inicio, criada_por, criado_em,
         valor_cobrado, outros_custos, observacao_financeira,
         periodicidade_checkin_min,
+        arquivada_em, motivo_arquivamento, arquivador:usuarios!arquivada_por(nome_completo),
         cliente:clientes(id, nome_cliente, cor_destaque, telefone, metadados)
       `)
       .eq('id', id)
@@ -2771,7 +2776,9 @@ export default function EscoltaDetalhePage() {
   // Acoes operacionais: quem esta no efetivo desta escolta, qualquer perfil, ou a
   // gestao. Antes o Painel de Acoes aparecia para qualquer um que abrisse a escolta,
   // com botoes que a RLS recusaria.
-  const podeOperar = podeOperarEscolta(perfil, vinculadoAEscolta)
+  // Onda I: escolta arquivada não tem ação de campo nem de status (o banco recusa): só Recuperar.
+  const arquivada = !!escolta.arquivada_em
+  const podeOperar = podeOperarEscolta(perfil, vinculadoAEscolta) && !arquivada
   const isSupervisorOrOperador = ['supervisor', 'operador'].includes(perfil)
   const isUnstarted = ['rascunho', 'agendada', 'em_pre_inicio'].includes(escolta.status)
 
@@ -3107,7 +3114,7 @@ export default function EscoltaDetalhePage() {
       )}
 
       {/* ── Painel de Designação de Responsabilidade ── */}
-      {['rascunho', 'agendada'].includes(escolta.status) && (
+      {['rascunho', 'agendada'].includes(escolta.status) && !arquivada && (
         <div className="card-light p-5 space-y-4 border-l-4 border-amber-500">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
@@ -3177,7 +3184,7 @@ export default function EscoltaDetalhePage() {
                   >
                     <FileDown size={13} /> PDF
                   </button>
-                  {PODE_CANCELAR.includes(perfil) && !isFinalizado && (
+                  {PODE_CANCELAR.includes(perfil) && !isFinalizado && !arquivada && (
                     <button
                       onClick={() => { setErro(null); setDialogCancelar(true) }}
                       className="bg-[#FAEAE9] hover:bg-[#F5D5D3] text-[#B83832] border border-[#EAB5B0] font-black text-[10px] uppercase tracking-widest px-4 py-2 flex items-center justify-center gap-1.5 transition-all active:scale-95"
@@ -3373,7 +3380,7 @@ export default function EscoltaDetalhePage() {
                   {/* Periodicidade e planejamento: so a gestao altera (PODE_ALTERAR_PERIODICIDADE). */}
                   {/* Lote 2026-10 (M4): check-in desligado por padrão; "Alterar" só aparece se a
                       escolta já tem periodicidade ou se o cliente foi religado (metadados). */}
-                  {PODE_ALTERAR_PERIODICIDADE.includes(perfil)
+                  {PODE_ALTERAR_PERIODICIDADE.includes(perfil) && !arquivada
                     && (escolta.periodicidade_checkin_min != null || periodicidadePadraoDoCliente(escolta.cliente?.metadados) != null) && (
                     <button onClick={() => { setPeriodicidadeEdit(escolta.periodicidade_checkin_min ? String(escolta.periodicidade_checkin_min) : ''); setEditandoPeriodicidade(true) }}
                       style={{ fontSize: '10px', color: '#1E7C52', textDecoration: 'underline' }}>

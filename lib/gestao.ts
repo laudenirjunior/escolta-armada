@@ -49,3 +49,42 @@ export interface ConclusaoAntecipada {
 export function totalItensPendentes(p: PendenciaEtapa[] | null | undefined): number {
   return (p ?? []).reduce((s, e) => s + e.viaturas.reduce((t, v) => t + v.faltando.length, 0), 0)
 }
+
+/** Conclusão antecipada embutida na escolta (lista, relatórios e PDF de relatórios). */
+export interface ConclusaoEmbutida {
+  id: string
+  anulado_em: string | null
+  status_no_momento?: string | null
+  motivo?: string | null
+  concluida_em?: string | null
+  pendencias?: PendenciaEtapa[] | null
+  autor?: { nome_completo?: string | null } | null
+}
+
+/** Embed do PostgREST com o que os relatórios mostram de cada conclusão antecipada. */
+export const EMBED_CONCLUSAO =
+  'conclusao:escolta_conclusoes_antecipadas(id, anulado_em, status_no_momento, motivo, concluida_em, pendencias, autor:usuarios!concluida_por(nome_completo))'
+
+/** Uma linha por item não feito (como a vw_pendencias_conclusao): etapa, viatura, item, quem e quando. */
+export interface LinhaPendencia {
+  escolta_id: string; codigo: string; etapa: string; placa: string; item: string; quem: string; quando: string; observacao: string
+}
+
+export function linhasPendencias(escoltas: { id: string; codigo_escolta: string | null; conclusao?: ConclusaoEmbutida[] | null }[]): LinhaPendencia[] {
+  const linhas: LinhaPendencia[] = []
+  for (const e of escoltas) {
+    const c = (e.conclusao ?? []).find(x => !x.anulado_em)
+    if (!c) continue
+    for (const et of c.pendencias ?? []) {
+      for (const v of et.viaturas) {
+        for (const item of v.faltando) {
+          linhas.push({
+            escolta_id: e.id, codigo: e.codigo_escolta ?? 'Sem código', etapa: et.rotulo, placa: v.placa, item,
+            quem: c.autor?.nome_completo ?? 'gestão', quando: horaBR(c.concluida_em), observacao: c.motivo ?? '',
+          })
+        }
+      }
+    }
+  }
+  return linhas
+}

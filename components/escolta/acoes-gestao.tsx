@@ -8,12 +8,19 @@
  * explícita, e só então chama a RPC da migration 218. Quem garante a regra é o banco: as
  * RPCs recusam outros perfis, status inválidos (S7, S8) e emergência aberta.
  *
+ * A confirmação de voltar e zerar manda de volta o resumo que a prévia devolveu (versão,
+ * status, total e hash dos ids a anular): se a escolta mudou entre a prévia e a confirmação,
+ * o banco recusa e a tela pede para conferir de novo.
+ *
+ * Escolta arquivada (só o administrador a abre): faixa "Arquivada em ... por Nome: motivo" e
+ * o menu oferece só Recuperar.
+ *
  * Fica fora da tela de detalhe de propósito (regra 7 do plano: mudança mínima no detalhe).
  * Também daqui: a faixa "Concluída com pendências" e a seção com a lista.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Archive, CheckCheck, ChevronDown, Pencil, RotateCcw, ShieldAlert, Undo2, X } from 'lucide-react'
+import { Archive, ArchiveRestore, CheckCheck, ChevronDown, Pencil, RotateCcw, ShieldAlert, Undo2, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { PODE_PODER_TOTAL, temPermissao } from '@/lib/permissions'
 import { rotuloStatus, statusAnterior } from '@/lib/fluxo-escolta'
@@ -25,12 +32,14 @@ import {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const sb = createClient() as any
 
-type Acao = 'voltar' | 'zerar' | 'concluir' | 'arquivar'
+type Acao = 'voltar' | 'zerar' | 'concluir' | 'arquivar' | 'recuperar'
 
 interface ItemPrevia { tabela: string; id: string; quando_br: string; descricao: string; criterio: string }
 interface Previa {
   status_atual: string; destino: string; rotulo_destino: string; tipo: string; total: number
   itens: ItemPrevia[]; avisos: string[]
+  /** Devolvido na confirmação: o banco recusa se a escolta mudou desde a prévia. */
+  resumo: Record<string, unknown>
   valores: { km: { placa: string; quilometragem_saida: number | null; quilometragem_retorno: number | null }[] }
 }
 
@@ -42,7 +51,11 @@ const CRITERIO: Record<string, string> = {
 const STATUS_INICIADOS_ARQUIVO = ['rascunho', 'agendada', 'finalizada', 'cancelada']
 
 interface Props {
-  escolta: { id: string; status: string; codigo_escolta: string | null }
+  escolta: {
+    id: string; status: string; codigo_escolta: string | null
+    arquivada_em?: string | null; motivo_arquivamento?: string | null
+    arquivador?: { nome_completo?: string | null } | null
+  }
   perfil: string | null | undefined
   onAlterado: () => void
 }
@@ -52,6 +65,32 @@ export function AcoesGestao({ escolta, perfil, onAlterado }: Props) {
   const [menu, setMenu] = useState(false)
   const [acao, setAcao] = useState<Acao | null>(null)
   if (!temPermissao(perfil, PODE_PODER_TOTAL)) return null
+
+  // Arquivada: só o administrador a vê; a única ação é recuperar (o banco recusa as outras).
+  if (escolta.arquivada_em) {
+    return (
+      <div className="space-y-2" data-teste="acoes-gestao">
+        <div className="p-3 text-sm flex flex-col sm:flex-row sm:items-center justify-between gap-2" style={{ backgroundColor: C.bgAmber, color: C.amber, border: `1px solid ${C.amber}` }} data-teste="faixa-arquivada">
+          <span>
+            <strong>Arquivada em {horaBR(escolta.arquivada_em)} (Brasília){escolta.arquivador?.nome_completo ? ` por ${escolta.arquivador.nome_completo}` : ''}:</strong>{' '}
+            {escolta.motivo_arquivamento ?? 'sem motivo'}
+          </span>
+          {perfil === 'administrador' && (
+            <button
+              type="button"
+              onClick={() => setAcao('recuperar')}
+              className="flex items-center justify-center gap-1.5 font-black text-[10px] uppercase tracking-widest px-4 py-2 text-white"
+              style={{ backgroundColor: C.navy, borderRadius: '1px', minHeight: '40px' }}
+              data-teste="acao-recuperar"
+            >
+              <ArchiveRestore size={13} /> Recuperar
+            </button>
+          )}
+        </div>
+        {acao && <DialogoAcao acao={acao} escolta={escolta} onFechar={() => setAcao(null)} onFeito={() => { setAcao(null); onAlterado() }} />}
+      </div>
+    )
+  }
 
   const st = escolta.status
   const podeVoltar = statusAnterior(st) !== null
@@ -130,7 +169,7 @@ export function AcoesGestao({ escolta, perfil, onAlterado }: Props) {
 function DialogoAcao({ acao, escolta, onFechar, onFeito }: {
   acao: Acao; escolta: Props['escolta']; onFechar: () => void; onFeito: () => void
 }) {
-  const [carregando, setCarregando] = useState(acao !== 'arquivar')
+  const [carregando, setCarregando] = useState(acao !== 'arquivar' && acao !== 'recuperar')
   const [previa, setPrevia] = useState<Previa | null>(null)
   const [pendencias, setPendencias] = useState<PendenciaEtapa[] | null>(null)
   const [motivo, setMotivo] = useState('')
@@ -156,25 +195,34 @@ function DialogoAcao({ acao, escolta, onFechar, onFeito }: {
 
   useEffect(() => { carregar() }, [carregar])
 
-  const titulo = { voltar: 'Voltar uma etapa', zerar: 'Zerar para agendada', concluir: 'Concluir agora', arquivar: 'Arquivar escolta' }[acao]
+  const titulo = { voltar: 'Voltar uma etapa', zerar: 'Zerar para agendada', concluir: 'Concluir agora', arquivar: 'Arquivar escolta', recuperar: 'Recuperar do arquivo' }[acao]
   const motivoOk = motivo.trim().length >= 10
   const pronto = !carregando && !erro && motivoOk && confirmo && !feito
 
   const confirmar = async () => {
     setEnviando(true); setErro(null)
     const args = { p_escolta_id: escolta.id, p_motivo: motivo.trim() }
-    const chamada = acao === 'voltar' ? sb.rpc('voltar_etapa_escolta', { ...args, p_previa: false })
-      : acao === 'zerar' ? sb.rpc('zerar_escolta', { ...args, p_previa: false })
+    const chamada = acao === 'voltar' ? sb.rpc('voltar_etapa_escolta', { ...args, p_previa: false, p_resumo: previa?.resumo ?? null })
+      : acao === 'zerar' ? sb.rpc('zerar_escolta', { ...args, p_previa: false, p_resumo: previa?.resumo ?? null })
       : acao === 'concluir' ? sb.rpc('concluir_escolta_antecipada', args)
+      : acao === 'recuperar' ? sb.rpc('recuperar_escolta', args)
       : sb.rpc('arquivar_escolta', args)
     const { data, error } = await chamada
     setEnviando(false)
-    if (error) { setErro(mensagemDeErro(error)); return }
+    if (error) {
+      setErro(mensagemDeErro(error))
+      // A escolta mudou desde a prévia: busca a lista nova e pede nova confirmação.
+      if ((acao === 'voltar' || acao === 'zerar') && /mudou desde a prévia/.test(error.message ?? '')) {
+        setConfirmo(false); setPrevia(null); setCarregando(true); carregar()
+      }
+      return
+    }
     const d = (data ?? {}) as Record<string, unknown>
     setFeito(acao === 'voltar' || acao === 'zerar'
       ? `Feito: a escolta voltou para ${rotuloStatus(String(d.para ?? ''))}. ${d.anulados ?? 0} registro(s) anulado(s), nada apagado.`
       : acao === 'concluir'
         ? (Number(d.itens ?? 0) > 0 ? `Concluída com ${d.itens} pendência(s) registrada(s).` : 'Concluída sem pendências.')
+        : acao === 'recuperar' ? `Escolta recuperada; voltou em ${rotuloStatus(String(d.status ?? escolta.status))}.`
         : 'Escolta arquivada.')
     setTimeout(onFeito, 1200)
   }
@@ -235,6 +283,9 @@ function DialogoAcao({ acao, escolta, onFechar, onFeito }: {
           {acao === 'arquivar' && (
             <p className="text-sm" style={{ color: C.sub }}>A escolta some das listas, do mural, do Campo, do mapa e dos indicadores. Nada é apagado; o administrador vê em Arquivadas e pode recuperar.</p>
           )}
+          {acao === 'recuperar' && (
+            <p className="text-sm" style={{ color: C.sub }}>A escolta volta às listas no status em que estava ({rotuloStatus(escolta.status)}). A recuperação fica na auditoria, e a supervisão é avisada.</p>
+          )}
 
           {!feito && (
             <>
@@ -254,7 +305,7 @@ function DialogoAcao({ acao, escolta, onFechar, onFeito }: {
               </div>
               <label className="flex items-start gap-2 text-xs" style={{ color: C.text }}>
                 <input type="checkbox" checked={confirmo} onChange={e => setConfirmo(e.target.checked)} data-teste="confirmo-acao" />
-                <span>Li {acao === 'arquivar' ? 'o aviso' : 'a lista'} acima e confirmo. A ação fica na auditoria e no histórico, e a supervisão é avisada.</span>
+                <span>Li {acao === 'arquivar' || acao === 'recuperar' ? 'o aviso' : 'a lista'} acima e confirmo. A ação fica na auditoria{acao === 'arquivar' || acao === 'recuperar' ? '' : ' e no histórico'}, e a supervisão é avisada.</span>
               </label>
             </>
           )}

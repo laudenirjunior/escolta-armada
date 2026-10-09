@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { urlAssinada, VALIDADE_IMPRESSAO_S } from '@/lib/fotos-url'
 import { useAuth } from '@/hooks/useAuth'
+import { EMBED_CONCLUSAO, linhasPendencias, type ConclusaoEmbutida } from '@/lib/gestao'
 
 const sb = createClient() as any
 
@@ -24,8 +25,9 @@ interface EscoltaPDF {
   cliente: { id: string; nome_cliente: string; cor_destaque: string | null } | null
   veiculos: { quilometragem_saida: number; quilometragem_retorno: number | null; abastecimento_valor: number | null; abastecimento_litros: number | null }[]
   efetivo: { valor_pago_vigilante: number | null; papel_na_escolta: string | null; confirmado: boolean; vigilante: { nome_completo: string } | null }[]
-  // Onda I: conclusão antecipada válida (etiqueta "com pendências" na lista).
-  conclusao?: { id: string; anulado_em: string | null }[] | null
+  // Onda I: conclusão antecipada válida (etiqueta "com pendências" na lista e a lista de
+  // pendências logo abaixo, adendo 4.3.6).
+  conclusao?: ConclusaoEmbutida[] | null
 }
 interface OcorrenciaPDF {
   id: string; descricao: string; data_hora: string
@@ -218,6 +220,36 @@ function SecaoEscoltas({ escoltas }: { escoltas: EscoltaPDF[] }) {
             <td style={{ fontWeight: 900, fontVariantNumeric: 'tabular-nums' }}>{escoltas.reduce((s,e) => s + calcKm(e.veiculos), 0).toLocaleString('pt-BR')}</td>
           </tr>
         </tfoot>
+      </table>
+      <PendenciasDeConclusao escoltas={escoltas} />
+    </div>
+  )
+}
+
+/** Onda I (adendo 4.3.6): o que não foi feito nas escoltas concluídas pela gestão antes do fim. */
+function PendenciasDeConclusao({ escoltas }: { escoltas: EscoltaPDF[] }) {
+  const linhas = linhasPendencias(escoltas)
+  if (linhas.length === 0) return null
+  return (
+    <div style={{ marginTop: '20px' }} data-teste="pdf-pendencias">
+      <h3 style={{ fontSize: '12px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B7791F', marginBottom: '6px' }}>Pendências de conclusão</h3>
+      <p style={{ fontSize: '11px', color: '#53648A', marginBottom: '10px' }}>{linhas.length} item(ns) não feito(s) nas escoltas concluídas pela gestão antes do fim.</p>
+      <table className="tabela">
+        <thead>
+          <tr><th>Escolta</th><th>Etapa</th><th>Viatura</th><th>Item não feito</th><th>Concluída por</th><th>Quando (Brasília)</th></tr>
+        </thead>
+        <tbody>
+          {linhas.map((l, i) => (
+            <tr key={`${l.escolta_id}:${i}`}>
+              <td style={{ fontWeight: 700 }}>{l.codigo}</td>
+              <td>{l.etapa}</td>
+              <td style={{ fontFamily: 'monospace' }}>{l.placa}</td>
+              <td>{l.item}</td>
+              <td>{l.quem}</td>
+              <td style={{ fontVariantNumeric: 'tabular-nums', fontSize: '10px' }}>{l.quando}</td>
+            </tr>
+          ))}
+        </tbody>
       </table>
     </div>
   )
@@ -584,7 +616,7 @@ function RelatoriosPDFConteudo() {
           valor_pago_vigilante, papel_na_escolta, confirmado,
           vigilante:vigilantes(nome_completo)
         ),
-        conclusao:escolta_conclusoes_antecipadas(id, anulado_em)
+        ${EMBED_CONCLUSAO}
       `)
       // Onda I: arquivada fora do relatório.
       escoltasQ = escoltasQ.is('arquivada_em', null)

@@ -102,27 +102,29 @@ export default function EscoltasPage() {
     // fosse de não operador, sem as escoltas dele. Espera o usuário e o perfil chegarem.
     if (!user || !perfil) return
     setLoading(true)
+    // Onda I: "Concluída com pendências" é filtrada no banco (embed !inner com a conclusão
+    // válida), não no navegador: o limite de linhas do PostgREST não esconde as antigas.
+    const soComPendencias = filtroStatus === 'com_pendencias'
     let q = sb
       .from('escoltas')
       .select(`
         id, codigo_escolta, status, data_hora_prevista,
         origem_endereco, destino_endereco, checklist_pendente_no_inicio, reiniciada_em,
         cliente:clientes(nome_cliente, cor_destaque),
-        conclusao:escolta_conclusoes_antecipadas(id, anulado_em)
+        conclusao:escolta_conclusoes_antecipadas${soComPendencias ? '!inner' : ''}(id, anulado_em)
       `)
       // Onda I: arquivada fora (o administrador as vê em Arquivadas).
       .is('arquivada_em', null)
       .order('data_hora_prevista', { ascending: false })
 
-    if (filtroStatus === 'com_pendencias') {
-      q = q.eq('status', 'finalizada')
+    if (soComPendencias) {
+      q = q.eq('status', 'finalizada').is('conclusao.anulado_em', null)
     } else if (filtroStatus !== 'todos') {
       q = q.eq('status', filtroStatus)
     }
 
     const { data } = await q
     let rows = (data ?? []) as EscoltaRow[]
-    if (filtroStatus === 'com_pendencias') rows = rows.filter(comPendencias)
 
     let escoltaIdsOperador: string[] = []
     // Filtragem de Visibilidade (Operador vê apenas escoltas ativas)
