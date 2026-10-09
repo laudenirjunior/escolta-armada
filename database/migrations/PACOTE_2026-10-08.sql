@@ -1,6 +1,6 @@
 -- PACOTE_2026-10-08.sql
 -- Lote 2026-10 do Escolta Armada: pacote de publicação no banco de produção
--- (projeto qthoyxujyzskydulvcfy). Gerado a partir das migrations 196 a 217 (as do lote que existem) testadas na
+-- (projeto qthoyxujyzskydulvcfy). Gerado a partir das migrations 196 a 218 (as do lote que existem) testadas na
 -- homologação da VPS (banco recriado do zero com o esquema de produção de 08/10/2026).
 --
 -- NÃO APLICAR SEM O "publicar" DO PEÇANHA. Não há caminho de DDL para produção na VPS:
@@ -13,7 +13,7 @@
 --      Depois: segredos telegram_bot_token e telegram_chat_central pela tela Vault do
 --      painel do Supabase (nunca pelo SQL Editor). Responder "aplicado 1".
 --   2. Push das ondas para a master, uma a uma, com o teste de produção depois de cada uma.
---   3. BLOCO 2, logo depois do deploy das ondas A, C, G e J. Responder "aplicado 2".
+--   3. BLOCO 2, logo depois do deploy das ondas A, C, G, J e I. Responder "aplicado 2".
 --   Cada bloco roda inteiro numa transação: se qualquer comando falhar, nada do bloco fica.
 --   Se o SQL Editor recusar BEGIN/COMMIT, rode migration por migration, na ordem.
 --
@@ -1729,6 +1729,815 @@ END $$;
 -- SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'lote_interno'
 --   AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE')); -- 0
 
+
+-- ──────── 213_poder_total_estrutura.sql ────────
+-- 213_poder_total_estrutura.sql
+-- Lote 2026-10, onda I (adendo 01, item 4.3). Idempotente. Bloco 1, depois da 212.
+-- Aditiva e compatível com a master 2b3fff9: só acrescenta colunas com padrão, tabelas,
+-- view e triggers que preenchem ou recusam valores que o código antigo nunca manda.
+--
+-- Por quê (docs/14, seção 12.2): gestor e administrador passam a voltar etapa, zerar,
+-- concluir com pendências e arquivar escoltas. Nada é apagado: os registros de campo da
+-- etapa desfeita ficam ANULADOS (marcados), e as telas e o banco passam a contar só os
+-- válidos. Esta migration cria só a estrutura; as travas vêm na 214 e as RPCs na 218.
+--
+-- O que faz:
+-- 1. escoltas: arquivada_em, arquivada_por, motivo_arquivamento, reiniciada_em (S15) e
+--    versao_gestao (incrementada só por voltar etapa, zerar, concluir antes, arquivar e
+--    recuperar; nunca pela edição). ADD COLUMN com padrão constante não reescreve a linha
+--    nem dispara trigger: ESC-2026-0001 e ESC-2026-0007 não mudam (atualizado_em igual).
+-- 2. Anulação (anulado_em, anulado_por, motivo_anulacao, anulacao_id) nas 9 tabelas de
+--    campo; fotos e checklist_respostas herdam do pai.
+-- 3. Carimbo de etapa status_escolta_no_registro, preenchido por trigger BEFORE INSERT com
+--    o status da escolta no momento (o valor mandado pelo cliente é ignorado).
+-- 4. escolta_resets (histórico das voltas de etapa e zerar, com os valores guardados).
+-- 5. escolta_conclusoes_antecipadas e vw_pendencias_conclusao (uma linha por item).
+-- 6. Trava das colunas da gestão (tr_travar_colunas_gestao_<tabela>): UPDATE de anulado_*,
+--    arquivada_*, versao_gestao, reiniciada_em, status_escolta_no_registro e via_rpc só com
+--    a variável de transação escolta.rpc_gestao ligada E perfil administrador ou gestor
+--    (dupla guarda: ligar a variável sozinho não basta), ou sem usuário final (auth.uid()
+--    nulo: migrations, SQL Editor e cron). No INSERT, recusa só valor diferente do padrão
+--    (nulo e 0 passam); o carimbo fica fora da trava de INSERT (é a trigger da 213.3 que o
+--    preenche), e a ordem entre as duas triggers não importa.
+-- 7. escolta_status_historico.via_rpc, ligada pela variável escolta.historico_rpc (as RPCs
+--    a ligam: registrar_etapa_escolta na 214 e as da 218). Linha gravada direto pelo
+--    cliente fica false. A anulação por janela de tempo usa só linhas via_rpc.
+-- 8. pontos_controle.lancado_por nulo vira o usuário da sessão (a master pode mandar
+--    user?.id nulo com sessão válida; a policy da 214 confere o autor depois disto).
+-- Chaves estrangeiras de anulado_por, arquivada_por, concluida_por e feito_por para
+-- usuarios SEM ação (18.8, item 7): excluir quem anulou ou arquivou é recusado.
+-- Reversão: 213_poder_total_estrutura_reverter.sql (depois da 214), que guarda as colunas
+-- novas e as tabelas em backup_20261008 antes de remover.
+
+-- 1. Arquivamento, reinício e versão da gestão.
+ALTER TABLE public.escoltas
+  ADD COLUMN IF NOT EXISTS arquivada_em        timestamptz,
+  ADD COLUMN IF NOT EXISTS arquivada_por       uuid REFERENCES public.usuarios(id),
+  ADD COLUMN IF NOT EXISTS motivo_arquivamento text,
+  ADD COLUMN IF NOT EXISTS reiniciada_em       timestamptz,
+  ADD COLUMN IF NOT EXISTS versao_gestao       integer NOT NULL DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_escoltas_nao_arquivadas
+  ON public.escoltas (status, data_hora_prevista) WHERE arquivada_em IS NULL;
+COMMENT ON COLUMN public.escoltas.arquivada_em IS 'Lote 2026-10 (onda I): arquivada pela gestão (some das listas, do mural, do Campo e dos indicadores). Só pela RPC arquivar_escolta.';
+COMMENT ON COLUMN public.escoltas.reiniciada_em IS 'Lote 2026-10 (onda I, S15): última vez que a gestão zerou a escolta para agendada.';
+COMMENT ON COLUMN public.escoltas.versao_gestao IS 'Lote 2026-10 (onda I): +1 a cada voltar etapa, zerar, concluir antes, arquivar e recuperar. A edição não muda. Usada pela onda L para detectar conflito.';
+
+-- 2 e 3. Anulação e carimbo de etapa nas tabelas de campo.
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['pontos_controle', 'checklists', 'ocorrencias', 'emergencias', 'presencas', 'mural_presencas',
+                           'atualizacoes_status', 'rastreamento', 'escolta_status_historico']
+  LOOP
+    EXECUTE format('ALTER TABLE public.%I
+      ADD COLUMN IF NOT EXISTS anulado_em timestamptz,
+      ADD COLUMN IF NOT EXISTS anulado_por uuid REFERENCES public.usuarios(id),
+      ADD COLUMN IF NOT EXISTS motivo_anulacao text,
+      ADD COLUMN IF NOT EXISTS anulacao_id uuid,
+      ADD COLUMN IF NOT EXISTS status_escolta_no_registro text', t);
+    EXECUTE format('COMMENT ON COLUMN public.%I.anulado_em IS %L', t,
+      'Lote 2026-10 (onda I): registro anulado pela gestão (voltar etapa ou zerar). Não é apagado; não conta como válido.');
+    EXECUTE format('COMMENT ON COLUMN public.%I.status_escolta_no_registro IS %L', t,
+      'Lote 2026-10 (onda I): status da escolta quando o registro foi gravado (trigger; o valor do cliente é ignorado). Nulo nos registros anteriores à 213.');
+  END LOOP;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_anulacao_pontos ON public.pontos_controle (anulacao_id) WHERE anulacao_id IS NOT NULL;
+
+-- 7. Histórico gravado por RPC.
+ALTER TABLE public.escolta_status_historico ADD COLUMN IF NOT EXISTS via_rpc boolean NOT NULL DEFAULT false;
+COMMENT ON COLUMN public.escolta_status_historico.via_rpc IS
+  'Lote 2026-10 (onda I): true quando a linha foi gravada por uma RPC do servidor (variável escolta.historico_rpc). Linhas do cliente ficam false e não servem de âncora para a anulação.';
+
+-- 3 e 7. Carimbo (BEFORE INSERT). SECURITY DEFINER: lê o status mesmo de escolta que a RLS
+-- de quem grava esconderia.
+CREATE OR REPLACE FUNCTION lote_interno.carimbar_etapa() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $$
+DECLARE v_j jsonb := to_jsonb(NEW); v_esc uuid; v_status text;
+BEGIN
+  IF v_j ? 'escolta_id' THEN
+    v_esc := (v_j ->> 'escolta_id')::uuid;
+  ELSE
+    SELECT ev.escolta_id INTO v_esc FROM public.escolta_veiculos ev WHERE ev.id = (v_j ->> 'escolta_veiculo_id')::uuid;
+  END IF;
+  SELECT e.status INTO v_status FROM public.escoltas e WHERE e.id = v_esc;
+  NEW.status_escolta_no_registro := v_status;
+  IF TG_TABLE_NAME = 'escolta_status_historico' THEN
+    NEW.via_rpc := coalesce(current_setting('escolta.historico_rpc', true), '') = 'on';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION lote_interno.carimbar_etapa() FROM PUBLIC, anon, authenticated;
+
+-- 6. Trava das colunas da gestão (BEFORE INSERT OR UPDATE).
+CREATE OR REPLACE FUNCTION lote_interno.travar_colunas_gestao() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $$
+DECLARE v_new jsonb := to_jsonb(NEW); v_old jsonb; v_cols text[]; c text;
+BEGIN
+  -- Sem usuário final (migration, SQL Editor, cron): passa, como na 197 e na 206.
+  IF auth.uid() IS NULL THEN RETURN NEW; END IF;
+  -- Dupla guarda: variável de transação ligada pela RPC E perfil de quem chama.
+  IF coalesce(current_setting('escolta.rpc_gestao', true), '') = 'on'
+     AND public.get_meu_perfil() IN ('administrador', 'gestor') THEN
+    RETURN NEW;
+  END IF;
+  IF TG_TABLE_NAME = 'escoltas' THEN
+    v_cols := ARRAY['arquivada_em', 'arquivada_por', 'motivo_arquivamento', 'reiniciada_em', 'versao_gestao'];
+  ELSE
+    v_cols := ARRAY['anulado_em', 'anulado_por', 'motivo_anulacao', 'anulacao_id'];
+  END IF;
+  IF TG_OP = 'INSERT' THEN
+    FOREACH c IN ARRAY v_cols LOOP
+      IF (c = 'versao_gestao' AND coalesce((v_new ->> c)::int, 0) <> 0)
+         OR (c <> 'versao_gestao' AND jsonb_typeof(v_new -> c) IS DISTINCT FROM 'null' AND v_new ? c) THEN
+        RAISE EXCEPTION 'O campo % só é preenchido pelas ações da gestão.', c USING ERRCODE = '42501';
+      END IF;
+    END LOOP;
+    RETURN NEW;
+  END IF;
+  v_old := to_jsonb(OLD);
+  IF TG_TABLE_NAME <> 'escoltas' THEN
+    v_cols := v_cols || ARRAY['status_escolta_no_registro'];
+    IF v_new ? 'via_rpc' THEN v_cols := v_cols || ARRAY['via_rpc']; END IF;
+  END IF;
+  FOREACH c IN ARRAY v_cols LOOP
+    IF (v_new -> c) IS DISTINCT FROM (v_old -> c) THEN
+      RAISE EXCEPTION 'O campo % só muda pelas ações da gestão.', c USING ERRCODE = '42501';
+    END IF;
+  END LOOP;
+  RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION lote_interno.travar_colunas_gestao() FROM PUBLIC, anon, authenticated;
+
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['pontos_controle', 'checklists', 'ocorrencias', 'emergencias', 'presencas', 'mural_presencas',
+                           'atualizacoes_status', 'rastreamento', 'escolta_status_historico']
+  LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I', 'tr_carimbar_etapa_' || t, t);
+    EXECUTE format('CREATE TRIGGER %I BEFORE INSERT ON public.%I FOR EACH ROW EXECUTE FUNCTION lote_interno.carimbar_etapa()',
+                   'tr_carimbar_etapa_' || t, t);
+    EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I', 'tr_travar_colunas_gestao_' || t, t);
+    EXECUTE format('CREATE TRIGGER %I BEFORE INSERT OR UPDATE ON public.%I FOR EACH ROW EXECUTE FUNCTION lote_interno.travar_colunas_gestao()',
+                   'tr_travar_colunas_gestao_' || t, t);
+  END LOOP;
+END $$;
+DROP TRIGGER IF EXISTS tr_travar_colunas_gestao_escoltas ON public.escoltas;
+CREATE TRIGGER tr_travar_colunas_gestao_escoltas BEFORE INSERT OR UPDATE ON public.escoltas
+  FOR EACH ROW EXECUTE FUNCTION lote_interno.travar_colunas_gestao();
+
+-- 8. Autor do ponto preenchido no servidor quando vier nulo.
+CREATE OR REPLACE FUNCTION lote_interno.preencher_lancado_por() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $$
+BEGIN
+  IF NEW.lancado_por IS NULL THEN NEW.lancado_por := public.get_meu_usuario_id(); END IF;
+  RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION lote_interno.preencher_lancado_por() FROM PUBLIC, anon, authenticated;
+DROP TRIGGER IF EXISTS tr_preencher_lancado_por ON public.pontos_controle;
+CREATE TRIGGER tr_preencher_lancado_por BEFORE INSERT ON public.pontos_controle
+  FOR EACH ROW EXECUTE FUNCTION lote_interno.preencher_lancado_por();
+
+-- 4. Voltas de etapa e zerar.
+CREATE TABLE IF NOT EXISTS public.escolta_resets (
+  id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  escolta_id         uuid NOT NULL REFERENCES public.escoltas(id) ON DELETE CASCADE,
+  status_de          text NOT NULL,
+  status_para        text NOT NULL,
+  tipo               text NOT NULL CHECK (tipo IN ('voltar_etapa', 'zerar')),
+  motivo             text NOT NULL,
+  feito_por          uuid REFERENCES public.usuarios(id),
+  feito_em           timestamptz NOT NULL DEFAULT now(),
+  anulacao_id        uuid NOT NULL,
+  valores_anteriores jsonb NOT NULL DEFAULT '{}'::jsonb,   -- KM por viatura, checklist_pendente_no_inicio, data_finalizacao, observacao_fechamento
+  contagem           jsonb NOT NULL DEFAULT '{}'::jsonb    -- quantos registros foram anulados, por tabela
+);
+CREATE INDEX IF NOT EXISTS idx_escolta_resets_escolta ON public.escolta_resets (escolta_id, feito_em DESC);
+ALTER TABLE public.escolta_resets ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.escolta_resets FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON public.escolta_resets TO authenticated;
+DROP POLICY IF EXISTS escolta_resets_leitura ON public.escolta_resets;
+CREATE POLICY escolta_resets_leitura ON public.escolta_resets FOR SELECT TO authenticated
+  USING ((SELECT public.get_meu_perfil()) = ANY (ARRAY['administrador', 'gestor', 'supervisor']));
+COMMENT ON TABLE public.escolta_resets IS 'Lote 2026-10 (onda I): voltas de etapa e zerar feitos pela gestão. Escrita só pelas RPCs da 218.';
+
+-- 5. Conclusão antecipada e pendências.
+CREATE TABLE IF NOT EXISTS public.escolta_conclusoes_antecipadas (
+  id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  escolta_id        uuid NOT NULL REFERENCES public.escoltas(id) ON DELETE CASCADE,
+  status_no_momento text NOT NULL,
+  motivo            text NOT NULL,
+  concluida_por     uuid REFERENCES public.usuarios(id),
+  concluida_em      timestamptz NOT NULL DEFAULT now(),
+  pendencias        jsonb NOT NULL DEFAULT '[]'::jsonb,
+  anulado_em        timestamptz,
+  anulado_por       uuid REFERENCES public.usuarios(id),
+  motivo_anulacao   text,
+  anulacao_id       uuid
+);
+CREATE UNIQUE INDEX IF NOT EXISTS escolta_conclusoes_antecipadas_valida_uk
+  ON public.escolta_conclusoes_antecipadas (escolta_id) WHERE anulado_em IS NULL;
+ALTER TABLE public.escolta_conclusoes_antecipadas ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.escolta_conclusoes_antecipadas FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON public.escolta_conclusoes_antecipadas TO authenticated;
+DROP POLICY IF EXISTS escolta_conclusoes_leitura ON public.escolta_conclusoes_antecipadas;
+CREATE POLICY escolta_conclusoes_leitura ON public.escolta_conclusoes_antecipadas FOR SELECT TO authenticated
+  USING ((SELECT public.get_meu_perfil()) = ANY (ARRAY['administrador', 'gestor', 'supervisor'])
+         OR public.sou_do_efetivo(escolta_id));
+COMMENT ON TABLE public.escolta_conclusoes_antecipadas IS
+  'Lote 2026-10 (onda I): escolta concluída pela gestão antes do fim, com a lista do que não foi feito (calculada no servidor). Uma válida por escolta.';
+
+-- Uma linha por item não feito (security_invoker: vale a RLS de quem lê).
+CREATE OR REPLACE VIEW public.vw_pendencias_conclusao WITH (security_invoker = on) AS
+SELECT c.id                              AS conclusao_id,
+       c.escolta_id,
+       e.codigo_escolta,
+       e.cliente_id,
+       et ->> 'etapa'                    AS etapa,
+       et ->> 'rotulo'                   AS rotulo_etapa,
+       (vt ->> 'escolta_veiculo_id')::uuid AS escolta_veiculo_id,
+       vt ->> 'placa'                    AS placa,
+       it.item,
+       c.concluida_por,
+       c.concluida_em,
+       c.motivo                          AS observacao,
+       c.status_no_momento
+FROM public.escolta_conclusoes_antecipadas c
+JOIN public.escoltas e ON e.id = c.escolta_id
+CROSS JOIN LATERAL jsonb_array_elements(c.pendencias) et
+CROSS JOIN LATERAL jsonb_array_elements(coalesce(et -> 'viaturas', '[]'::jsonb)) vt
+CROSS JOIN LATERAL jsonb_array_elements_text(coalesce(vt -> 'faltando', '[]'::jsonb)) AS it(item)
+WHERE c.anulado_em IS NULL;
+REVOKE ALL ON public.vw_pendencias_conclusao FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON public.vw_pendencias_conclusao TO authenticated;
+
+-- Conferência:
+-- SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'anulado_em';   -- 10 (9 tabelas + conclusões)
+-- SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'tr_carimbar_etapa_%';          -- 9
+-- SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'tr_travar_colunas_gestao_%';   -- 10
+-- SELECT count(*) FROM escoltas WHERE versao_gestao <> 0 OR arquivada_em IS NOT NULL; -- 0
+
+-- ──────── 214_poder_total_travas.sql ────────
+-- 214_poder_total_travas.sql
+-- Lote 2026-10, onda I (adendo 01, item 4.3). Idempotente. Bloco 1, depois da 213.
+-- Compatível com a master 2b3fff9: a master só faz UPDATE de status e fechamento em escolta
+-- iniciada (conferido no código), não grava anulado nem arquivada e grava lancado_por com o
+-- próprio usuário; sem arquivadas e sem anulados (nada disso existe antes da 218), os
+-- filtros novos não mudam nenhum resultado.
+--
+-- Por quê (docs/14, seção 12.3; decisões S7, S8 e S10; 18.8, itens 6 e 7):
+-- 1. validar_transicao_status_escolta ganha um ramo especial, antes do erro, para a volta
+--    de etapa (reset) e a conclusão antecipada. Dupla guarda: variável de transação
+--    escolta.transicao_especial (ligada só pelas RPCs da 218, com o destino em
+--    escolta.transicao_destino) E perfil administrador ou gestor. O botão genérico não pula
+--    etapa. A mesma trigger recusa mudar o status de escolta arquivada.
+-- 2. tr_impedir_edicao_escolta_iniciada (escoltas, escolta_veiculos e escolta_efetivo): com a
+--    escolta fora de rascunho e agendada, só administrador e gestor mudam o que não é do
+--    fluxo (S10: supervisor e central perdem no servidor o que a tela já não oferecia).
+--    Comparação por to_jsonb(OLD) e to_jsonb(NEW), como a 197, sem as colunas livres e sem as
+--    colunas geradas (lidas do catálogo, attgenerated; em trigger BEFORE elas chegam nulas
+--    em NEW): vale para colunas que ainda não existem (UF da onda K) sem citá-las por nome.
+--    auth.uid() nulo passa (migrations, cargas e cron). Só recusa, não grava nada em NEW:
+--    a ordem alfabética entre as BEFORE UPDATE (roda antes de tr_impedir_edicao_por_operador)
+--    é indiferente; o teste confere a ordem real.
+-- 3. Filtro de anulado em exigir_ponto_transito_retorno, verificar_checklist_pendente e
+--    registrar_etapa_escolta (contagem do comboio). registrar_etapa_escolta passa também a
+--    ligar escolta.historico_rpc (o histórico dela sai com via_rpc = true) e a gravar
+--    lancado_por com o usuário da sessão (em nome de quem fez).
+-- 4. Filtros de arquivada e de anulado no aviso de check-in (lote_interno.gerar_avisos_checkin
+--    e lote_interno.enfileirar_alerta_checkin, da 212), na reserva do navegador
+--    (reservar_alertas_checkin, 212) e na reserva do aviso de presença (reservar_aviso_presenca,
+--    208; o plano a chama de enfileirar_aviso_presenca).
+-- 5. RLS: escolta arquivada só aparece para o administrador (RESTRICTIVE de SELECT); ponto de
+--    controle só no nome de quem grava (RESTRICTIVE de INSERT, depois do preenchimento da
+--    213.8); apagar escolta só o administrador, em rascunho e sem registro de campo
+--    (RESTRICTIVE de DELETE; decisão 1 do adendo: arquivar, nunca apagar).
+-- Reversão: 214_poder_total_travas_reverter.sql (depois da 218).
+
+-- 1. Máquina de estados.
+CREATE OR REPLACE FUNCTION public.validar_transicao_status_escolta()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_ok boolean := false;
+  v_especial text;
+  v_seq text[] := ARRAY['rascunho', 'agendada', 'em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino',
+                        'no_destino', 'em_transito_retorno', 'retornando', 'na_base', 'finalizada'];
+  v_pos_old int; v_pos_new int;
+BEGIN
+  IF OLD.status IS NOT DISTINCT FROM NEW.status THEN
+    RETURN NEW;
+  END IF;
+
+  -- Onda I: escolta arquivada não muda de status (recuperar antes).
+  IF OLD.arquivada_em IS NOT NULL THEN
+    RAISE EXCEPTION 'Escolta arquivada: o administrador precisa recuperá-la antes de mudar o status.'
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  IF NEW.status = 'cancelada' AND OLD.status NOT IN ('finalizada','cancelada') THEN
+    RETURN NEW;
+  END IF;
+
+  v_ok := (
+    (OLD.status = 'rascunho'            AND NEW.status = 'agendada') OR
+    (OLD.status = 'agendada'            AND NEW.status = 'em_pre_inicio') OR
+    (OLD.status = 'em_pre_inicio'       AND NEW.status = 'em_andamento') OR
+    (OLD.status = 'em_andamento'        AND NEW.status = 'na_origem') OR
+    (OLD.status = 'na_origem'           AND NEW.status = 'em_transito_destino') OR
+    (OLD.status = 'em_transito_destino' AND NEW.status = 'no_destino') OR
+    (OLD.status = 'no_destino'          AND NEW.status = 'em_transito_retorno') OR
+    (OLD.status = 'em_transito_retorno' AND NEW.status = 'retornando') OR
+    (OLD.status = 'retornando'          AND NEW.status = 'na_base') OR
+    (OLD.status = 'na_base'             AND NEW.status = 'finalizada')
+  );
+
+  IF NOT v_ok AND COALESCE(NEW.fluxo_versao, 1) = 1 THEN
+    v_ok := (
+      (OLD.status = 'na_origem'  AND NEW.status = 'no_destino') OR
+      (OLD.status = 'no_destino' AND NEW.status = 'retornando')
+    );
+  END IF;
+
+  -- Onda I: volta de etapa e conclusão antecipada, só pelas RPCs da 218 (variável de
+  -- transação) e só para administrador ou gestor (perfil). Uma sem a outra não passa.
+  v_especial := coalesce(current_setting('escolta.transicao_especial', true), '');
+  IF NOT v_ok AND v_especial IN ('reset', 'conclusao_antecipada')
+     AND public.get_meu_perfil() IN ('administrador', 'gestor') THEN
+    v_pos_old := array_position(v_seq, OLD.status);
+    v_pos_new := array_position(v_seq, NEW.status);
+    IF v_especial = 'reset' THEN
+      v_ok := NEW.status = coalesce(current_setting('escolta.transicao_destino', true), '')
+              AND v_pos_old IS NOT NULL AND v_pos_new IS NOT NULL
+              AND v_pos_new < v_pos_old AND v_pos_new >= 2
+              AND OLD.status NOT IN ('rascunho', 'agendada', 'cancelada');
+    ELSE
+      v_ok := NEW.status = 'finalizada' AND OLD.status NOT IN ('rascunho', 'finalizada', 'cancelada');
+    END IF;
+  END IF;
+
+  IF NOT v_ok THEN
+    RAISE EXCEPTION 'Transicao de status invalida: % para %', OLD.status, NEW.status
+      USING ERRCODE = 'P0001';
+  END IF;
+
+  RETURN NEW;
+END;
+$function$;
+
+-- 2. Edição de escolta iniciada só pela gestão (S10).
+CREATE OR REPLACE FUNCTION lote_interno.impedir_edicao_escolta_iniciada() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $$
+DECLARE
+  v_status text; v_old jsonb; v_new jsonb; v_excluir text[]; v_esc uuid;
+  v_livres text[] := ARRAY['status', 'atualizado_em', 'periodicidade_checkin_min', 'checklist_pendente_no_inicio',
+                           'data_finalizacao', 'observacao_fechamento', 'data_hora_prevista',
+                           -- colunas da 213, com trava própria (tr_travar_colunas_gestao_escoltas)
+                           'arquivada_em', 'arquivada_por', 'motivo_arquivamento', 'reiniciada_em', 'versao_gestao'];
+BEGIN
+  IF auth.uid() IS NULL THEN RETURN coalesce(NEW, OLD); END IF;
+
+  IF TG_TABLE_NAME = 'escoltas' THEN
+    v_status := OLD.status;
+  ELSE
+    v_esc := CASE WHEN TG_OP = 'DELETE' THEN OLD.escolta_id ELSE NEW.escolta_id END;
+    SELECT status INTO v_status FROM public.escoltas WHERE id = v_esc;
+    -- Troca de escolta numa linha existente: vale o status da escolta de origem também.
+    IF TG_OP = 'UPDATE' AND OLD.escolta_id IS DISTINCT FROM NEW.escolta_id
+       AND v_status IN ('rascunho', 'agendada') THEN
+      SELECT status INTO v_status FROM public.escoltas WHERE id = OLD.escolta_id;
+    END IF;
+  END IF;
+  -- Escolta que ainda não começou (ou que está sendo apagada em cascata): como hoje.
+  IF v_status IS NULL OR v_status IN ('rascunho', 'agendada') THEN RETURN coalesce(NEW, OLD); END IF;
+  IF public.get_meu_perfil() IN ('administrador', 'gestor') THEN RETURN coalesce(NEW, OLD); END IF;
+
+  IF TG_TABLE_NAME = 'escoltas' THEN
+    SELECT coalesce(array_agg(attname::text), '{}') INTO v_excluir
+      FROM pg_attribute WHERE attrelid = TG_RELID AND attnum > 0 AND NOT attisdropped AND attgenerated <> '';
+    v_excluir := v_excluir || v_livres;
+    v_old := to_jsonb(OLD) - v_excluir;
+    v_new := to_jsonb(NEW) - v_excluir;
+    IF v_old IS DISTINCT FROM v_new THEN
+      RAISE EXCEPTION 'Escolta já iniciada: só o gestor ou o administrador altera os dados dela.'
+        USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+  END IF;
+
+  IF TG_TABLE_NAME = 'escolta_veiculos' THEN
+    IF TG_OP = 'UPDATE' AND NEW.veiculo_id IS NOT DISTINCT FROM OLD.veiculo_id
+       AND NEW.escolta_id IS NOT DISTINCT FROM OLD.escolta_id THEN
+      RETURN NEW;                                   -- KM e combustível continuam livres
+    END IF;
+    RAISE EXCEPTION 'Escolta já iniciada: só o gestor ou o administrador muda as viaturas.'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- escolta_efetivo: inclusão, retirada e alteração.
+  RAISE EXCEPTION 'Escolta já iniciada: só o gestor ou o administrador muda a equipe.'
+    USING ERRCODE = '42501';
+END;
+$$;
+REVOKE ALL ON FUNCTION lote_interno.impedir_edicao_escolta_iniciada() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS tr_impedir_edicao_escolta_iniciada ON public.escoltas;
+CREATE TRIGGER tr_impedir_edicao_escolta_iniciada BEFORE UPDATE ON public.escoltas
+  FOR EACH ROW EXECUTE FUNCTION lote_interno.impedir_edicao_escolta_iniciada();
+DROP TRIGGER IF EXISTS tr_impedir_edicao_escolta_iniciada ON public.escolta_veiculos;
+CREATE TRIGGER tr_impedir_edicao_escolta_iniciada BEFORE INSERT OR UPDATE OR DELETE ON public.escolta_veiculos
+  FOR EACH ROW EXECUTE FUNCTION lote_interno.impedir_edicao_escolta_iniciada();
+DROP TRIGGER IF EXISTS tr_impedir_edicao_escolta_iniciada ON public.escolta_efetivo;
+CREATE TRIGGER tr_impedir_edicao_escolta_iniciada BEFORE INSERT OR UPDATE OR DELETE ON public.escolta_efetivo
+  FOR EACH ROW EXECUTE FUNCTION lote_interno.impedir_edicao_escolta_iniciada();
+
+-- 3. Só ponto e checklist válidos contam.
+CREATE OR REPLACE FUNCTION public.exigir_ponto_transito_retorno()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_tem boolean;
+BEGIN
+  IF NEW.status = 'na_base' AND OLD.status = 'retornando'
+     AND COALESCE(NEW.fluxo_versao, 1) = 2 THEN
+    SELECT EXISTS (
+      SELECT 1
+      FROM public.pontos_controle pc
+      JOIN public.escolta_veiculos ev ON ev.id = pc.escolta_veiculo_id
+      JOIN public.dom_tipos_ponto tp ON tp.id = pc.tipo_ponto_id
+      WHERE ev.escolta_id = NEW.id
+        AND tp.codigo = 'transito_retorno'
+        AND pc.anulado_em IS NULL          -- onda I: ponto anulado não vale
+    ) INTO v_tem;
+
+    IF NOT v_tem THEN
+      RAISE EXCEPTION 'Nao e possivel concluir o retorno sem registrar o ponto de Transito para o Retorno.'
+        USING ERRCODE = 'P0001';
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.verificar_checklist_pendente()
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_total_veiculos INTEGER;
+  v_veiculos_ok INTEGER;
+BEGIN
+  IF OLD.status = 'em_pre_inicio' AND NEW.status = 'em_andamento' THEN
+    SELECT COUNT(*) INTO v_total_veiculos
+    FROM escolta_veiculos WHERE escolta_id = NEW.id;
+
+    SELECT COUNT(DISTINCT ev.id) INTO v_veiculos_ok
+    FROM escolta_veiculos ev
+    WHERE ev.escolta_id = NEW.id
+      AND EXISTS (
+        SELECT 1 FROM checklists c
+        WHERE c.escolta_veiculo_id = ev.id AND c.tipo = 'viatura' AND c.concluido = true AND c.anulado_em IS NULL
+      )
+      AND EXISTS (
+        SELECT 1 FROM checklists c
+        WHERE c.escolta_veiculo_id = ev.id AND c.tipo = 'material' AND c.concluido = true AND c.anulado_em IS NULL
+      );
+
+    IF v_veiculos_ok < v_total_veiculos THEN
+      NEW.checklist_pendente_no_inicio := true;
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.registrar_etapa_escolta(p_escolta_id uuid, p_pontos jsonb DEFAULT '[]'::jsonb, p_status_atual text DEFAULT NULL::text, p_status_novo text DEFAULT NULL::text, p_observacao text DEFAULT NULL::text, p_latitude numeric DEFAULT NULL::numeric, p_longitude numeric DEFAULT NULL::numeric, p_observacao_fechamento text DEFAULT NULL::text, p_data_hora_prevista timestamp with time zone DEFAULT NULL::timestamp with time zone, p_tipo_ponto_todas uuid DEFAULT NULL::uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE v_n int; v_faltando text[]; v_status text;
+BEGIN
+  -- 0. Trava a escolta e confere a etapa ANTES de gravar qualquer coisa. Serializa duas
+  --    viaturas do comboio registrando ao mesmo tempo (a segunda vê o ponto da primeira)
+  --    e impede ponto de uma etapa que já passou.
+  SELECT status INTO v_status FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
+  IF v_status IS NULL THEN RAISE EXCEPTION 'Escolta nao encontrada.'; END IF;
+  IF p_status_atual IS NOT NULL AND v_status IS DISTINCT FROM p_status_atual THEN
+    RAISE EXCEPTION 'ERRO_SEM_TRANSICAO';
+  END IF;
+
+  -- 1. Pontos de controle (todas as viaturas num statement só). Onda I: o autor é sempre
+  --    quem está na sessão (em nome de quem fez); sem sessão (SQL), vale o informado.
+  IF jsonb_array_length(coalesce(p_pontos, '[]'::jsonb)) > 0 THEN
+    IF EXISTS (SELECT 1 FROM jsonb_to_recordset(p_pontos) AS x(escolta_veiculo_id uuid)
+               WHERE NOT EXISTS (SELECT 1 FROM public.escolta_veiculos ev
+                                 WHERE ev.id = x.escolta_veiculo_id AND ev.escolta_id = p_escolta_id)) THEN
+      RAISE EXCEPTION 'Ponto de controle de viatura que nao pertence a esta escolta.';
+    END IF;
+    INSERT INTO public.pontos_controle (escolta_veiculo_id, tipo_ponto_id, data_hora, latitude, longitude,
+                                        precisao_metros, sem_sinal_gps, foto_id, lancado_por, observacoes,
+                                        sincronizado, criado_offline)
+    SELECT x.escolta_veiculo_id, x.tipo_ponto_id, coalesce(x.data_hora, now()), x.latitude, x.longitude,
+           x.precisao_metros, coalesce(x.sem_sinal_gps, false), x.foto_id,
+           coalesce(public.get_meu_usuario_id(), x.lancado_por), x.observacoes,
+           coalesce(x.sincronizado, true), coalesce(x.criado_offline, false)
+    FROM jsonb_to_recordset(p_pontos) AS x(escolta_veiculo_id uuid, tipo_ponto_id uuid, data_hora timestamptz,
+                                           latitude numeric, longitude numeric, precisao_metros numeric,
+                                           sem_sinal_gps boolean, foto_id uuid, lancado_por uuid, observacoes text,
+                                           sincronizado boolean, criado_offline boolean);
+  END IF;
+
+  IF p_status_novo IS NULL THEN
+    RETURN jsonb_build_object('ok', true, 'avancou', false);
+  END IF;
+
+  -- 2. Comboio: a etapa só avança quando todas as viaturas registraram o ponto dela.
+  --    Onda I: ponto anulado (etapa desfeita pela gestão) não conta.
+  IF p_tipo_ponto_todas IS NOT NULL THEN
+    SELECT array_agg(coalesce(ve.placa, 'sem placa') ORDER BY ev.criado_em) INTO v_faltando
+    FROM public.escolta_veiculos ev
+    LEFT JOIN public.veiculos ve ON ve.id = ev.veiculo_id
+    WHERE ev.escolta_id = p_escolta_id
+      AND NOT EXISTS (SELECT 1 FROM public.pontos_controle pc
+                      WHERE pc.escolta_veiculo_id = ev.id AND pc.tipo_ponto_id = p_tipo_ponto_todas
+                        AND pc.anulado_em IS NULL);
+    IF v_faltando IS NOT NULL THEN
+      RETURN jsonb_build_object('ok', true, 'avancou', false, 'faltando', to_jsonb(v_faltando));
+    END IF;
+  END IF;
+
+  -- 3. Status, com a guarda do status atual (a trigger valida a transição).
+  UPDATE public.escoltas SET
+         status = p_status_novo,
+         observacao_fechamento = CASE
+           WHEN p_status_novo IN ('finalizada', 'cancelada') THEN p_observacao_fechamento
+           WHEN p_data_hora_prevista IS NOT NULL THEN NULL
+           ELSE observacao_fechamento END,
+         data_finalizacao = CASE WHEN p_status_novo = 'finalizada' THEN now() ELSE data_finalizacao END,
+         data_hora_prevista = coalesce(p_data_hora_prevista, data_hora_prevista)
+   WHERE id = p_escolta_id AND status = p_status_atual;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  IF v_n = 0 THEN
+    RAISE EXCEPTION 'ERRO_SEM_TRANSICAO';
+  END IF;
+
+  -- 4. Histórico, com autor, na mesma transação. Onda I: via_rpc = true (escolta.historico_rpc).
+  PERFORM set_config('escolta.historico_rpc', 'on', true);
+  INSERT INTO public.escolta_status_historico (escolta_id, status_anterior, status_novo, alterado_por, data_hora,
+                                               latitude, longitude, observacao)
+  VALUES (p_escolta_id, p_status_atual, p_status_novo, public.get_meu_usuario_id(), now(),
+          p_latitude, p_longitude, p_observacao);
+  PERFORM set_config('escolta.historico_rpc', 'off', true);
+
+  RETURN jsonb_build_object('ok', true, 'avancou', true);
+END;
+$function$;
+REVOKE ALL ON FUNCTION public.registrar_etapa_escolta(uuid, jsonb, text, text, text, numeric, numeric, text, timestamptz, uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.registrar_etapa_escolta(uuid, jsonb, text, text, text, numeric, numeric, text, timestamptz, uuid) TO authenticated;
+
+-- 4. Avisos de check-in e de presença sem arquivada e sem anulado.
+CREATE OR REPLACE FUNCTION lote_interno.enfileirar_alerta_checkin(p_escolta_id uuid) RETURNS jsonb
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $$
+DECLARE e record; v_ultima timestamptz; v_atraso int; v_ok boolean; v_chave text;
+BEGIN
+  SELECT es.id, es.codigo_escolta, es.status, es.periodicidade_checkin_min, es.arquivada_em, c.nome_cliente INTO e
+  FROM public.escoltas es JOIN public.clientes c ON c.id = es.cliente_id WHERE es.id = p_escolta_id;
+  IF e.id IS NOT NULL AND e.arquivada_em IS NOT NULL THEN
+    RETURN jsonb_build_object('enfileirado', false, 'motivo', 'arquivada');
+  END IF;
+  IF e.id IS NULL OR e.periodicidade_checkin_min IS NULL
+     OR e.status NOT IN ('em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando') THEN
+    RETURN jsonb_build_object('enfileirado', false, 'motivo', 'sem check-in periodico');
+  END IF;
+  -- Regra antiga (pendência 0.3 de docs/12): qualquer PARADA válida zera o prazo; sem nenhuma, não notifica.
+  SELECT max(pc.data_hora) INTO v_ultima
+  FROM public.pontos_controle pc JOIN public.escolta_veiculos ev ON ev.id = pc.escolta_veiculo_id
+  WHERE ev.escolta_id = p_escolta_id AND pc.tipo_ponto_id = 'e1601f15-5ef9-44e8-abd0-17f65b3aa760'
+    AND pc.anulado_em IS NULL;
+  IF v_ultima IS NULL THEN RETURN jsonb_build_object('enfileirado', false, 'motivo', 'sem parada'); END IF;
+  v_atraso := floor(extract(epoch FROM (now() - v_ultima)) / 60) - e.periodicidade_checkin_min;
+  IF v_atraso < 1 THEN RETURN jsonb_build_object('enfileirado', false, 'motivo', 'em dia'); END IF;
+  -- Uma mensagem por período vencido sem check-in (chave: escolta, última parada e
+  -- número do período).
+  v_chave := 'checkin:' || p_escolta_id || ':' || extract(epoch FROM v_ultima)::bigint
+             || ':' || floor(v_atraso::numeric / e.periodicidade_checkin_min)::int;
+  -- Já mandada por um navegador (reservar_alertas_checkin): não manda de novo.
+  IF EXISTS (SELECT 1 FROM public.avisos_reservados WHERE chave = v_chave) THEN
+    RETURN jsonb_build_object('enfileirado', false, 'motivo', 'enviado pelo navegador');
+  END IF;
+  v_ok := public._enfileirar_aviso(v_chave, 'cliente', p_escolta_id,
+    '<b>Alerta: check-in em atraso</b>' || E'\n'
+    || 'Escolta: <code>' || public.escapar_html(e.codigo_escolta) || '</code> · ' || public.escapar_html(e.nome_cliente) || E'\n'
+    || 'Sem check-in há ' || (v_atraso + e.periodicidade_checkin_min) || ' minutos (periodicidade de '
+    || e.periodicidade_checkin_min || ' min).' || E'\n'
+    || 'Registrado em ' || to_char(now() AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY HH24:MI') || ' (Brasília)');
+  RETURN jsonb_build_object('enfileirado', v_ok);
+END;
+$$;
+REVOKE ALL ON FUNCTION lote_interno.enfileirar_alerta_checkin(uuid) FROM PUBLIC, anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.reservar_alertas_checkin() RETURNS jsonb
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $$
+DECLARE
+  v_perfil text; v_eu uuid; v_gestao boolean; r record; v_ultima timestamptz; v_atraso int;
+  v_chave text; v_n int; v_saida jsonb := '[]'::jsonb;
+BEGIN
+  SELECT public.get_meu_perfil() INTO v_perfil;
+  IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessão inválida.'; END IF;
+  -- O cron manda: nada para o navegador.
+  IF public.avisos_pelo_banco_ativos()
+     AND coalesce((SELECT checkin_telegram_pelo_cron FROM public.configuracao_avisos WHERE id = 1), false) THEN
+    RETURN v_saida;
+  END IF;
+  v_eu := public.get_meu_usuario_id();
+  v_gestao := v_perfil IN ('administrador', 'gestor', 'supervisor', 'central');
+  FOR r IN
+    SELECT e.id, e.codigo_escolta, e.status, e.periodicidade_checkin_min AS per, c.nome_cliente
+    FROM public.escoltas e JOIN public.clientes c ON c.id = e.cliente_id
+    WHERE e.periodicidade_checkin_min > 0
+      AND e.arquivada_em IS NULL
+      AND e.status IN ('em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando')
+      AND (v_gestao OR public.sou_do_efetivo(e.id))
+  LOOP
+    -- Regra antiga (pendência 0.3), a mesma de lote_interno.enfileirar_alerta_checkin.
+    SELECT max(pc.data_hora) INTO v_ultima
+    FROM public.pontos_controle pc JOIN public.escolta_veiculos ev ON ev.id = pc.escolta_veiculo_id
+    WHERE ev.escolta_id = r.id AND pc.tipo_ponto_id = 'e1601f15-5ef9-44e8-abd0-17f65b3aa760'
+      AND pc.anulado_em IS NULL;
+    CONTINUE WHEN v_ultima IS NULL;
+    v_atraso := floor(extract(epoch FROM (now() - v_ultima)) / 60) - r.per;
+    CONTINUE WHEN v_atraso < 1;
+    v_chave := 'checkin:' || r.id || ':' || extract(epoch FROM v_ultima)::bigint || ':' || floor(v_atraso::numeric / r.per)::int;
+    -- Já enfileirada pelo cron (envio pelo banco ligado há pouco): não manda de novo.
+    CONTINUE WHEN EXISTS (SELECT 1 FROM public.avisos_telegram WHERE evento_chave = v_chave);
+    INSERT INTO public.avisos_reservados (chave, usuario_id) VALUES (v_chave, v_eu) ON CONFLICT (chave) DO NOTHING;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    CONTINUE WHEN v_n = 0;
+    v_saida := v_saida || jsonb_build_object(
+      'escolta_id', r.id, 'codigo', r.codigo_escolta, 'cliente', r.nome_cliente, 'status', r.status,
+      'atraso_min', v_atraso, 'periodicidade_min', r.per,
+      'efetivos', coalesce((SELECT jsonb_agg(v.nome_completo || coalesce(' (' || ee.papel_na_escolta || ')', '') ORDER BY ee.papel_na_escolta, v.nome_completo)
+                            FROM public.escolta_efetivo ee JOIN public.vigilantes v ON v.id = ee.vigilante_id
+                            WHERE ee.escolta_id = r.id), '[]'::jsonb));
+  END LOOP;
+  RETURN v_saida;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.reservar_alertas_checkin() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.reservar_alertas_checkin() TO authenticated;
+
+CREATE OR REPLACE FUNCTION lote_interno.gerar_avisos_checkin(p_agora timestamptz DEFAULT now()) RETURNS integer
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $$
+DECLARE
+  r record; v_gestao uuid[]; v_n int := 0; v_decorrido numeric; v_atraso int; v_periodo int; v_telegram boolean;
+BEGIN
+  SELECT coalesce(array_agg(u.id), '{}') INTO v_gestao
+  FROM public.usuarios u JOIN public.dom_perfis p ON p.id = u.perfil_id
+  WHERE u.status = 'ativo' AND p.codigo IN ('administrador', 'gestor', 'supervisor', 'central');
+  v_telegram := public.avisos_pelo_banco_ativos()
+                AND coalesce((SELECT checkin_telegram_pelo_cron FROM public.configuracao_avisos WHERE id = 1), false);
+
+  -- Onda I: escolta arquivada fora; ponto anulado não é referência.
+  FOR r IN
+    SELECT e.id, e.codigo_escolta, e.periodicidade_checkin_min AS per, c.nome_cliente,
+           coalesce(
+             (SELECT max(pc.data_hora) FROM public.pontos_controle pc
+                JOIN public.escolta_veiculos ev ON ev.id = pc.escolta_veiculo_id
+               WHERE ev.escolta_id = e.id AND pc.tipo_ponto_id = 'e1601f15-5ef9-44e8-abd0-17f65b3aa760'
+                 AND pc.anulado_em IS NULL
+                 AND lote_interno.tipo_da_observacao(pc.observacoes) = 'reporte_periodico'),
+             (SELECT min(pc.data_hora) FROM public.pontos_controle pc
+                JOIN public.escolta_veiculos ev ON ev.id = pc.escolta_veiculo_id
+               WHERE ev.escolta_id = e.id AND pc.anulado_em IS NULL),
+             e.data_hora_prevista) AS referencia
+    FROM public.escoltas e JOIN public.clientes c ON c.id = e.cliente_id
+    WHERE e.periodicidade_checkin_min > 0
+      AND e.arquivada_em IS NULL
+      AND e.status IN ('em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando')
+  LOOP
+    -- Aviso na central: erro numa escolta (usuário apagado entre a leitura e o INSERT, tipo
+    -- ausente) fica nela e vira WARNING; o ciclo segue.
+    BEGIN
+      IF r.referencia IS NOT NULL THEN
+        v_decorrido := extract(epoch FROM (p_agora - r.referencia));
+        -- Mesmo arredondamento de minutosAteCheckin: atraso = -floor((per*60 - decorrido) / 60).
+        v_atraso := -floor((r.per * 60 - v_decorrido) / 60)::int;
+        IF v_atraso >= 1 THEN
+          -- Período n: de n a n+1 periodicidades decorridas (o 1º vence com a periodicidade).
+          v_periodo := ceil(v_decorrido / (r.per * 60))::int - 1;
+          v_n := v_n + lote_interno.notificar(
+            'checkin:' || r.id || ':' || floor(extract(epoch FROM r.referencia))::bigint || ':' || v_periodo,
+            r.id, 'checkin_vencido',
+            ARRAY(SELECT v.usuario_id FROM public.escolta_efetivo ee JOIN public.vigilantes v ON v.id = ee.vigilante_id
+                   WHERE ee.escolta_id = r.id AND v.usuario_id IS NOT NULL) || v_gestao,
+            'Check-in atrasado: ' || r.codigo_escolta,
+            'Escolta ' || r.codigo_escolta || ' · ' || r.nome_cliente || ': sem check-in há ' || (v_atraso + r.per)
+              || ' min (periodicidade de ' || r.per || ' min, ' || v_atraso || ' min de atraso). Prazo vencido em '
+              || to_char((r.referencia + make_interval(mins => r.per * v_periodo)) AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY HH24:MI')
+              || ' (Brasília).',
+            jsonb_build_object('referencia', r.referencia, 'periodo', v_periodo, 'periodicidade_min', r.per));
+        END IF;
+      END IF;
+    EXCEPTION WHEN others THEN
+      RAISE WARNING 'gerar_avisos_checkin: aviso da escolta % falhou: %', r.id, SQLERRM;
+    END;
+    -- Telegram pela regra antiga (a função decide); erro numa escolta não para o ciclo.
+    IF v_telegram THEN
+      BEGIN
+        PERFORM lote_interno.enfileirar_alerta_checkin(r.id);
+      EXCEPTION WHEN others THEN
+        RAISE WARNING 'gerar_avisos_checkin: Telegram da escolta % falhou: %', r.id, SQLERRM;
+      END;
+    END IF;
+  END LOOP;
+
+  DELETE FROM public.notificacoes WHERE lida AND lida_em < p_agora - interval '90 days';
+  RETURN v_n;
+END;
+$$;
+REVOKE ALL ON FUNCTION lote_interno.gerar_avisos_checkin(timestamptz) FROM PUBLIC, anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public.reservar_aviso_presenca(p_presenca_id uuid) RETURNS boolean
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $$
+DECLARE v_perfil text; v_esc uuid; v_n int;
+BEGIN
+  SELECT public.get_meu_perfil() INTO v_perfil;
+  IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+  -- Onda I: presença anulada ou de escolta arquivada não vai ao Telegram.
+  SELECT p.escolta_id INTO v_esc FROM public.presencas p JOIN public.escoltas e ON e.id = p.escolta_id
+   WHERE p.id = p_presenca_id AND p.anulado_em IS NULL AND e.arquivada_em IS NULL;
+  IF v_esc IS NULL THEN RETURN false; END IF;
+  IF v_perfil NOT IN ('administrador', 'gestor', 'supervisor', 'central') AND NOT public.sou_do_efetivo(v_esc) THEN
+    RETURN false;
+  END IF;
+  INSERT INTO public.avisos_reservados (chave, usuario_id) VALUES ('presenca:' || p_presenca_id, public.get_meu_usuario_id())
+  ON CONFLICT (chave) DO NOTHING;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  RETURN v_n = 1;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.reservar_aviso_presenca(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.reservar_aviso_presenca(uuid) TO authenticated;
+
+-- 5. RLS.
+-- Escolta arquivada some para todos, menos o administrador (lista, mural, Campo, mapa,
+-- indicadores e embeds escolta:escoltas(...) passam a vir nulos para quem não vê).
+DROP POLICY IF EXISTS escoltas_arquivada_so_admin ON public.escoltas;
+CREATE POLICY escoltas_arquivada_so_admin ON public.escoltas AS RESTRICTIVE FOR SELECT TO authenticated
+  USING (arquivada_em IS NULL OR (SELECT public.get_meu_perfil()) = 'administrador');
+
+-- Ponto sempre no nome de quem grava (o nulo é preenchido pela trigger da 213 antes disto).
+DROP POLICY IF EXISTS pontos_insert_autor ON public.pontos_controle;
+CREATE POLICY pontos_insert_autor ON public.pontos_controle AS RESTRICTIVE FOR INSERT TO authenticated
+  WITH CHECK (lancado_por = (SELECT public.get_meu_usuario_id()));
+
+-- Apagar escolta: só o administrador, em rascunho e sem nenhum registro de campo.
+DROP POLICY IF EXISTS escoltas_delete_so_rascunho ON public.escoltas;
+CREATE POLICY escoltas_delete_so_rascunho ON public.escoltas AS RESTRICTIVE FOR DELETE TO authenticated
+  USING ((SELECT public.get_meu_perfil()) = 'administrador'
+         AND status = 'rascunho'
+         AND NOT EXISTS (SELECT 1 FROM public.escolta_veiculos ev
+                          WHERE ev.escolta_id = escoltas.id
+                            AND (EXISTS (SELECT 1 FROM public.pontos_controle pc WHERE pc.escolta_veiculo_id = ev.id)
+                                 OR EXISTS (SELECT 1 FROM public.checklists ck WHERE ck.escolta_veiculo_id = ev.id)
+                                 OR EXISTS (SELECT 1 FROM public.rastreamento ra WHERE ra.escolta_veiculo_id = ev.id)))
+         AND NOT EXISTS (SELECT 1 FROM public.ocorrencias o WHERE o.escolta_id = escoltas.id)
+         AND NOT EXISTS (SELECT 1 FROM public.emergencias em WHERE em.escolta_id = escoltas.id)
+         AND NOT EXISTS (SELECT 1 FROM public.presencas pr WHERE pr.escolta_id = escoltas.id)
+         AND NOT EXISTS (SELECT 1 FROM public.atualizacoes_status au WHERE au.escolta_id = escoltas.id));
+
+-- Conferência:
+-- SELECT prosrc LIKE '%transicao_especial%' FROM pg_proc WHERE oid = 'public.validar_transicao_status_escolta()'::regprocedure;  -- true
+-- SELECT count(*) FROM pg_trigger WHERE tgname = 'tr_impedir_edicao_escolta_iniciada';     -- 3
+-- SELECT polname FROM pg_policy WHERE polname IN ('escoltas_arquivada_so_admin', 'pontos_insert_autor', 'escoltas_delete_so_rascunho'); -- 3
+-- SELECT prosrc LIKE '%historico_rpc%' AND prosrc LIKE '%anulado_em IS NULL%' FROM pg_proc WHERE proname = 'registrar_etapa_escolta';  -- true
+
 COMMIT;
 
 -- Conferência do bloco 1 (somente leitura):
@@ -1786,14 +2595,19 @@ UNION ALL SELECT 'colunas da central em notificacoes (esperado 4)', count(*)::te
 UNION ALL SELECT 'policies de notificacoes (esperado notificacoes_select)', string_agg(polname, ', ') FROM pg_policy WHERE polrelid = 'public.notificacoes'::regclass
 UNION ALL SELECT 'funções do lote_interno executáveis por anon ou authenticated (esperado 0)', count(*)::text FROM pg_proc p WHERE p.pronamespace = 'lote_interno'::regnamespace AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE'))
 UNION ALL SELECT 'anon com acesso a notificacoes (esperado false)', (has_table_privilege('anon', 'public.notificacoes', 'SELECT') OR has_table_privilege('anon', 'public.notificacoes', 'TRUNCATE'))::text
-UNION ALL SELECT 'Telegram do check-in pelo cron (esperado false até o bloco 2)', checkin_telegram_pelo_cron::text FROM public.configuracao_avisos WHERE id = 1;
+UNION ALL SELECT 'Telegram do check-in pelo cron (esperado false até o bloco 2)', checkin_telegram_pelo_cron::text FROM public.configuracao_avisos WHERE id = 1
+UNION ALL SELECT 'onda I: colunas de anulação nas 9 tabelas de campo (esperado 9)', count(*)::text FROM information_schema.columns WHERE table_schema = 'public' AND column_name = 'anulado_em' AND table_name <> 'escolta_conclusoes_antecipadas'
+UNION ALL SELECT 'onda I: triggers de carimbo, trava e edição iniciada (esperado 9, 10, 3)', (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'tr_carimbar_etapa_%') || ', ' || (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'tr_travar_colunas_gestao_%') || ', ' || (SELECT count(*) FROM pg_trigger WHERE tgname = 'tr_impedir_edicao_escolta_iniciada')
+UNION ALL SELECT 'onda I: policies novas (esperado 3)', count(*)::text FROM pg_policy WHERE polname IN ('escoltas_arquivada_so_admin', 'pontos_insert_autor', 'escoltas_delete_so_rascunho')
+UNION ALL SELECT 'onda I: escoltas com versao_gestao ou arquivadas (esperado 0)', count(*)::text FROM public.escoltas WHERE versao_gestao <> 0 OR arquivada_em IS NOT NULL;
 -- Esperado: 9 funções, 8 tabelas, 0 abertas com periodicidade, 5 locais aguardando_conferencia,
--- troca true,true, cron lote2026_avisos_telegram e lote2026_avisos_checkin; 4; notificacoes_select; 0; false; false.
+-- troca true,true, cron lote2026_avisos_telegram e lote2026_avisos_checkin; 4; notificacoes_select; 0; false; false;
+-- onda I: 9; 9, 10, 3; 3; 0. ESC-2026-0001 e 0007: atualizado_em igual ao da consulta prévia (a 213 não reescreve a linha).
 -- 'envio pelo banco ativo' falso: o Telegram do check-in sai pelo navegador (reserva no banco,
 -- reservar_alertas_checkin), não pelo cron; anotar no relatório qual caminho valeu.
 
 -- ════════════════════════════════════════════════════════════════════════════
--- BLOCO 2 (logo depois do deploy das ondas A, C, G e J)
+-- BLOCO 2 (logo depois do deploy das ondas A, C, G, J e I)
 -- ════════════════════════════════════════════════════════════════════════════
 BEGIN;
 
@@ -2811,6 +3625,1473 @@ UPDATE public.configuracao_avisos SET checkin_telegram_pelo_cron = true WHERE id
 -- SELECT prosrc LIKE '%lida_em%' FROM pg_proc WHERE proname = 'marcar_aviso_lido';             -- true
 -- SELECT checkin_telegram_pelo_cron FROM configuracao_avisos;                                -- true
 
+
+-- ──────── 218_poder_total_rpcs.sql ────────
+-- 218_poder_total_rpcs.sql
+-- Lote 2026-10, onda I (adendo 01, item 4.3). Idempotente. BLOCO 2: aplicar logo depois do
+-- deploy, depois da 204 e da 217 (recria funções delas) e da 213 e 214 (bloco 1).
+--
+-- Por quê (docs/14, seção 12.4; decisões S7, S8, S9 e S15; seção 17, ajustes em C, E e F):
+-- as ações da gestão, cada uma numa transação, no servidor:
+-- 1. editar_escolta: edição por diferença (viaturas e equipe pelo escolta_veiculo_id), sem
+--    apagar e recriar; em rascunho e agendada com os poderes de hoje (campos para gestão,
+--    supervisão e central; equipe e viaturas só até supervisor); nos demais status só
+--    gestor e administrador, com motivo. Recusa remover viatura com registro de campo,
+--    trocar a placa de viatura com registro (S9) e vigilante ou placa repetidos (G).
+--    Preserva combustível (E). Não muda versao_gestao.
+-- 2. pendencias_da_escolta: o que falta, por etapa e viatura (prévia da conclusão).
+-- 3. concluir_escolta_antecipada: finaliza a qualquer momento; as pendências são calculadas
+--    aqui (nunca vêm do cliente) e gravadas em escolta_conclusoes_antecipadas.
+-- 4. voltar_etapa_escolta e zerar_escolta, com prévia (p_previa = true só devolve a lista
+--    do que seria anulado). Destino da volta pela sequência do fluxo (S8), nunca pelo
+--    histórico; da finalizada por conclusão antecipada, o status_no_momento gravado. Nada é
+--    apagado: os registros ficam anulados (tabela da 12.4.4 em lote_interno.alvos_anulacao).
+-- 5. arquivar_escolta (S7: só rascunho, agendada, finalizada ou cancelada) e
+--    recuperar_escolta (só administrador).
+-- 6. Filtro de arquivada nas funções do mural (204, com o corpo da 217), no envio do
+--    Telegram (202) e na registrar_etapa_escolta (214, que já filtra anulado e liga
+--    escolta.historico_rpc); presença do mural anulada não vale (T2 depois do zerar).
+-- Padrão das RPCs: SECURITY DEFINER, search_path fixo, guarda de perfil, motivo de pelo
+-- menos 10 caracteres, SELECT ... FOR UPDATE na escolta, versao_gestao + 1 (menos na
+-- edição), histórico com via_rpc, auditoria (lote_interno.auditar, a generalização de
+-- _auditar_mural) e aviso (lote_interno.notificar à supervisão e à equipe; Telegram ao chat
+-- central por _enfileirar_aviso) na mesma transação. As colunas travadas pela 213 só mudam
+-- com a variável escolta.rpc_gestao ligada aqui E perfil de gestão.
+-- Funções internas no schema lote_interno, com REVOKE explícito em cada uma (o default
+-- privileges do schema não retira o EXECUTE de PUBLIC; ver docs/03, onda J).
+-- Reversão: 218_poder_total_rpcs_reverter.sql (recria os corpos anteriores).
+
+-- ── Presença do mural: a anulada (zerar) não impede confirmar de novo ─────────────────
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'mural_presencas_escolta_id_vigilante_id_key'
+              AND conrelid = 'public.mural_presencas'::regclass) THEN
+    ALTER TABLE public.mural_presencas DROP CONSTRAINT mural_presencas_escolta_id_vigilante_id_key;
+  END IF;
+END $$;
+CREATE UNIQUE INDEX IF NOT EXISTS mural_presencas_valida_uk
+  ON public.mural_presencas (escolta_id, vigilante_id) WHERE anulado_em IS NULL;
+
+-- ── Auxiliares internas ──────────────────────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION lote_interno.rotulo_status(p text) RETURNS text
+    LANGUAGE sql IMMUTABLE SET search_path TO 'public', 'pg_temp' AS $$
+  SELECT CASE p
+    WHEN 'rascunho' THEN 'Rascunho' WHEN 'agendada' THEN 'Agendada' WHEN 'em_pre_inicio' THEN 'Pré-Início'
+    WHEN 'em_andamento' THEN 'Em Andamento' WHEN 'na_origem' THEN 'Na Origem'
+    WHEN 'em_transito_destino' THEN 'Trânsito p/ Destino' WHEN 'no_destino' THEN 'No Destino'
+    WHEN 'em_transito_retorno' THEN 'Trânsito p/ Retorno' WHEN 'retornando' THEN 'Retornando'
+    WHEN 'na_base' THEN 'Na Base' WHEN 'finalizada' THEN 'Finalizada' WHEN 'cancelada' THEN 'Cancelada'
+    ELSE p END
+$$;
+
+-- Ordem linear das etapas (lib/fluxo-escolta.ts, SEQUENCIA_STATUS). Para o fluxo 1 vale a
+-- mesma ordem: os saltos legados só servem para avançar (S8).
+CREATE OR REPLACE FUNCTION lote_interno.sequencia_status() RETURNS text[]
+    LANGUAGE sql IMMUTABLE SET search_path TO 'public', 'pg_temp' AS $$
+  SELECT ARRAY['rascunho', 'agendada', 'em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino',
+               'no_destino', 'em_transito_retorno', 'retornando', 'na_base', 'finalizada']
+$$;
+
+-- Ponto que a entrada na etapa produz (TIPO_PONTO_POR_STATUS).
+CREATE OR REPLACE FUNCTION lote_interno.tipo_ponto_da_etapa(p text) RETURNS text
+    LANGUAGE sql IMMUTABLE SET search_path TO 'public', 'pg_temp' AS $$
+  SELECT CASE p
+    WHEN 'em_andamento' THEN 'base_saida' WHEN 'na_origem' THEN 'origem'
+    WHEN 'em_transito_destino' THEN 'transito_destino' WHEN 'no_destino' THEN 'destino'
+    WHEN 'em_transito_retorno' THEN 'transito_retorno' WHEN 'retornando' THEN 'retorno'
+    WHEN 'na_base' THEN 'base_retorno' END
+$$;
+
+CREATE OR REPLACE FUNCTION lote_interno.auditar(p_acao text, p_escolta_id uuid, p_antes jsonb, p_depois jsonb) RETURNS void
+    LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $$
+  INSERT INTO public.logs_auditoria (usuario_id, acao, entidade_afetada, registro_id, dados_antes, dados_depois, data_hora)
+  VALUES (public.get_meu_usuario_id(), p_acao, 'escoltas', p_escolta_id, p_antes, p_depois, now())
+$$;
+
+-- Aviso de ação da gestão: central de avisos da supervisão e da equipe (menos quem fez) e
+-- Telegram ao chat central (uma mensagem por chave).
+CREATE OR REPLACE FUNCTION lote_interno.avisar_acao_gestao(p_escolta_id uuid, p_tipo text, p_chave text,
+                                                          p_titulo text, p_linhas text[]) RETURNS void
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $$
+DECLARE v_eu uuid := public.get_meu_usuario_id(); v_dest uuid[]; v_ok boolean;
+BEGIN
+  v_dest := ARRAY(SELECT DISTINCT u FROM unnest(public._supervisao_ids()
+                    || public._usuarios_dos_vigilantes(public._ids_da_equipe(public._equipe_atual(p_escolta_id)))) u
+                  WHERE u IS DISTINCT FROM v_eu);
+  PERFORM lote_interno.notificar(p_chave, p_escolta_id, p_tipo, v_dest, p_titulo, array_to_string(p_linhas, ' '));
+  v_ok := public._enfileirar_aviso('gestao:' || p_chave, 'central', p_escolta_id,
+            public._texto_aviso_mural(p_titulo, p_escolta_id, p_linhas));
+END;
+$$;
+
+-- Registros de campo VÁLIDOS da escolta, numa forma só (para a anulação e a prévia).
+CREATE OR REPLACE FUNCTION lote_interno.registros_validos(p_escolta_id uuid)
+    RETURNS TABLE (tabela text, id uuid, quando timestamptz, carimbo text, sub text, via_rpc boolean, descricao text)
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $$
+  SELECT 'pontos_controle', pc.id, pc.data_hora, pc.status_escolta_no_registro, tp.codigo, false,
+         'Ponto ' || tp.nome_exibicao || ' (' || coalesce(ve.placa, 'sem placa') || ')'
+    FROM public.pontos_controle pc JOIN public.escolta_veiculos ev ON ev.id = pc.escolta_veiculo_id
+    JOIN public.dom_tipos_ponto tp ON tp.id = pc.tipo_ponto_id LEFT JOIN public.veiculos ve ON ve.id = ev.veiculo_id
+   WHERE ev.escolta_id = p_escolta_id AND pc.anulado_em IS NULL
+  UNION ALL
+  SELECT 'checklists', c.id, coalesce(c.data_inicio, c.criado_em), c.status_escolta_no_registro, c.tipo, false,
+         'Checklist de ' || c.tipo || ' (' || coalesce(ve.placa, 'sem placa') || ')'
+    FROM public.checklists c JOIN public.escolta_veiculos ev ON ev.id = c.escolta_veiculo_id
+    LEFT JOIN public.veiculos ve ON ve.id = ev.veiculo_id
+   WHERE ev.escolta_id = p_escolta_id AND c.anulado_em IS NULL
+  UNION ALL
+  SELECT 'ocorrencias', o.id, o.data_hora, o.status_escolta_no_registro, NULL, false, 'Ocorrência: ' || left(o.descricao, 80)
+    FROM public.ocorrencias o WHERE o.escolta_id = p_escolta_id AND o.anulado_em IS NULL
+  UNION ALL
+  SELECT 'emergencias', em.id, em.data_hora, em.status_escolta_no_registro, em.status, false, 'Emergência (' || em.status || ')'
+    FROM public.emergencias em WHERE em.escolta_id = p_escolta_id AND em.anulado_em IS NULL
+  UNION ALL
+  SELECT 'presencas', p.id, p.data_hora, p.status_escolta_no_registro, NULL, false, 'Presença de ' || coalesce(v.nome_completo, 'vigilante')
+    FROM public.presencas p LEFT JOIN public.vigilantes v ON v.id = p.vigilante_id
+   WHERE p.escolta_id = p_escolta_id AND p.anulado_em IS NULL
+  UNION ALL
+  SELECT 'mural_presencas', mp.id, mp.confirmado_em, mp.status_escolta_no_registro, NULL, false,
+         'Presença na base (mural) de ' || coalesce(v.nome_completo, 'vigilante')
+    FROM public.mural_presencas mp LEFT JOIN public.vigilantes v ON v.id = mp.vigilante_id
+   WHERE mp.escolta_id = p_escolta_id AND mp.anulado_em IS NULL
+  UNION ALL
+  SELECT 'atualizacoes_status', a.id, a.data_hora, a.status_escolta_no_registro, NULL, false, 'Atualização: ' || left(a.descricao, 80)
+    FROM public.atualizacoes_status a WHERE a.escolta_id = p_escolta_id AND a.anulado_em IS NULL
+  UNION ALL
+  SELECT 'rastreamento', r.id, r.data_hora, r.status_escolta_no_registro, NULL, false,
+         'Posição de rastreamento (' || coalesce(ve.placa, 'sem placa') || ')'
+    FROM public.rastreamento r JOIN public.escolta_veiculos ev ON ev.id = r.escolta_veiculo_id
+    LEFT JOIN public.veiculos ve ON ve.id = ev.veiculo_id
+   WHERE ev.escolta_id = p_escolta_id AND r.anulado_em IS NULL
+  UNION ALL
+  SELECT 'escolta_status_historico', h.id, h.data_hora, h.status_escolta_no_registro, h.status_novo, h.via_rpc,
+         'Histórico: ' || lote_interno.rotulo_status(h.status_anterior) || ' para ' || lote_interno.rotulo_status(h.status_novo)
+    FROM public.escolta_status_historico h WHERE h.escolta_id = p_escolta_id AND h.anulado_em IS NULL
+$$;
+
+-- Horário de referência da entrada na etapa, para os registros antigos sem carimbo: o
+-- primeiro ponto válido que a produziu; sem ele, a última linha do histórico gravada por
+-- RPC (via_rpc) que levou a ela. Nunca uma linha do histórico gravada pelo cliente.
+CREATE OR REPLACE FUNCTION lote_interno.ancora_etapa(p_escolta_id uuid, p_etapa text) RETURNS timestamptz
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $$
+  SELECT coalesce(
+    (SELECT min(r.quando) FROM lote_interno.registros_validos(p_escolta_id) r
+      WHERE r.tabela = 'pontos_controle' AND r.sub = lote_interno.tipo_ponto_da_etapa(p_etapa)),
+    (SELECT max(r.quando) FROM lote_interno.registros_validos(p_escolta_id) r
+      WHERE r.tabela = 'escolta_status_historico' AND r.sub = p_etapa AND r.via_rpc))
+$$;
+
+-- O que é anulado ao desfazer a entrada na etapa p_etapa (docs/14, 12.4.4), ou tudo
+-- (zerar). Critério: 'etapa' (o que a entrada produziu, pela tabela), 'historico' (linhas
+-- que levaram à etapa), 'carimbo' (gravado enquanto a escolta estava na etapa), 'janela'
+-- (registro antigo, sem carimbo, a partir do horário de referência), 'zerar'.
+CREATE OR REPLACE FUNCTION lote_interno.alvos_anulacao(p_escolta_id uuid, p_etapa text, p_zerar boolean)
+    RETURNS TABLE (tabela text, id uuid, quando timestamptz, descricao text, criterio text)
+    LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $$
+DECLARE v_tipo text; v_ancora timestamptz; v_ancora_nb timestamptz;
+BEGIN
+  IF p_zerar THEN
+    -- Tudo o que é de campo; do histórico, só o que passou de agendada (o planejamento fica).
+    RETURN QUERY
+      SELECT r.tabela, r.id, r.quando, r.descricao, 'zerar'::text
+        FROM lote_interno.registros_validos(p_escolta_id) r
+       WHERE NOT (r.tabela = 'escolta_status_historico' AND r.sub IN ('rascunho', 'agendada'));
+    RETURN;
+  END IF;
+  v_tipo := lote_interno.tipo_ponto_da_etapa(p_etapa);
+  v_ancora := lote_interno.ancora_etapa(p_escolta_id, p_etapa);
+  IF p_etapa = 'finalizada' THEN
+    v_ancora_nb := lote_interno.ancora_etapa(p_escolta_id, 'na_base');
+  END IF;
+  RETURN QUERY
+    SELECT r.tabela, r.id, r.quando, r.descricao, x.criterio
+      FROM lote_interno.registros_validos(p_escolta_id) r
+      CROSS JOIN LATERAL (SELECT CASE
+        WHEN r.tabela = 'pontos_controle' AND r.sub = v_tipo THEN 'etapa'
+        -- Entrada em em_andamento: checklists do pré-início (a escolta ainda não tem o de entrega).
+        WHEN p_etapa = 'em_andamento' AND r.tabela = 'checklists'
+             AND (r.carimbo = 'em_pre_inicio' OR r.carimbo IS NULL) THEN 'etapa'
+        -- Entrada em finalizada: o checklist de entrega (tipo viatura, gravado na base): pelo
+        -- carimbo na_base ou, nos antigos, depois da entrada em na_base. Nunca pelo tipo só.
+        WHEN p_etapa = 'finalizada' AND r.tabela = 'checklists' AND r.sub = 'viatura'
+             AND (r.carimbo = 'na_base' OR (r.carimbo IS NULL AND v_ancora_nb IS NOT NULL AND r.quando >= v_ancora_nb)) THEN 'etapa'
+        WHEN r.tabela = 'escolta_status_historico' AND r.sub = p_etapa THEN 'historico'
+        WHEN r.carimbo = p_etapa THEN 'carimbo'
+        WHEN r.carimbo IS NULL AND v_ancora IS NOT NULL AND r.quando >= v_ancora
+             AND r.tabela <> 'checklists' THEN 'janela'
+      END AS criterio) x
+     WHERE x.criterio IS NOT NULL;
+END;
+$$;
+
+-- Destino da volta (S8): o antecessor na sequência; da finalizada por conclusão antecipada,
+-- o status em que ela estava. Nunca pelo histórico.
+CREATE OR REPLACE FUNCTION lote_interno.destino_voltar(p_escolta_id uuid, p_status text) RETURNS text
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $$
+  SELECT CASE
+    WHEN p_status = 'finalizada' AND EXISTS (SELECT 1 FROM public.escolta_conclusoes_antecipadas c
+                                             WHERE c.escolta_id = p_escolta_id AND c.anulado_em IS NULL)
+      THEN (SELECT c.status_no_momento FROM public.escolta_conclusoes_antecipadas c
+             WHERE c.escolta_id = p_escolta_id AND c.anulado_em IS NULL)
+    ELSE (lote_interno.sequencia_status())[array_position(lote_interno.sequencia_status(), p_status) - 1]
+  END
+$$;
+
+-- Pendências, por etapa (pré-início até na base) e por viatura, só com registros válidos.
+CREATE OR REPLACE FUNCTION lote_interno.pendencias(p_escolta_id uuid) RETURNS jsonb
+    LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $$
+DECLARE v_etapa text; v_tipo text; v_nome_tipo text; v_vts jsonb; v_saida jsonb := '[]'::jsonb;
+BEGIN
+  FOREACH v_etapa IN ARRAY ARRAY['em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino',
+                                 'em_transito_retorno', 'retornando', 'na_base'] LOOP
+    v_tipo := lote_interno.tipo_ponto_da_etapa(v_etapa);
+    SELECT nome_exibicao INTO v_nome_tipo FROM public.dom_tipos_ponto WHERE codigo = v_tipo;
+    SELECT coalesce(jsonb_agg(jsonb_build_object('escolta_veiculo_id', x.id, 'placa', x.placa, 'faltando', to_jsonb(x.faltando))
+                              ORDER BY x.criado_em), '[]'::jsonb)
+      INTO v_vts
+      FROM (
+        SELECT ev.id, ev.criado_em, coalesce(ve.placa, 'sem placa') AS placa,
+               array_remove(ARRAY[
+                 CASE WHEN v_etapa = 'em_pre_inicio' AND NOT EXISTS (
+                        SELECT 1 FROM public.checklists c WHERE c.escolta_veiculo_id = ev.id AND c.tipo = 'viatura'
+                           AND c.concluido AND c.anulado_em IS NULL
+                           AND coalesce(c.status_escolta_no_registro, 'em_pre_inicio') NOT IN ('na_base', 'finalizada'))
+                      THEN 'Checklist da viatura' END,
+                 CASE WHEN v_etapa = 'em_pre_inicio' AND NOT EXISTS (
+                        SELECT 1 FROM public.checklists c WHERE c.escolta_veiculo_id = ev.id AND c.tipo = 'material'
+                           AND c.concluido AND c.anulado_em IS NULL)
+                      THEN 'Checklist de material' END,
+                 CASE WHEN v_etapa = 'em_pre_inicio' AND ev.quilometragem_saida IS NULL THEN 'KM de saída' END,
+                 CASE WHEN v_tipo IS NOT NULL AND NOT EXISTS (
+                        SELECT 1 FROM public.pontos_controle pc JOIN public.dom_tipos_ponto tp ON tp.id = pc.tipo_ponto_id
+                         WHERE pc.escolta_veiculo_id = ev.id AND tp.codigo = v_tipo AND pc.anulado_em IS NULL)
+                      THEN 'Ponto: ' || v_nome_tipo END,
+                 CASE WHEN v_etapa = 'na_base' AND ev.quilometragem_retorno IS NULL THEN 'KM de retorno' END
+               ], NULL) AS faltando
+          FROM public.escolta_veiculos ev LEFT JOIN public.veiculos ve ON ve.id = ev.veiculo_id
+         WHERE ev.escolta_id = p_escolta_id) x
+     WHERE cardinality(x.faltando) > 0;
+    IF jsonb_array_length(v_vts) > 0 THEN
+      v_saida := v_saida || jsonb_build_array(jsonb_build_object('etapa', v_etapa, 'rotulo', lote_interno.rotulo_status(v_etapa),
+                                                                 'viaturas', v_vts));
+    END IF;
+  END LOOP;
+  RETURN v_saida;
+END;
+$$;
+
+-- Guardas comuns.
+CREATE OR REPLACE FUNCTION lote_interno.exigir_gestao(p_so_admin boolean DEFAULT false) RETURNS text
+    LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $$
+DECLARE v_perfil text := public.get_meu_perfil();
+BEGIN
+  IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessão inválida.' USING ERRCODE = '42501'; END IF;
+  IF p_so_admin AND v_perfil <> 'administrador' THEN
+    RAISE EXCEPTION 'Só o administrador faz esta ação.' USING ERRCODE = '42501';
+  END IF;
+  IF v_perfil NOT IN ('administrador', 'gestor') THEN
+    RAISE EXCEPTION 'Só o gestor ou o administrador faz esta ação.' USING ERRCODE = '42501';
+  END IF;
+  RETURN v_perfil;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION lote_interno.exigir_motivo(p_motivo text) RETURNS text
+    LANGUAGE plpgsql IMMUTABLE SET search_path TO 'public', 'pg_temp' AS $$
+BEGIN
+  IF p_motivo IS NULL OR length(trim(p_motivo)) < 10 THEN
+    RAISE EXCEPTION 'Informe o motivo com pelo menos 10 caracteres.';
+  END IF;
+  IF length(trim(p_motivo)) > 1000 THEN RAISE EXCEPTION 'O motivo pode ter no máximo 1000 caracteres.'; END IF;
+  RETURN trim(p_motivo);
+END;
+$$;
+
+-- Liga e desliga as variáveis de transação das RPCs da gestão.
+CREATE OR REPLACE FUNCTION lote_interno.modo_gestao(p_ligar boolean) RETURNS void
+    LANGUAGE plpgsql VOLATILE SET search_path TO 'public', 'pg_temp' AS $$
+BEGIN
+  PERFORM set_config('escolta.rpc_gestao', CASE WHEN p_ligar THEN 'on' ELSE 'off' END, true);
+  PERFORM set_config('escolta.historico_rpc', CASE WHEN p_ligar THEN 'on' ELSE 'off' END, true);
+  IF NOT p_ligar THEN
+    PERFORM set_config('escolta.transicao_especial', '', true);
+    PERFORM set_config('escolta.transicao_destino', '', true);
+  END IF;
+END;
+$$;
+
+-- Volta de etapa e zerar (o núcleo das duas RPCs). Chamada só depois das guardas.
+CREATE OR REPLACE FUNCTION lote_interno.executar_reset(p_escolta_id uuid, p_tipo text, p_motivo text, p_previa boolean)
+    RETURNS jsonb
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $$
+DECLARE
+  e record; v_eu uuid := public.get_meu_usuario_id(); v_zerar boolean; v_destino text; v_itens jsonb; v_avisos jsonb := '[]'::jsonb;
+  v_km jsonb; v_valores jsonb; v_anul uuid := gen_random_uuid(); v_contagem jsonb := '{}'::jsonb; v_n int; t text;
+  v_conc uuid; v_reset uuid; v_ancora timestamptz; v_titulo text; v_total int;
+BEGIN
+  SELECT * INTO e FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
+  IF e.id IS NULL THEN RAISE EXCEPTION 'Escolta não encontrada.'; END IF;
+  IF e.arquivada_em IS NOT NULL THEN RAISE EXCEPTION 'Escolta arquivada: o administrador precisa recuperá-la antes.'; END IF;
+  IF e.status IN ('rascunho', 'agendada', 'cancelada') THEN
+    RAISE EXCEPTION 'Escolta em %: não há etapa de campo para desfazer.', lote_interno.rotulo_status(e.status);
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.emergencias em WHERE em.escolta_id = p_escolta_id AND em.status <> 'encerrada' AND em.anulado_em IS NULL) THEN
+    RAISE EXCEPTION 'Há emergência aberta nesta escolta: encerre a emergência antes.';
+  END IF;
+
+  -- S8: voltar de em_pre_inicio para agendada tem o tratamento do zerar (S15).
+  v_zerar := p_tipo = 'zerar' OR e.status = 'em_pre_inicio';
+  v_destino := CASE WHEN v_zerar THEN 'agendada' ELSE lote_interno.destino_voltar(p_escolta_id, e.status) END;
+  SELECT id INTO v_conc FROM public.escolta_conclusoes_antecipadas WHERE escolta_id = p_escolta_id AND anulado_em IS NULL;
+
+  SELECT coalesce(jsonb_agg(jsonb_build_object('tabela', a.tabela, 'id', a.id, 'quando', a.quando,
+                                               'quando_br', public._hora_br(a.quando), 'descricao', a.descricao,
+                                               'criterio', a.criterio) ORDER BY a.quando, a.tabela), '[]'::jsonb)
+    INTO v_itens
+    FROM lote_interno.alvos_anulacao(p_escolta_id, e.status, v_zerar) a;
+
+  SELECT coalesce(jsonb_agg(jsonb_build_object('escolta_veiculo_id', ev.id, 'placa', coalesce(ve.placa, 'sem placa'),
+                                               'quilometragem_saida', ev.quilometragem_saida,
+                                               'quilometragem_retorno', ev.quilometragem_retorno) ORDER BY ev.criado_em), '[]'::jsonb)
+    INTO v_km
+    FROM public.escolta_veiculos ev LEFT JOIN public.veiculos ve ON ve.id = ev.veiculo_id WHERE ev.escolta_id = p_escolta_id;
+  v_valores := jsonb_build_object('km', v_km, 'checklist_pendente_no_inicio', e.checklist_pendente_no_inicio,
+                                  'data_finalizacao', e.data_finalizacao, 'observacao_fechamento', e.observacao_fechamento,
+                                  'conclusao_antecipada_id', v_conc);
+
+  -- Avisos da prévia: registro antigo (sem carimbo) sem horário de referência não é anulado.
+  IF NOT v_zerar THEN
+    v_ancora := lote_interno.ancora_etapa(p_escolta_id, e.status);
+    IF v_ancora IS NULL AND EXISTS (SELECT 1 FROM lote_interno.registros_validos(p_escolta_id) r
+                                     WHERE r.carimbo IS NULL AND r.tabela NOT IN ('escolta_status_historico', 'checklists')) THEN
+      v_avisos := v_avisos || to_jsonb('Há registros anteriores à atualização (sem carimbo de etapa) e não há horário de referência para a entrada em '
+                                       || lote_interno.rotulo_status(e.status) || ': nenhum deles será anulado por horário.'::text);
+    ELSIF v_ancora IS NOT NULL THEN
+      v_avisos := v_avisos || to_jsonb('Registros antigos (sem carimbo de etapa) contam a partir de ' || public._hora_br(v_ancora) || ' (Brasília).'::text);
+    END IF;
+  END IF;
+  IF (v_zerar OR e.status = 'finalizada') AND v_conc IS NOT NULL THEN
+    v_avisos := v_avisos || to_jsonb('A lista de pendências da conclusão antecipada será anulada.'::text);
+  END IF;
+
+  IF p_previa THEN
+    RETURN jsonb_build_object('previa', true, 'status_atual', e.status, 'rotulo_atual', lote_interno.rotulo_status(e.status),
+                              'destino', v_destino, 'rotulo_destino', lote_interno.rotulo_status(v_destino),
+                              'tipo', CASE WHEN v_zerar THEN 'zerar' ELSE 'voltar_etapa' END,
+                              'itens', v_itens, 'total', jsonb_array_length(v_itens), 'valores', v_valores, 'avisos', v_avisos);
+  END IF;
+
+  PERFORM lote_interno.modo_gestao(true);
+
+  -- Anula, tabela a tabela, com o mesmo anulacao_id.
+  FOREACH t IN ARRAY ARRAY['pontos_controle', 'checklists', 'ocorrencias', 'emergencias', 'presencas', 'mural_presencas',
+                           'atualizacoes_status', 'rastreamento', 'escolta_status_historico'] LOOP
+    EXECUTE format('UPDATE public.%I SET anulado_em = now(), anulado_por = $1, motivo_anulacao = $2, anulacao_id = $3
+                     WHERE anulado_em IS NULL AND id IN (SELECT (x ->> ''id'')::uuid FROM jsonb_array_elements($4) x
+                                                          WHERE x ->> ''tabela'' = $5)', t)
+      USING v_eu, p_motivo, v_anul, v_itens, t;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    IF v_n > 0 THEN v_contagem := v_contagem || jsonb_build_object(t, v_n); END IF;
+  END LOOP;
+  SELECT coalesce(sum(value::int), 0) INTO v_total FROM jsonb_each_text(v_contagem);
+
+  -- Valores que a entrada na etapa produziu (guardados em valores_anteriores).
+  IF v_zerar OR e.status = 'em_andamento' THEN
+    UPDATE public.escolta_veiculos SET quilometragem_saida = NULL WHERE escolta_id = p_escolta_id AND quilometragem_saida IS NOT NULL;
+  END IF;
+  IF v_zerar OR e.status = 'na_base' THEN
+    UPDATE public.escolta_veiculos SET quilometragem_retorno = NULL WHERE escolta_id = p_escolta_id AND quilometragem_retorno IS NOT NULL;
+  END IF;
+  IF (v_zerar OR e.status = 'finalizada') AND v_conc IS NOT NULL THEN
+    UPDATE public.escolta_conclusoes_antecipadas SET anulado_em = now(), anulado_por = v_eu, motivo_anulacao = p_motivo, anulacao_id = v_anul
+     WHERE id = v_conc;
+    v_contagem := v_contagem || jsonb_build_object('escolta_conclusoes_antecipadas', 1);
+  END IF;
+
+  -- Status (a trigger aceita só com a variável e o perfil) e versão.
+  PERFORM set_config('escolta.transicao_especial', 'reset', true);
+  PERFORM set_config('escolta.transicao_destino', v_destino, true);
+  UPDATE public.escoltas SET
+         status = v_destino,
+         versao_gestao = versao_gestao + 1,
+         -- A Nova cria com true: sem os checklists (anulados), o pré-início volta a estar pendente.
+         checklist_pendente_no_inicio = CASE WHEN v_zerar OR e.status = 'em_andamento' THEN true ELSE checklist_pendente_no_inicio END,
+         data_finalizacao = CASE WHEN v_zerar OR e.status = 'finalizada' THEN NULL ELSE data_finalizacao END,
+         observacao_fechamento = CASE WHEN v_zerar OR e.status = 'finalizada' THEN NULL ELSE observacao_fechamento END,
+         reiniciada_em = CASE WHEN v_zerar THEN now() ELSE reiniciada_em END
+   WHERE id = p_escolta_id;
+
+  INSERT INTO public.escolta_status_historico (escolta_id, status_anterior, status_novo, alterado_por, data_hora, observacao)
+  VALUES (p_escolta_id, e.status, v_destino, v_eu, now(),
+          CASE WHEN v_zerar THEN 'Zerada pela gestão: ' ELSE 'Reset: ' END || p_motivo);
+
+  INSERT INTO public.escolta_resets (escolta_id, status_de, status_para, tipo, motivo, feito_por, anulacao_id, valores_anteriores, contagem)
+  VALUES (p_escolta_id, e.status, v_destino, CASE WHEN p_tipo = 'zerar' THEN 'zerar' ELSE 'voltar_etapa' END, p_motivo, v_eu, v_anul,
+          v_valores, v_contagem)
+  RETURNING id INTO v_reset;
+
+  PERFORM lote_interno.auditar(CASE WHEN p_tipo = 'zerar' THEN 'ZERAR_ESCOLTA' ELSE 'VOLTAR_ETAPA' END, p_escolta_id,
+    jsonb_build_object('status', e.status, 'valores', v_valores, 'versao_gestao', e.versao_gestao),
+    jsonb_build_object('status', v_destino, 'motivo', p_motivo, 'anulacao_id', v_anul, 'reset_id', v_reset,
+                       'anulados', v_contagem, 'versao_gestao', e.versao_gestao + 1));
+
+  v_titulo := CASE WHEN p_tipo = 'zerar' THEN 'Escolta zerada pela gestão: ' ELSE 'Etapa desfeita pela gestão: ' END || e.codigo_escolta;
+  PERFORM lote_interno.avisar_acao_gestao(p_escolta_id, 'reset_escolta', 'reset:' || v_reset, v_titulo, ARRAY[
+    'Voltou de ' || lote_interno.rotulo_status(e.status) || ' para ' || lote_interno.rotulo_status(v_destino) || '.',
+    v_total || ' registro(s) anulado(s), nada apagado.',
+    'Por: ' || coalesce((SELECT nome_completo FROM public.usuarios WHERE id = v_eu), 'gestão') || ' em ' || public._hora_br(now()) || ' (Brasília).',
+    'Motivo: ' || p_motivo]);
+
+  PERFORM lote_interno.modo_gestao(false);
+  RETURN jsonb_build_object('ok', true, 'de', e.status, 'para', v_destino, 'anulados', v_total, 'contagem', v_contagem,
+                            'reset_id', v_reset, 'anulacao_id', v_anul);
+END;
+$$;
+
+DO $$
+DECLARE f text;
+BEGIN
+  FOREACH f IN ARRAY ARRAY['rotulo_status(text)', 'sequencia_status()', 'tipo_ponto_da_etapa(text)',
+                           'auditar(text, uuid, jsonb, jsonb)', 'avisar_acao_gestao(uuid, text, text, text, text[])',
+                           'registros_validos(uuid)', 'ancora_etapa(uuid, text)', 'alvos_anulacao(uuid, text, boolean)',
+                           'destino_voltar(uuid, text)', 'pendencias(uuid)', 'exigir_gestao(boolean)', 'exigir_motivo(text)',
+                           'modo_gestao(boolean)', 'executar_reset(uuid, text, text, boolean)']
+  LOOP
+    EXECUTE format('REVOKE ALL ON FUNCTION lote_interno.%s FROM PUBLIC, anon, authenticated', f);
+  END LOOP;
+END $$;
+
+-- ── RPCs do cliente ──────────────────────────────────────────────────────────────────
+
+-- 1. Edição.
+CREATE OR REPLACE FUNCTION public.editar_escolta(p_escolta_id uuid, p_campos jsonb, p_viaturas jsonb DEFAULT NULL, p_motivo text DEFAULT NULL)
+    RETURNS jsonb
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $$
+DECLARE
+  v_perfil text; v_eu uuid; e record; v_iniciada boolean; v_motivo text; v_campos jsonb := coalesce(p_campos, '{}'::jsonb);
+  v_permitidos text[] := ARRAY['cliente_id', 'data_hora_prevista', 'origem_endereco', 'origem_lat', 'origem_lng',
+                               'destino_endereco', 'destino_lat', 'destino_lng', 'metadados', 'periodicidade_checkin_min',
+                               'valor_cobrado', 'outros_custos', 'observacao_financeira', 'escala_fixa',
+                               'origem_uf', 'destino_uf', 'uf_estimada'];
+  v_financeiro text[] := ARRAY['valor_cobrado', 'outros_custos', 'observacao_financeira'];
+  v_sets text; v_k text; v_antes jsonb; v_depois jsonb; v_equipe_antes jsonb; v_equipe_depois jsonb;
+  vt jsonb; m jsonb; v_ev uuid; v_ev_atual record; v_mudou_estrutura boolean := false; v_ids_mantidos uuid[] := '{}';
+  v_vigs uuid[] := '{}'; v_veics uuid[] := '{}'; r record; v_n int; v_alterados text[] := '{}';
+  v_trocadas jsonb := '{}'::jsonb;
+BEGIN
+  v_perfil := public.get_meu_perfil();
+  IF v_perfil IS NULL OR v_perfil NOT IN ('administrador', 'gestor', 'supervisor', 'central') THEN
+    RAISE EXCEPTION 'Sem permissão para editar escolta.' USING ERRCODE = '42501';
+  END IF;
+  v_eu := public.get_meu_usuario_id();
+  SELECT * INTO e FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
+  IF e.id IS NULL THEN RAISE EXCEPTION 'Escolta não encontrada.'; END IF;
+  IF e.arquivada_em IS NOT NULL THEN RAISE EXCEPTION 'Escolta arquivada: o administrador precisa recuperá-la antes.'; END IF;
+  v_iniciada := e.status NOT IN ('rascunho', 'agendada');
+  IF v_iniciada AND v_perfil NOT IN ('administrador', 'gestor') THEN
+    RAISE EXCEPTION 'Escolta já iniciada: só o gestor ou o administrador altera os dados dela.' USING ERRCODE = '42501';
+  END IF;
+  IF v_iniciada THEN v_motivo := lote_interno.exigir_motivo(p_motivo);
+  ELSE v_motivo := nullif(trim(coalesce(p_motivo, '')), '');
+  END IF;
+
+  -- Só a lista fechada de campos; financeiro só para quem vê financeiro (a central não grava).
+  FOR v_k IN SELECT jsonb_object_keys(v_campos) LOOP
+    IF NOT v_k = ANY (v_permitidos) THEN RAISE EXCEPTION 'Campo não editável: %', v_k; END IF;
+  END LOOP;
+  IF v_perfil = 'central' THEN v_campos := v_campos - v_financeiro; END IF;
+  -- Colunas que ainda não existem (UF da onda K) ficam de fora sem erro.
+  SELECT string_agg(CASE WHEN a.attname = 'metadados'
+                           THEN 'metadados = nullif(jsonb_strip_nulls(coalesce(e.metadados, ''{}''::jsonb) || coalesce(r.metadados, ''{}''::jsonb)), ''{}''::jsonb)'
+                         ELSE format('%I = r.%I', a.attname, a.attname) END, ', ')
+    INTO v_sets
+    FROM pg_attribute a
+   WHERE a.attrelid = 'public.escoltas'::regclass AND a.attnum > 0 AND NOT a.attisdropped AND a.attgenerated = ''
+     AND a.attname::text = ANY (v_permitidos) AND v_campos ? a.attname::text;
+
+  v_antes := to_jsonb(e);
+  v_equipe_antes := (SELECT coalesce(jsonb_agg(jsonb_build_object('escolta_veiculo_id', ev.id, 'veiculo_id', ev.veiculo_id,
+                       'equipe', (SELECT coalesce(jsonb_agg(jsonb_build_object('vigilante_id', ef.vigilante_id, 'papel', ef.papel_na_escolta)
+                                   ORDER BY ef.vigilante_id), '[]'::jsonb) FROM public.escolta_efetivo ef WHERE ef.escolta_veiculo_id = ev.id))
+                       ORDER BY ev.criado_em), '[]'::jsonb)
+                     FROM public.escolta_veiculos ev WHERE ev.escolta_id = p_escolta_id);
+
+  IF v_sets IS NOT NULL THEN
+    EXECUTE format('UPDATE public.escoltas e SET %s FROM jsonb_populate_record(NULL::public.escoltas, $1) r WHERE e.id = $2', v_sets)
+      USING v_campos, p_escolta_id;
+  END IF;
+
+  -- Viaturas e equipe por diferença (nunca apaga e recria).
+  IF p_viaturas IS NOT NULL THEN
+    IF jsonb_typeof(p_viaturas) <> 'array' OR jsonb_array_length(p_viaturas) = 0 THEN
+      RAISE EXCEPTION 'A escolta precisa de ao menos uma viatura.';
+    END IF;
+    FOR vt IN SELECT * FROM jsonb_array_elements(p_viaturas) LOOP
+      IF (vt ->> 'veiculo_id') IS NULL THEN RAISE EXCEPTION 'Viatura sem veículo selecionado.'; END IF;
+      IF (vt ->> 'veiculo_id')::uuid = ANY (v_veics) THEN
+        RAISE EXCEPTION 'O veículo % está em duas viaturas. Cada placa entra uma vez só na escolta.',
+          coalesce((SELECT placa FROM public.veiculos WHERE id = (vt ->> 'veiculo_id')::uuid), 'selecionado');
+      END IF;
+      v_veics := v_veics || (vt ->> 'veiculo_id')::uuid;
+      FOR m IN SELECT * FROM jsonb_array_elements(coalesce(vt -> 'membros', '[]'::jsonb)) LOOP
+        IF (m ->> 'vigilante_id')::uuid = ANY (v_vigs) THEN
+          RAISE EXCEPTION 'O vigilante % está escalado duas vezes. Cada vigilante entra uma vez só na escolta.',
+            coalesce((SELECT nome_completo FROM public.vigilantes WHERE id = (m ->> 'vigilante_id')::uuid), 'selecionado');
+        END IF;
+        v_vigs := v_vigs || (m ->> 'vigilante_id')::uuid;
+      END LOOP;
+      IF (vt ->> 'escolta_veiculo_id') IS NOT NULL THEN
+        IF NOT EXISTS (SELECT 1 FROM public.escolta_veiculos WHERE id = (vt ->> 'escolta_veiculo_id')::uuid AND escolta_id = p_escolta_id) THEN
+          RAISE EXCEPTION 'Viatura que não pertence a esta escolta.';
+        END IF;
+        v_ids_mantidos := v_ids_mantidos || (vt ->> 'escolta_veiculo_id')::uuid;
+      END IF;
+    END LOOP;
+
+    -- Viaturas removidas: só sem registro de campo (S9).
+    FOR r IN SELECT ev.id, coalesce(ve.placa, 'sem placa') AS placa FROM public.escolta_veiculos ev
+               LEFT JOIN public.veiculos ve ON ve.id = ev.veiculo_id
+              WHERE ev.escolta_id = p_escolta_id AND NOT ev.id = ANY (v_ids_mantidos) LOOP
+      IF lote_interno.viatura_tem_registro(r.id) THEN
+        RAISE EXCEPTION 'A viatura % já tem registro de campo e não pode sair da escolta.', r.placa;
+      END IF;
+    END LOOP;
+
+    -- Equipe: quem saiu.
+    FOR r IN SELECT ef.id FROM public.escolta_efetivo ef WHERE ef.escolta_id = p_escolta_id AND NOT ef.vigilante_id = ANY (v_vigs) LOOP
+      DELETE FROM public.escolta_efetivo WHERE id = r.id;
+      v_mudou_estrutura := true;
+    END LOOP;
+    DELETE FROM public.escolta_veiculos WHERE escolta_id = p_escolta_id AND NOT id = ANY (v_ids_mantidos);
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    IF v_n > 0 THEN v_mudou_estrutura := true; END IF;
+
+    -- Troca de placa (só em viatura sem registro, S9): a linha sai e entra de novo com a
+    -- placa nova, guardando o combustível. Assim duas viaturas podem trocar de placa entre
+    -- si sem esbarrar no índice único (escolta, veículo) da 210; a equipe é regravada abaixo.
+    FOR vt IN SELECT * FROM jsonb_array_elements(p_viaturas) LOOP
+      CONTINUE WHEN (vt ->> 'escolta_veiculo_id') IS NULL;
+      SELECT ev.id, ev.veiculo_id, ev.abastecimento_litros, ev.abastecimento_valor, coalesce(ve.placa, 'sem placa') AS placa INTO v_ev_atual
+        FROM public.escolta_veiculos ev LEFT JOIN public.veiculos ve ON ve.id = ev.veiculo_id WHERE ev.id = (vt ->> 'escolta_veiculo_id')::uuid;
+      CONTINUE WHEN v_ev_atual.veiculo_id IS NOT DISTINCT FROM (vt ->> 'veiculo_id')::uuid;
+      IF lote_interno.viatura_tem_registro(v_ev_atual.id) THEN
+        RAISE EXCEPTION 'A viatura % já tem registro de campo: a placa não pode ser trocada (a foto mostra a placa original).', v_ev_atual.placa;
+      END IF;
+      v_trocadas := v_trocadas || jsonb_build_object(v_ev_atual.id::text,
+        jsonb_build_object('litros', v_ev_atual.abastecimento_litros, 'valor', v_ev_atual.abastecimento_valor));
+      DELETE FROM public.escolta_veiculos WHERE id = v_ev_atual.id;
+      v_mudou_estrutura := true;
+    END LOOP;
+
+    BEGIN
+      FOR vt IN SELECT * FROM jsonb_array_elements(p_viaturas) LOOP
+        IF (vt ->> 'escolta_veiculo_id') IS NOT NULL AND v_trocadas ? (vt ->> 'escolta_veiculo_id') THEN
+          INSERT INTO public.escolta_veiculos (escolta_id, veiculo_id, criado_por, abastecimento_litros, abastecimento_valor)
+          VALUES (p_escolta_id, (vt ->> 'veiculo_id')::uuid, v_eu,
+                  (v_trocadas -> (vt ->> 'escolta_veiculo_id') ->> 'litros')::numeric,
+                  (v_trocadas -> (vt ->> 'escolta_veiculo_id') ->> 'valor')::numeric)
+          RETURNING id INTO v_ev;
+        ELSIF (vt ->> 'escolta_veiculo_id') IS NOT NULL THEN
+          v_ev := (vt ->> 'escolta_veiculo_id')::uuid;
+          SELECT ev.veiculo_id, coalesce(ve.placa, 'sem placa') AS placa INTO v_ev_atual
+            FROM public.escolta_veiculos ev LEFT JOIN public.veiculos ve ON ve.id = ev.veiculo_id WHERE ev.id = v_ev;
+          IF v_ev_atual.veiculo_id IS DISTINCT FROM (vt ->> 'veiculo_id')::uuid THEN
+            IF lote_interno.viatura_tem_registro(v_ev) THEN
+              RAISE EXCEPTION 'A viatura % já tem registro de campo: a placa não pode ser trocada (a foto mostra a placa original).', v_ev_atual.placa;
+            END IF;
+            UPDATE public.escolta_veiculos SET veiculo_id = (vt ->> 'veiculo_id')::uuid, atualizado_por = v_eu WHERE id = v_ev;
+            v_mudou_estrutura := true;
+          END IF;
+        ELSE
+          INSERT INTO public.escolta_veiculos (escolta_id, veiculo_id, criado_por)
+          VALUES (p_escolta_id, (vt ->> 'veiculo_id')::uuid, v_eu) RETURNING id INTO v_ev;
+          v_mudou_estrutura := true;
+        END IF;
+        FOR m IN SELECT * FROM jsonb_array_elements(coalesce(vt -> 'membros', '[]'::jsonb)) LOOP
+          SELECT ef.id, ef.escolta_veiculo_id, ef.papel_na_escolta, ef.valor_pago_vigilante INTO r
+            FROM public.escolta_efetivo ef WHERE ef.escolta_id = p_escolta_id AND ef.vigilante_id = (m ->> 'vigilante_id')::uuid;
+          IF r.id IS NULL THEN
+            INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado,
+                                                valor_pago_vigilante, criado_por)
+            VALUES (p_escolta_id, v_ev, (m ->> 'vigilante_id')::uuid, coalesce(m ->> 'papel_na_escolta', 'operador'), false,
+                    CASE WHEN v_perfil <> 'central' THEN (m ->> 'valor_pago_vigilante')::numeric END, v_eu);
+            v_mudou_estrutura := true;
+          ELSIF r.escolta_veiculo_id IS DISTINCT FROM v_ev OR r.papel_na_escolta IS DISTINCT FROM coalesce(m ->> 'papel_na_escolta', 'operador') THEN
+            UPDATE public.escolta_efetivo SET escolta_veiculo_id = v_ev, papel_na_escolta = coalesce(m ->> 'papel_na_escolta', 'operador'),
+                   atualizado_por = v_eu,
+                   valor_pago_vigilante = CASE WHEN v_perfil <> 'central' AND m ? 'valor_pago_vigilante'
+                                               THEN (m ->> 'valor_pago_vigilante')::numeric ELSE valor_pago_vigilante END
+             WHERE id = r.id;
+            v_mudou_estrutura := true;
+          ELSIF v_perfil <> 'central' AND m ? 'valor_pago_vigilante'
+                AND r.valor_pago_vigilante IS DISTINCT FROM (m ->> 'valor_pago_vigilante')::numeric THEN
+            UPDATE public.escolta_efetivo SET valor_pago_vigilante = (m ->> 'valor_pago_vigilante')::numeric, atualizado_por = v_eu WHERE id = r.id;
+          END IF;
+        END LOOP;
+      END LOOP;
+    EXCEPTION WHEN unique_violation THEN
+      RAISE EXCEPTION 'A viatura ou um vigilante já está nesta escolta. Revise a equipe e as viaturas.';
+    END;
+    -- A central edita os dados, mas não a equipe nem as viaturas (como hoje, escolta_efetivo_escrita).
+    IF v_mudou_estrutura AND v_perfil = 'central' THEN
+      RAISE EXCEPTION 'A central edita os dados da escolta, mas não a equipe nem as viaturas. Fale com o supervisor.' USING ERRCODE = '42501';
+    END IF;
+  END IF;
+
+  SELECT to_jsonb(x) INTO v_depois FROM public.escoltas x WHERE x.id = p_escolta_id;
+  v_equipe_depois := (SELECT coalesce(jsonb_agg(jsonb_build_object('escolta_veiculo_id', ev.id, 'veiculo_id', ev.veiculo_id,
+                       'equipe', (SELECT coalesce(jsonb_agg(jsonb_build_object('vigilante_id', ef.vigilante_id, 'papel', ef.papel_na_escolta)
+                                   ORDER BY ef.vigilante_id), '[]'::jsonb) FROM public.escolta_efetivo ef WHERE ef.escolta_veiculo_id = ev.id))
+                       ORDER BY ev.criado_em), '[]'::jsonb)
+                     FROM public.escolta_veiculos ev WHERE ev.escolta_id = p_escolta_id);
+  SELECT coalesce(array_agg(k ORDER BY k), '{}') INTO v_alterados
+    FROM jsonb_object_keys(v_depois) k
+   WHERE k NOT IN ('atualizado_em', 'atualizado_por') AND (v_depois -> k) IS DISTINCT FROM (v_antes -> k);
+  IF v_equipe_antes IS DISTINCT FROM v_equipe_depois THEN v_alterados := v_alterados || 'viaturas_e_equipe'::text; END IF;
+
+  PERFORM lote_interno.auditar('EDITAR_ESCOLTA', p_escolta_id,
+    coalesce((SELECT jsonb_object_agg(k, v_antes -> k) FROM unnest(v_alterados) k WHERE v_antes ? k), '{}'::jsonb)
+      || jsonb_build_object('status', e.status, 'viaturas', v_equipe_antes),
+    coalesce((SELECT jsonb_object_agg(k, v_depois -> k) FROM unnest(v_alterados) k WHERE v_depois ? k), '{}'::jsonb)
+      || jsonb_build_object('viaturas', v_equipe_depois, 'motivo', v_motivo, 'campos_alterados', to_jsonb(v_alterados)));
+
+  -- Fora do fluxo normal (escolta iniciada): aviso à supervisão e à equipe.
+  IF v_iniciada AND cardinality(v_alterados) > 0 THEN
+    PERFORM lote_interno.avisar_acao_gestao(p_escolta_id, 'edicao_escolta',
+      'edicao:' || p_escolta_id || ':' || extract(epoch FROM clock_timestamp())::bigint,
+      'Escolta editada pela gestão: ' || e.codigo_escolta, ARRAY[
+        'Alterado em ' || lote_interno.rotulo_status(e.status) || ': ' || array_to_string(v_alterados, ', ') || '.',
+        'Por: ' || coalesce((SELECT nome_completo FROM public.usuarios WHERE id = v_eu), 'gestão') || ' em ' || public._hora_br(now()) || ' (Brasília).',
+        'Motivo: ' || v_motivo]);
+  END IF;
+  RETURN jsonb_build_object('ok', true, 'id', p_escolta_id, 'alterados', to_jsonb(v_alterados));
+END;
+$$;
+
+-- Viatura com registro de campo (S9): ponto, checklist, rastreamento, emergência ou ocorrência.
+CREATE OR REPLACE FUNCTION lote_interno.viatura_tem_registro(p_escolta_veiculo_id uuid) RETURNS boolean
+    LANGUAGE sql STABLE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $$
+  SELECT EXISTS (SELECT 1 FROM public.pontos_controle WHERE escolta_veiculo_id = p_escolta_veiculo_id)
+      OR EXISTS (SELECT 1 FROM public.checklists WHERE escolta_veiculo_id = p_escolta_veiculo_id)
+      OR EXISTS (SELECT 1 FROM public.rastreamento WHERE escolta_veiculo_id = p_escolta_veiculo_id)
+      OR EXISTS (SELECT 1 FROM public.emergencias WHERE escolta_veiculo_id = p_escolta_veiculo_id)
+      OR EXISTS (SELECT 1 FROM public.ocorrencias WHERE escolta_veiculo_id = p_escolta_veiculo_id)
+$$;
+REVOKE ALL ON FUNCTION lote_interno.viatura_tem_registro(uuid) FROM PUBLIC, anon, authenticated;
+
+-- 2. Pendências (prévia da conclusão).
+CREATE OR REPLACE FUNCTION public.pendencias_da_escolta(p_escolta_id uuid) RETURNS jsonb
+    LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $$
+BEGIN
+  PERFORM lote_interno.exigir_gestao(false);
+  IF NOT EXISTS (SELECT 1 FROM public.escoltas WHERE id = p_escolta_id) THEN RAISE EXCEPTION 'Escolta não encontrada.'; END IF;
+  RETURN lote_interno.pendencias(p_escolta_id);
+END;
+$$;
+
+-- 3. Conclusão antecipada.
+CREATE OR REPLACE FUNCTION public.concluir_escolta_antecipada(p_escolta_id uuid, p_motivo text) RETURNS jsonb
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $$
+DECLARE e record; v_eu uuid; v_motivo text; v_pend jsonb; v_conc uuid; v_itens int;
+BEGIN
+  PERFORM lote_interno.exigir_gestao(false);
+  v_motivo := lote_interno.exigir_motivo(p_motivo);
+  v_eu := public.get_meu_usuario_id();
+  SELECT * INTO e FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
+  IF e.id IS NULL THEN RAISE EXCEPTION 'Escolta não encontrada.'; END IF;
+  IF e.arquivada_em IS NOT NULL THEN RAISE EXCEPTION 'Escolta arquivada: o administrador precisa recuperá-la antes.'; END IF;
+  IF e.status IN ('rascunho', 'finalizada', 'cancelada') THEN
+    RAISE EXCEPTION 'Escolta em %: não pode ser concluída.', lote_interno.rotulo_status(e.status);
+  END IF;
+  v_pend := lote_interno.pendencias(p_escolta_id);      -- calculada aqui, nunca do cliente
+  SELECT count(*) INTO v_itens FROM jsonb_array_elements(v_pend) et, jsonb_array_elements(et -> 'viaturas') vt,
+                                    jsonb_array_elements(vt -> 'faltando') it;
+
+  PERFORM lote_interno.modo_gestao(true);
+  PERFORM set_config('escolta.transicao_especial', 'conclusao_antecipada', true);
+  UPDATE public.escoltas SET status = 'finalizada', data_finalizacao = now(), observacao_fechamento = v_motivo,
+         versao_gestao = versao_gestao + 1
+   WHERE id = p_escolta_id;
+  INSERT INTO public.escolta_status_historico (escolta_id, status_anterior, status_novo, alterado_por, data_hora, observacao)
+  VALUES (p_escolta_id, e.status, 'finalizada', v_eu, now(),
+          CASE WHEN v_itens > 0 THEN 'Conclusão antecipada pela gestão: ' ELSE 'Concluída pela gestão: ' END || v_motivo);
+  -- Sem pendência, conclui normalmente, sem a linha.
+  IF v_itens > 0 THEN
+    INSERT INTO public.escolta_conclusoes_antecipadas (escolta_id, status_no_momento, motivo, concluida_por, pendencias)
+    VALUES (p_escolta_id, e.status, v_motivo, v_eu, v_pend) RETURNING id INTO v_conc;
+  END IF;
+  PERFORM lote_interno.auditar('CONCLUSAO_ANTECIPADA', p_escolta_id,
+    jsonb_build_object('status', e.status, 'versao_gestao', e.versao_gestao),
+    jsonb_build_object('status', 'finalizada', 'motivo', v_motivo, 'pendencias', v_pend, 'itens_pendentes', v_itens,
+                       'conclusao_id', v_conc, 'versao_gestao', e.versao_gestao + 1));
+  PERFORM lote_interno.avisar_acao_gestao(p_escolta_id, 'conclusao_antecipada', 'conclusao:' || p_escolta_id || ':' || (e.versao_gestao + 1),
+    CASE WHEN v_itens > 0 THEN 'Concluída com pendências: ' ELSE 'Concluída pela gestão: ' END || e.codigo_escolta, ARRAY[
+      'Concluída em ' || lote_interno.rotulo_status(e.status) || CASE WHEN v_itens > 0 THEN ', com ' || v_itens || ' item(ns) pendente(s).' ELSE ', sem pendências.' END,
+      'Por: ' || coalesce((SELECT nome_completo FROM public.usuarios WHERE id = v_eu), 'gestão') || ' em ' || public._hora_br(now()) || ' (Brasília).',
+      'Observação: ' || v_motivo]);
+  PERFORM lote_interno.modo_gestao(false);
+  RETURN jsonb_build_object('ok', true, 'pendencias', v_pend, 'itens', v_itens, 'conclusao_id', v_conc);
+END;
+$$;
+
+-- 4. Voltar uma etapa e zerar.
+CREATE OR REPLACE FUNCTION public.voltar_etapa_escolta(p_escolta_id uuid, p_motivo text DEFAULT NULL, p_previa boolean DEFAULT false)
+    RETURNS jsonb
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $$
+DECLARE v_motivo text;
+BEGIN
+  PERFORM lote_interno.exigir_gestao(false);
+  IF NOT coalesce(p_previa, false) THEN v_motivo := lote_interno.exigir_motivo(p_motivo); END IF;
+  RETURN lote_interno.executar_reset(p_escolta_id, 'voltar_etapa', v_motivo, coalesce(p_previa, false));
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.zerar_escolta(p_escolta_id uuid, p_motivo text DEFAULT NULL, p_previa boolean DEFAULT false)
+    RETURNS jsonb
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $$
+DECLARE v_motivo text;
+BEGIN
+  PERFORM lote_interno.exigir_gestao(false);
+  IF NOT coalesce(p_previa, false) THEN v_motivo := lote_interno.exigir_motivo(p_motivo); END IF;
+  RETURN lote_interno.executar_reset(p_escolta_id, 'zerar', v_motivo, coalesce(p_previa, false));
+END;
+$$;
+
+-- 5. Arquivar (S7) e recuperar.
+CREATE OR REPLACE FUNCTION public.arquivar_escolta(p_escolta_id uuid, p_motivo text) RETURNS jsonb
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $$
+DECLARE e record; v_eu uuid; v_motivo text; v_ped int;
+BEGIN
+  PERFORM lote_interno.exigir_gestao(false);
+  v_motivo := lote_interno.exigir_motivo(p_motivo);
+  v_eu := public.get_meu_usuario_id();
+  SELECT * INTO e FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
+  IF e.id IS NULL THEN RAISE EXCEPTION 'Escolta não encontrada.'; END IF;
+  IF e.arquivada_em IS NOT NULL THEN RAISE EXCEPTION 'Esta escolta já está arquivada.'; END IF;
+  IF e.status NOT IN ('rascunho', 'agendada', 'finalizada', 'cancelada') THEN
+    RAISE EXCEPTION 'Escolta em andamento não pode ser arquivada: conclua (inclusive com pendências) ou cancele antes.';
+  END IF;
+  PERFORM lote_interno.modo_gestao(true);
+  UPDATE public.escoltas SET arquivada_em = now(), arquivada_por = v_eu, motivo_arquivamento = v_motivo,
+         versao_gestao = versao_gestao + 1
+   WHERE id = p_escolta_id;
+  -- Pedido de substituição em análise perde o objeto.
+  UPDATE public.mural_pedidos SET status = 'invalidado', decidido_em = now(),
+         observacao_decisao = trim(coalesce(observacao_decisao, '') || ' Invalidado: a escolta foi arquivada.')
+   WHERE escolta_id = p_escolta_id AND status = 'pendente';
+  GET DIAGNOSTICS v_ped = ROW_COUNT;
+  INSERT INTO public.escolta_status_historico (escolta_id, status_anterior, status_novo, alterado_por, data_hora, observacao)
+  VALUES (p_escolta_id, e.status, e.status, v_eu, now(), 'Arquivada pela gestão: ' || v_motivo);
+  PERFORM lote_interno.auditar('ARQUIVAR_ESCOLTA', p_escolta_id,
+    jsonb_build_object('status', e.status, 'arquivada_em', NULL, 'versao_gestao', e.versao_gestao),
+    jsonb_build_object('status', e.status, 'arquivada_em', now(), 'motivo', v_motivo, 'pedidos_invalidados', v_ped,
+                       'versao_gestao', e.versao_gestao + 1));
+  PERFORM lote_interno.avisar_acao_gestao(p_escolta_id, 'arquivamento_escolta', 'arquivamento:' || p_escolta_id || ':' || (e.versao_gestao + 1),
+    'Escolta arquivada: ' || e.codigo_escolta, ARRAY[
+      'Arquivada em ' || lote_interno.rotulo_status(e.status) || '; some das listas, do mural e dos indicadores.',
+      'Por: ' || coalesce((SELECT nome_completo FROM public.usuarios WHERE id = v_eu), 'gestão') || ' em ' || public._hora_br(now()) || ' (Brasília).',
+      'Motivo: ' || v_motivo]);
+  PERFORM lote_interno.modo_gestao(false);
+  RETURN jsonb_build_object('ok', true, 'status', e.status, 'pedidos_invalidados', v_ped);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.recuperar_escolta(p_escolta_id uuid, p_motivo text) RETURNS jsonb
+    LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path TO 'public', 'pg_temp' AS $$
+DECLARE e record; v_eu uuid; v_motivo text;
+BEGIN
+  PERFORM lote_interno.exigir_gestao(true);
+  v_motivo := lote_interno.exigir_motivo(p_motivo);
+  v_eu := public.get_meu_usuario_id();
+  SELECT * INTO e FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
+  IF e.id IS NULL THEN RAISE EXCEPTION 'Escolta não encontrada.'; END IF;
+  IF e.arquivada_em IS NULL THEN RAISE EXCEPTION 'Esta escolta não está arquivada.'; END IF;
+  PERFORM lote_interno.modo_gestao(true);
+  UPDATE public.escoltas SET arquivada_em = NULL, arquivada_por = NULL, motivo_arquivamento = NULL,
+         versao_gestao = versao_gestao + 1
+   WHERE id = p_escolta_id;
+  INSERT INTO public.escolta_status_historico (escolta_id, status_anterior, status_novo, alterado_por, data_hora, observacao)
+  VALUES (p_escolta_id, e.status, e.status, v_eu, now(), 'Recuperada do arquivo: ' || v_motivo);
+  PERFORM lote_interno.auditar('RECUPERAR_ESCOLTA', p_escolta_id,
+    jsonb_build_object('status', e.status, 'arquivada_em', e.arquivada_em, 'arquivada_por', e.arquivada_por,
+                       'motivo_arquivamento', e.motivo_arquivamento, 'versao_gestao', e.versao_gestao),
+    jsonb_build_object('status', e.status, 'arquivada_em', NULL, 'motivo', v_motivo, 'versao_gestao', e.versao_gestao + 1));
+  PERFORM lote_interno.avisar_acao_gestao(p_escolta_id, 'recuperacao_escolta', 'recuperacao:' || p_escolta_id || ':' || (e.versao_gestao + 1),
+    'Escolta recuperada do arquivo: ' || e.codigo_escolta, ARRAY[
+      'Volta em ' || lote_interno.rotulo_status(e.status) || ', no status em que estava.',
+      'Por: ' || coalesce((SELECT nome_completo FROM public.usuarios WHERE id = v_eu), 'administrador') || ' em ' || public._hora_br(now()) || ' (Brasília).',
+      'Motivo: ' || v_motivo]);
+  PERFORM lote_interno.modo_gestao(false);
+  RETURN jsonb_build_object('ok', true, 'status', e.status);
+END;
+$$;
+
+DO $$
+DECLARE f text;
+BEGIN
+  FOREACH f IN ARRAY ARRAY['editar_escolta(uuid, jsonb, jsonb, text)', 'pendencias_da_escolta(uuid)',
+                           'concluir_escolta_antecipada(uuid, text)', 'voltar_etapa_escolta(uuid, text, boolean)',
+                           'zerar_escolta(uuid, text, boolean)', 'arquivar_escolta(uuid, text)', 'recuperar_escolta(uuid, text)']
+  LOOP
+    EXECUTE format('REVOKE ALL ON FUNCTION public.%s FROM PUBLIC, anon', f);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION public.%s TO authenticated', f);
+  END LOOP;
+END $$;
+
+-- ── Funções da 204 (corpo da 217), da 202 e da 214, recriadas com os filtros ───────────
+CREATE OR REPLACE FUNCTION public._conflito_comandante(p_vigilante_id uuid, p_escolta_id uuid)
+ RETURNS text
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  SELECT o.codigo_escolta
+  FROM public.escoltas alvo
+  CROSS JOIN public.configuracoes_mural cfg
+  JOIN public.escolta_efetivo ee ON ee.vigilante_id = p_vigilante_id AND ee.papel_na_escolta = 'comandante'
+  JOIN public.escoltas o ON o.id = ee.escolta_id
+  WHERE alvo.id = p_escolta_id AND cfg.id = 1
+    AND o.id <> p_escolta_id AND o.status = 'agendada'
+    AND o.arquivada_em IS NULL   -- onda I: escolta arquivada não conta
+    AND abs(extract(epoch FROM (o.data_hora_prevista - alvo.data_hora_prevista))) < cfg.intervalo_comandante_h * 3600
+  LIMIT 1
+$function$;
+
+CREATE OR REPLACE FUNCTION public._presenca_da_equipe(p_escolta_id uuid)
+ RETURNS text
+ LANGUAGE sql
+ STABLE SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+  SELECT string_agg(v.nome_completo, ', ')
+  FROM public.mural_presencas mp
+  JOIN public.escolta_efetivo ee ON ee.escolta_id = mp.escolta_id AND ee.vigilante_id = mp.vigilante_id
+  JOIN public.vigilantes v ON v.id = mp.vigilante_id
+  WHERE mp.escolta_id = p_escolta_id
+    AND mp.anulado_em IS NULL   -- onda I: presença anulada (zerar) não vale
+$function$;
+
+CREATE OR REPLACE FUNCTION public._executar_substituicao(p_pedido_id uuid, p_via text)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  p public.mural_pedidos%ROWTYPE;
+  e record; v_motivo text; v_ev uuid; v_acomp uuid; v_equipe_agora jsonb; v_presenca text; v_conflito text;
+  v_nome text; v_aviso boolean;
+BEGIN
+  SELECT * INTO p FROM public.mural_pedidos WHERE id = p_pedido_id;
+  IF p.id IS NULL OR p.status NOT IN ('aprovado', 'liberado_por_tempo') THEN
+    RAISE EXCEPTION 'Pedido nao esta liberado para execucao.';
+  END IF;
+  SELECT id, status, escala_fixa, codigo_escolta, data_hora_prevista, arquivada_em INTO e FROM public.escoltas WHERE id = p.escolta_id;
+  PERFORM public._travar_vigilante(p.solicitante_vigilante_id);
+  v_equipe_agora := public._equipe_atual(p.escolta_id);
+  v_presenca := CASE WHEN (SELECT presenca_ligada FROM public.configuracoes_mural WHERE id = 1)
+                     THEN public._presenca_da_equipe(p.escolta_id) END;
+  v_conflito := public._conflito_comandante(p.solicitante_vigilante_id, p.escolta_id);
+
+  v_motivo := CASE
+    WHEN e.arquivada_em IS NOT NULL THEN 'a escolta foi arquivada'   -- onda I
+    WHEN e.status IS DISTINCT FROM 'agendada' THEN 'a escolta ja comecou ou foi encerrada'
+    WHEN e.escala_fixa THEN 'a escolta passou a ser de escala fixa'
+    WHEN now() < e.data_hora_prevista - make_interval(mins => (SELECT janela_substituicao_min FROM public.configuracoes_mural WHERE id = 1))
+      THEN 'a escolta foi remarcada e saiu da janela de substituicao'
+    WHEN v_presenca IS NOT NULL THEN 'a equipe confirmou presenca na base (' || v_presenca || ')'
+    WHEN public._ids_da_equipe(v_equipe_agora) IS DISTINCT FROM public._ids_da_equipe(p.equipe_antes) THEN 'a equipe da escolta mudou depois do pedido'
+    WHEN v_conflito IS NOT NULL THEN 'o solicitante passou a comandar a escolta ' || v_conflito || ' a menos do intervalo minimo'
+    WHEN NOT EXISTS (SELECT 1 FROM public.vigilantes v JOIN public.usuarios u ON u.id = v.usuario_id
+                     WHERE v.id = p.solicitante_vigilante_id AND v.status = 'ativo' AND u.status = 'ativo') THEN 'o solicitante nao esta mais ativo'
+    WHEN EXISTS (SELECT 1 FROM unnest(p.acompanhantes) a WHERE NOT EXISTS
+                 (SELECT 1 FROM public.vigilantes v WHERE v.id = a AND v.status = 'ativo')) THEN 'um acompanhante nao esta mais ativo'
+    WHEN p.veiculo_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.veiculos WHERE id = p.veiculo_id AND status = 'ativo') THEN 'a viatura indicada nao esta mais ativa'
+    -- Onda G (210): a placa escolhida não pode estar em outra viatura da mesma escolta.
+    WHEN p.veiculo_id IS NOT NULL AND EXISTS (
+           SELECT 1 FROM public.escolta_veiculos ev WHERE ev.escolta_id = p.escolta_id AND ev.veiculo_id = p.veiculo_id
+              AND ev.id IS DISTINCT FROM (SELECT id FROM public.escolta_veiculos WHERE escolta_id = p.escolta_id ORDER BY criado_em LIMIT 1))
+      THEN 'a viatura indicada já está em outra viatura da escolta'
+  END;
+
+  -- Onda G (210): os índices únicos do efetivo e das viaturas recusam repetição. Se uma
+  -- gravação esbarrar neles, a troca inteira é desfeita e o pedido é invalidado com o
+  -- motivo, em vez de o erro técnico subir para quem aprovou ou para o cron.
+  IF v_motivo IS NULL THEN
+    BEGIN
+      SELECT id INTO v_ev FROM public.escolta_veiculos WHERE escolta_id = p.escolta_id ORDER BY criado_em LIMIT 1;
+      IF p.veiculo_id IS NOT NULL THEN
+        UPDATE public.escolta_veiculos SET veiculo_id = p.veiculo_id, atualizado_em = now(), atualizado_por = p.solicitante_usuario_id
+         WHERE id = v_ev;
+      END IF;
+      DELETE FROM public.escolta_efetivo WHERE escolta_id = p.escolta_id;
+      INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
+      VALUES (p.escolta_id, v_ev, p.solicitante_vigilante_id, 'comandante', true, p.solicitante_usuario_id);
+      FOREACH v_acomp IN ARRAY p.acompanhantes LOOP
+        IF v_acomp IS DISTINCT FROM p.solicitante_vigilante_id THEN
+          INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
+          VALUES (p.escolta_id, v_ev, v_acomp, 'operador', false, p.solicitante_usuario_id) ON CONFLICT DO NOTHING;
+        END IF;
+      END LOOP;
+    EXCEPTION WHEN unique_violation THEN
+      v_motivo := 'a viatura ou um vigilante indicado já está na escolta';
+    END;
+  END IF;
+
+  IF v_motivo IS NOT NULL THEN
+    UPDATE public.mural_pedidos SET status = 'invalidado', decidido_em = coalesce(decidido_em, now()),
+           observacao_decisao = trim(coalesce(observacao_decisao, '') || ' Invalidado: ' || v_motivo || '.')
+     WHERE id = p.id;
+    INSERT INTO public.logs_auditoria (usuario_id, acao, entidade_afetada, registro_id, dados_antes, dados_depois, data_hora)
+    VALUES (p.decidido_por, 'pedido_substituicao_invalidado', 'escoltas', p.escolta_id, jsonb_build_object('pedido_id', p.id),
+            jsonb_build_object('pedido_id', p.id, 'via', p_via, 'motivo', v_motivo), now());
+    PERFORM public._avisar_app(p.escolta_id, 'decisao_substituicao', ARRAY[p.solicitante_usuario_id],
+      'Pedido de substituição invalidado', 'O pedido para a escolta ' || e.codigo_escolta || ' não foi executado: ' || v_motivo || '.', p.id);
+    RETURN false;
+  END IF;
+
+  SELECT nome_completo INTO v_nome FROM public.vigilantes WHERE id = p.solicitante_vigilante_id;
+  INSERT INTO public.logs_auditoria (usuario_id, acao, entidade_afetada, registro_id, dados_antes, dados_depois, data_hora)
+  VALUES (p.solicitante_usuario_id, 'substituicao_de_equipe', 'escoltas', p.escolta_id,
+          jsonb_build_object('equipe', p.equipe_antes),
+          jsonb_build_object('pedido_id', p.id, 'via', p_via, 'assumida_por', v_nome, 'motivo', p.motivo,
+                             'acompanhantes', (SELECT coalesce(jsonb_agg(nome_completo), '[]'::jsonb) FROM public.vigilantes WHERE id = ANY (p.acompanhantes)),
+                             'trocou_viatura', p.veiculo_id IS NOT NULL,
+                             'decidido_por', (SELECT nome_completo FROM public.usuarios WHERE id = p.decidido_por)),
+          now());
+
+  PERFORM public._avisar_app(p.escolta_id, 'substituicao_equipe',
+    public._usuarios_dos_vigilantes(public._ids_da_equipe(p.equipe_antes)) || public._supervisao_ids() || ARRAY[p.solicitante_usuario_id],
+    'Equipe substituída na escolta ' || e.codigo_escolta,
+    v_nome || ' assumiu a escolta em ' || public._hora_br(now()) || CASE WHEN p_via = 'liberado_por_tempo' THEN ' (liberado por tempo, sem resposta da supervisão)' ELSE ' (aprovado pela supervisão)' END
+      || '. Equipe anterior: ' || public._nomes_da_equipe(p.equipe_antes) || '. Motivo: ' || p.motivo,
+    p.id);
+  v_aviso := public._enfileirar_aviso('substituicao:' || p.id, 'central', p.escolta_id,
+    public._texto_aviso_mural('Equipe substituída', p.escolta_id, ARRAY[
+      'Assumiu: ' || v_nome,
+      'Equipe anterior: ' || public._nomes_da_equipe(p.equipe_antes),
+      'Quando: ' || public._hora_br(now()) || CASE WHEN p_via = 'liberado_por_tempo' THEN ' (liberado por tempo)' ELSE ' (aprovado)' END,
+      'Motivo: ' || p.motivo]));
+  RETURN true;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.assumir_escolta(p_escolta_id uuid, p_acompanhantes uuid[] DEFAULT '{}'::uuid[], p_veiculo_id uuid DEFAULT NULL::uuid, p_motivo text DEFAULT NULL::text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_perfil text; v_usuario uuid; v_vigilante uuid; e record; cfg record; v_qtd int; v_ev uuid; v_acomp uuid;
+  v_conflito text; v_presenca text; v_ped record; v_equipe jsonb; v_nome text; v_aviso boolean; v_inicio timestamptz;
+  v_acomp_limpo uuid[];
+BEGIN
+  SELECT public.get_meu_perfil() INTO v_perfil;
+  IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+  v_usuario := public.get_meu_usuario_id();
+  v_vigilante := public.get_meu_vigilante_id();
+  IF v_vigilante IS NULL THEN
+    RAISE EXCEPTION 'Sua conta nao esta vinculada a um vigilante ativo. Fale com o administrador.';
+  END IF;
+
+  -- Trava a linha: duas pessoas assumindo ao mesmo tempo produziriam duas equipes.
+  SELECT id, status, escala_fixa, data_hora_prevista, codigo_escolta, arquivada_em INTO e FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
+  IF e.id IS NULL THEN RAISE EXCEPTION 'Escolta nao encontrada.'; END IF;
+  IF e.arquivada_em IS NOT NULL THEN RAISE EXCEPTION 'Escolta arquivada: o administrador precisa recuperá-la antes.'; END IF;   -- onda I
+  IF e.status <> 'agendada' THEN
+    RAISE EXCEPTION 'Esta escolta ja comecou e nao pode ter a equipe trocada. Fale com o supervisor.';
+  END IF;
+  IF e.escala_fixa THEN
+    RAISE EXCEPTION 'Escolta de escala fixa: a equipe e definida pela supervisao.';
+  END IF;
+  PERFORM public._travar_vigilante(v_vigilante);
+
+  v_acomp_limpo := ARRAY(SELECT DISTINCT a FROM unnest(coalesce(p_acompanhantes, '{}')) a WHERE a IS DISTINCT FROM v_vigilante);
+  IF EXISTS (SELECT 1 FROM unnest(v_acomp_limpo) a WHERE NOT EXISTS
+             (SELECT 1 FROM public.vigilantes v WHERE v.id = a AND v.status = 'ativo')) THEN
+    RAISE EXCEPTION 'Acompanhante invalido ou inativo.';
+  END IF;
+  IF p_veiculo_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.veiculos WHERE id = p_veiculo_id AND status = 'ativo') THEN
+    RAISE EXCEPTION 'Viatura invalida ou fora de operacao.';
+  END IF;
+  -- Onda G (210): a placa escolhida troca a primeira viatura; não pode ser a de outra
+  -- viatura da mesma escolta.
+  IF p_veiculo_id IS NOT NULL AND EXISTS (
+       SELECT 1 FROM public.escolta_veiculos ev WHERE ev.escolta_id = p_escolta_id AND ev.veiculo_id = p_veiculo_id
+          AND ev.id IS DISTINCT FROM (SELECT id FROM public.escolta_veiculos WHERE escolta_id = p_escolta_id ORDER BY criado_em LIMIT 1)) THEN
+    RAISE EXCEPTION 'Esta viatura já está em outra viatura desta escolta. Escolha outra placa ou mantenha a atual.';
+  END IF;
+
+  SELECT * INTO cfg FROM public.configuracoes_mural WHERE id = 1;
+  SELECT count(*) INTO v_qtd FROM public.escolta_efetivo WHERE escolta_id = p_escolta_id;
+  SELECT nome_completo INTO v_nome FROM public.vigilantes WHERE id = v_vigilante;
+
+  -- Escolta sem equipe: assume na hora, como antes, com T5.
+  IF v_qtd = 0 THEN
+    v_conflito := public._conflito_comandante(v_vigilante, p_escolta_id);
+    IF v_conflito IS NOT NULL THEN
+      RAISE EXCEPTION 'Voce ja e comandante da escolta % a menos de % h desta. Fale com o supervisor.', v_conflito, cfg.intervalo_comandante_h;
+    END IF;
+    SELECT id INTO v_ev FROM public.escolta_veiculos WHERE escolta_id = p_escolta_id ORDER BY criado_em LIMIT 1;
+    IF v_ev IS NULL THEN RAISE EXCEPTION 'Escolta sem viatura vinculada. Fale com o supervisor.'; END IF;
+    BEGIN
+      IF p_veiculo_id IS NOT NULL THEN
+        UPDATE public.escolta_veiculos SET veiculo_id = p_veiculo_id, atualizado_em = now(), atualizado_por = v_usuario WHERE id = v_ev;
+      END IF;
+      INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
+      VALUES (p_escolta_id, v_ev, v_vigilante, 'comandante', true, v_usuario);
+      FOREACH v_acomp IN ARRAY v_acomp_limpo LOOP
+        INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
+        VALUES (p_escolta_id, v_ev, v_acomp, 'operador', false, v_usuario) ON CONFLICT DO NOTHING;
+      END LOOP;
+    EXCEPTION WHEN unique_violation THEN
+      RAISE EXCEPTION 'A viatura ou um vigilante escolhido já está nesta escolta. Revise a equipe e a viatura e tente de novo.';
+    END;
+    PERFORM public._auditar_mural('assumiu_escolta_do_mural', p_escolta_id, '{"equipe": []}'::jsonb,
+      jsonb_build_object('assumida_por', v_nome, 'acompanhantes',
+        (SELECT coalesce(jsonb_agg(nome_completo), '[]'::jsonb) FROM public.vigilantes WHERE id = ANY (v_acomp_limpo)),
+        'trocou_viatura', p_veiculo_id IS NOT NULL));
+    RETURN jsonb_build_object('ok', true, 'status', 'assumida', 'substituiu_equipe', false);
+  END IF;
+
+  -- Escolta com equipe: vira pedido, dentro das travas.
+  IF EXISTS (SELECT 1 FROM public.escolta_efetivo WHERE escolta_id = p_escolta_id AND vigilante_id = v_vigilante) THEN
+    RAISE EXCEPTION 'Voce ja esta na equipe desta escolta.';
+  END IF;
+  IF p_motivo IS NULL OR length(trim(p_motivo)) < 20 THEN
+    RAISE EXCEPTION 'Informe o motivo da substituicao com pelo menos 20 caracteres.';
+  END IF;
+  IF length(trim(p_motivo)) > 500 THEN
+    RAISE EXCEPTION 'O motivo pode ter no maximo 500 caracteres.';
+  END IF;
+  v_inicio := e.data_hora_prevista - make_interval(mins => cfg.janela_substituicao_min);
+  IF now() < v_inicio THEN
+    RAISE EXCEPTION 'Substituicao de equipe liberada a partir de % (horario de Brasilia).', public._hora_br(v_inicio);
+  END IF;
+  IF cfg.presenca_ligada THEN
+    v_presenca := public._presenca_da_equipe(p_escolta_id);
+    IF v_presenca IS NOT NULL THEN
+      RAISE EXCEPTION 'A equipe escalada ja confirmou presenca na base. Fale com o supervisor.';
+    END IF;
+  END IF;
+  v_conflito := public._conflito_comandante(v_vigilante, p_escolta_id);
+  IF v_conflito IS NOT NULL THEN
+    RAISE EXCEPTION 'Voce ja e comandante da escolta % a menos de % h desta. Fale com o supervisor.', v_conflito, cfg.intervalo_comandante_h;
+  END IF;
+
+  SELECT id, solicitante_usuario_id, expira_em INTO v_ped FROM public.mural_pedidos
+  WHERE escolta_id = p_escolta_id AND status = 'pendente' FOR UPDATE;
+  IF v_ped.id IS NOT NULL THEN
+    IF v_ped.solicitante_usuario_id = v_usuario THEN
+      RETURN jsonb_build_object('ok', true, 'status', 'pendente', 'pedido_id', v_ped.id, 'expira_em', v_ped.expira_em, 'ja_existia', true);
+    END IF;
+    RAISE EXCEPTION 'Ja existe um pedido de substituicao em analise para esta escolta.';
+  END IF;
+
+  v_equipe := public._equipe_atual(p_escolta_id);
+  INSERT INTO public.mural_pedidos (escolta_id, solicitante_usuario_id, solicitante_vigilante_id, acompanhantes, veiculo_id,
+                                    motivo, equipe_antes, expira_em, antecedencia_min)
+  VALUES (p_escolta_id, v_usuario, v_vigilante, v_acomp_limpo, p_veiculo_id, trim(p_motivo), v_equipe,
+          now() + make_interval(mins => cfg.aprovacao_tempo_limite_min),
+          round(extract(epoch FROM (e.data_hora_prevista - now())) / 60)::int)
+  RETURNING id, expira_em INTO v_ped;
+
+  PERFORM public._auditar_mural('pedido_substituicao', p_escolta_id, jsonb_build_object('equipe', v_equipe),
+    jsonb_build_object('pedido_id', v_ped.id, 'solicitante', v_nome, 'motivo', trim(p_motivo), 'expira_em', v_ped.expira_em));
+  PERFORM public._avisar_app(p_escolta_id, 'pedido_substituicao', public._supervisao_ids(),
+    'Pedido de substituição na escolta ' || e.codigo_escolta,
+    v_nome || ' pediu para assumir. Equipe atual: ' || public._nomes_da_equipe(v_equipe) || '. Motivo: ' || trim(p_motivo)
+      || '. Sem resposta até ' || public._hora_br(v_ped.expira_em) || ', o pedido é liberado automaticamente.', v_ped.id);
+  v_aviso := public._enfileirar_aviso('pedido:' || v_ped.id, 'central', p_escolta_id,
+    public._texto_aviso_mural('Pedido de substituição de equipe', p_escolta_id, ARRAY[
+      'Solicitante: ' || v_nome,
+      'Equipe atual: ' || public._nomes_da_equipe(v_equipe),
+      'Motivo: ' || trim(p_motivo),
+      'Sem resposta até ' || public._hora_br(v_ped.expira_em) || ', o pedido é liberado automaticamente.']));
+  RETURN jsonb_build_object('ok', true, 'status', 'pendente', 'pedido_id', v_ped.id, 'expira_em', v_ped.expira_em,
+                            'aviso_pelo_banco', v_aviso, 'codigo', e.codigo_escolta, 'equipe_atual', public._nomes_da_equipe(v_equipe));
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.puxar_escolta(p_escolta_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE v_perfil text; v_usuario uuid; v_vigilante uuid; e record; v_ev uuid; v_ja int; v_conflito text;
+BEGIN
+  SELECT public.get_meu_perfil() INTO v_perfil;
+  IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+  v_usuario := public.get_meu_usuario_id();
+  v_vigilante := public.get_meu_vigilante_id();
+  IF v_vigilante IS NULL THEN
+    RAISE EXCEPTION 'Sua conta nao esta vinculada a um vigilante ativo. Fale com o administrador.';
+  END IF;
+  -- Trava a linha: sem isto, dois operadores puxam a mesma escolta no mesmo instante.
+  SELECT id, status, escala_fixa, arquivada_em INTO e FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
+  IF e.id IS NULL THEN RAISE EXCEPTION 'Escolta nao encontrada.'; END IF;
+  IF e.arquivada_em IS NOT NULL THEN RAISE EXCEPTION 'Escolta arquivada: o administrador precisa recuperá-la antes.'; END IF;   -- onda I
+  IF e.status <> 'agendada' THEN RAISE EXCEPTION 'Esta escolta nao esta mais disponivel: ela ja saiu do mural.'; END IF;
+  IF e.escala_fixa THEN RAISE EXCEPTION 'Escolta de escala fixa: a equipe e definida pela supervisao.'; END IF;
+  PERFORM public._travar_vigilante(v_vigilante);
+  SELECT count(*) INTO v_ja FROM public.escolta_efetivo WHERE escolta_id = p_escolta_id;
+  IF v_ja > 0 THEN RAISE EXCEPTION 'Esta escolta ja tem equipe designada.'; END IF;
+  v_conflito := public._conflito_comandante(v_vigilante, p_escolta_id);
+  IF v_conflito IS NOT NULL THEN
+    RAISE EXCEPTION 'Voce ja e comandante da escolta % a menos de % h desta. Fale com o supervisor.', v_conflito,
+      (SELECT intervalo_comandante_h FROM public.configuracoes_mural WHERE id = 1);
+  END IF;
+  SELECT id INTO v_ev FROM public.escolta_veiculos WHERE escolta_id = p_escolta_id ORDER BY criado_em LIMIT 1;
+  IF v_ev IS NULL THEN RAISE EXCEPTION 'Escolta sem viatura vinculada. Fale com o supervisor.'; END IF;
+  INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
+  VALUES (p_escolta_id, v_ev, v_vigilante, 'comandante', true, v_usuario);
+  PERFORM public._auditar_mural('puxou_escolta_do_mural', p_escolta_id, '{"equipe": []}'::jsonb,
+    jsonb_build_object('assumida_por', (SELECT nome_completo FROM public.vigilantes WHERE id = v_vigilante)));
+  RETURN jsonb_build_object('ok', true, 'escolta_veiculo_id', v_ev);
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.devolver_escolta(p_escolta_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE v_perfil text; v_vigilante uuid; e record; v_sou_cmd int; v_equipe jsonb; v_gestao boolean;
+BEGIN
+  SELECT public.get_meu_perfil() INTO v_perfil;
+  IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+  v_vigilante := public.get_meu_vigilante_id();
+  v_gestao := v_perfil IN ('administrador', 'gestor', 'supervisor', 'central');
+  SELECT id, status, escala_fixa, arquivada_em INTO e FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
+  IF e.id IS NULL THEN RAISE EXCEPTION 'Escolta nao encontrada.'; END IF;
+  IF e.arquivada_em IS NOT NULL THEN RAISE EXCEPTION 'Escolta arquivada: o administrador precisa recuperá-la antes.'; END IF;   -- onda I
+  -- So devolve enquanto nao comecou. Depois de iniciada, sair da escolta e decisao de supervisor.
+  IF e.status <> 'agendada' THEN RAISE EXCEPTION 'A escolta ja comecou. Fale com o supervisor para sair dela.'; END IF;
+  IF NOT v_gestao THEN
+    IF e.escala_fixa THEN RAISE EXCEPTION 'Escolta de escala fixa: so a supervisao altera a equipe.'; END IF;
+    SELECT count(*) INTO v_sou_cmd FROM public.escolta_efetivo
+    WHERE escolta_id = p_escolta_id AND vigilante_id = v_vigilante AND papel_na_escolta = 'comandante';
+    IF v_sou_cmd = 0 THEN RAISE EXCEPTION 'Apenas o comandante devolve a escolta ao mural.'; END IF;
+  END IF;
+  v_equipe := public._equipe_atual(p_escolta_id);
+  DELETE FROM public.escolta_efetivo WHERE escolta_id = p_escolta_id;
+  DELETE FROM public.mural_presencas WHERE escolta_id = p_escolta_id;
+  PERFORM public._auditar_mural('devolveu_escolta_ao_mural', p_escolta_id, jsonb_build_object('equipe', v_equipe), '{"equipe": []}'::jsonb);
+  -- Quem saiu junto (acompanhantes) fica sabendo pelo aplicativo.
+  PERFORM public._avisar_app(p_escolta_id, 'substituicao_equipe',
+    ARRAY(SELECT u FROM unnest(public._usuarios_dos_vigilantes(public._ids_da_equipe(v_equipe))) u WHERE u IS DISTINCT FROM public.get_meu_usuario_id()),
+    'Escolta devolvida ao mural', 'A escolta ' || (SELECT codigo_escolta FROM public.escoltas WHERE id = p_escolta_id)
+      || ' foi devolvida ao mural em ' || public._hora_br(now()) || '. Você não está mais escalado nela.', NULL);
+  RETURN jsonb_build_object('ok', true);
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.incluir_vigilante_na_minha_escolta(p_escolta_id uuid, p_vigilante_id uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE v_perfil text; v_usuario uuid; v_vigilante uuid; e record; v_sou_cmd int; v_ev uuid; v_dup int;
+BEGIN
+  SELECT public.get_meu_perfil() INTO v_perfil;
+  IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+  v_usuario := public.get_meu_usuario_id();
+  v_vigilante := public.get_meu_vigilante_id();
+  SELECT id, status, escala_fixa, arquivada_em INTO e FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
+  IF e.id IS NULL THEN RAISE EXCEPTION 'Escolta nao encontrada.'; END IF;
+  IF e.arquivada_em IS NOT NULL THEN RAISE EXCEPTION 'Escolta arquivada: o administrador precisa recuperá-la antes.'; END IF;   -- onda I
+  IF e.status <> 'agendada' THEN RAISE EXCEPTION 'A escolta ja comecou. Alteracao de equipe passa pelo supervisor.'; END IF;
+  IF v_perfil NOT IN ('administrador', 'gestor', 'supervisor', 'central') THEN
+    IF e.escala_fixa THEN RAISE EXCEPTION 'Escolta de escala fixa: so a supervisao altera a equipe.'; END IF;
+    SELECT count(*) INTO v_sou_cmd FROM public.escolta_efetivo
+    WHERE escolta_id = p_escolta_id AND vigilante_id = v_vigilante AND papel_na_escolta = 'comandante';
+    IF v_sou_cmd = 0 THEN RAISE EXCEPTION 'Apenas o comandante inclui vigilante nesta escolta.'; END IF;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.vigilantes WHERE id = p_vigilante_id AND status = 'ativo') THEN
+    RAISE EXCEPTION 'Vigilante invalido ou inativo.';
+  END IF;
+  SELECT count(*) INTO v_dup FROM public.escolta_efetivo WHERE escolta_id = p_escolta_id AND vigilante_id = p_vigilante_id;
+  IF v_dup > 0 THEN RAISE EXCEPTION 'Este vigilante ja esta na escolta.'; END IF;
+  SELECT id INTO v_ev FROM public.escolta_veiculos WHERE escolta_id = p_escolta_id ORDER BY criado_em LIMIT 1;
+  IF v_ev IS NULL THEN RAISE EXCEPTION 'Escolta sem viatura vinculada.'; END IF;
+  BEGIN
+    INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
+    VALUES (p_escolta_id, v_ev, p_vigilante_id, 'operador', false, v_usuario);
+  EXCEPTION WHEN unique_violation THEN
+    RAISE EXCEPTION 'Este vigilante ja esta na escolta.';
+  END;
+  PERFORM public._auditar_mural('incluiu_vigilante', p_escolta_id, '{}'::jsonb,
+    jsonb_build_object('vigilante', (SELECT nome_completo FROM public.vigilantes WHERE id = p_vigilante_id)));
+  RETURN jsonb_build_object('ok', true);
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.confirmar_presenca_base(p_escolta_id uuid, p_lat numeric DEFAULT NULL::numeric, p_lng numeric DEFAULT NULL::numeric, p_precisao numeric DEFAULT NULL::numeric)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE v_perfil text; v_usuario uuid; v_vigilante uuid; e record; v_inicio timestamptz; v_ped uuid;
+BEGIN
+  SELECT public.get_meu_perfil() INTO v_perfil;
+  IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+  v_usuario := public.get_meu_usuario_id();
+  v_vigilante := public.get_meu_vigilante_id();
+  IF v_vigilante IS NULL THEN RAISE EXCEPTION 'Sua conta nao esta vinculada a um vigilante ativo.'; END IF;
+  SELECT id, status, data_hora_prevista, codigo_escolta, arquivada_em INTO e FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
+  IF e.id IS NULL THEN RAISE EXCEPTION 'Escolta nao encontrada.'; END IF;
+  IF e.arquivada_em IS NOT NULL THEN RAISE EXCEPTION 'Escolta arquivada: o administrador precisa recuperá-la antes.'; END IF;   -- onda I
+  IF e.status <> 'agendada' THEN RAISE EXCEPTION 'A presenca na base so e confirmada antes do inicio da escolta.'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.escolta_efetivo WHERE escolta_id = p_escolta_id AND vigilante_id = v_vigilante) THEN
+    RAISE EXCEPTION 'Voce nao esta na equipe desta escolta.';
+  END IF;
+  v_inicio := e.data_hora_prevista - make_interval(mins => (SELECT janela_substituicao_min FROM public.configuracoes_mural WHERE id = 1));
+  IF now() < v_inicio THEN
+    RAISE EXCEPTION 'A confirmacao de presenca abre as % (horario de Brasilia).', public._hora_br(v_inicio);
+  END IF;
+  INSERT INTO public.mural_presencas (escolta_id, vigilante_id, usuario_id, latitude, longitude, precisao_metros, sem_gps)
+  VALUES (p_escolta_id, v_vigilante, v_usuario, p_lat, p_lng, p_precisao, p_lat IS NULL OR p_lng IS NULL)
+  ON CONFLICT (escolta_id, vigilante_id) WHERE anulado_em IS NULL DO NOTHING;   -- onda I: a anulada não impede confirmar de novo
+  PERFORM public._auditar_mural('presenca_na_base', p_escolta_id, '{}'::jsonb,
+    jsonb_build_object('vigilante', (SELECT nome_completo FROM public.vigilantes WHERE id = v_vigilante),
+                       'latitude', p_lat, 'longitude', p_lng, 'precisao_metros', p_precisao));
+  -- Pedido pendente perde o objeto: a equipe chegou.
+  UPDATE public.mural_pedidos SET status = 'invalidado', decidido_em = now(),
+         observacao_decisao = 'Invalidado: a equipe confirmou presenca na base.'
+   WHERE escolta_id = p_escolta_id AND status = 'pendente'
+  RETURNING id INTO v_ped;
+  IF v_ped IS NOT NULL THEN
+    PERFORM public._avisar_app(p_escolta_id, 'decisao_substituicao',
+      ARRAY[(SELECT solicitante_usuario_id FROM public.mural_pedidos WHERE id = v_ped)],
+      'Pedido de substituição invalidado', 'A equipe da escolta ' || e.codigo_escolta || ' confirmou presença na base.', v_ped);
+  END IF;
+  RETURN jsonb_build_object('ok', true, 'confirmado_em', now());
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.listar_pedidos_mural(p_desde timestamp with time zone DEFAULT (now() - '30 days'::interval))
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE v_perfil text; v_usuario uuid; v jsonb;
+BEGIN
+  SELECT public.get_meu_perfil() INTO v_perfil;
+  IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+  v_usuario := public.get_meu_usuario_id();
+  PERFORM public.processar_pedidos_vencidos();
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+           'id', p.id, 'escolta_id', p.escolta_id, 'codigo', e.codigo_escolta, 'cliente', c.nome_cliente,
+           'data_hora_prevista', e.data_hora_prevista, 'solicitante', sv.nome_completo, 'solicitante_usuario_id', p.solicitante_usuario_id,
+           'equipe_antes', public._nomes_da_equipe(p.equipe_antes), 'motivo', p.motivo, 'status', p.status,
+           'criado_em', p.criado_em, 'expira_em', p.expira_em, 'antecedencia_min', p.antecedencia_min,
+           'decidido_por', du.nome_completo, 'decidido_em', p.decidido_em, 'observacao_decisao', p.observacao_decisao)
+         ORDER BY p.criado_em DESC), '[]'::jsonb) INTO v
+  FROM public.mural_pedidos p
+  JOIN public.escoltas e ON e.id = p.escolta_id
+  JOIN public.clientes c ON c.id = e.cliente_id
+  JOIN public.vigilantes sv ON sv.id = p.solicitante_vigilante_id
+  LEFT JOIN public.usuarios du ON du.id = p.decidido_por
+  WHERE p.criado_em >= p_desde
+    AND e.arquivada_em IS NULL   -- onda I
+    AND (v_perfil IN ('administrador', 'gestor', 'supervisor') OR p.solicitante_usuario_id = v_usuario);
+  RETURN v;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.mural_info(p_escolta_ids uuid[])
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE v_perfil text; v_usuario uuid; v_vigilante uuid; v jsonb;
+BEGIN
+  SELECT public.get_meu_perfil() INTO v_perfil;
+  IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+  v_usuario := public.get_meu_usuario_id();
+  v_vigilante := public.get_meu_vigilante_id();
+  PERFORM public.processar_pedidos_vencidos();
+  SELECT coalesce(jsonb_object_agg(e.id, jsonb_build_object(
+           'janela_inicio', e.data_hora_prevista - make_interval(mins => cfg.janela_substituicao_min),
+           'escala_fixa', e.escala_fixa,
+           -- O operador não lê o efetivo dos colegas pela RLS; sem isto a tela via toda
+           -- escolta agendada como "sem equipe".
+           'tem_equipe', EXISTS (SELECT 1 FROM public.escolta_efetivo ee WHERE ee.escolta_id = e.id),
+           -- Nomes só para a gestão e para a própria equipe (a RLS de mural_presencas é assim).
+           'presenca', CASE WHEN public._presenca_da_equipe(e.id) IS NULL THEN NULL
+                            WHEN v_perfil IN ('administrador', 'gestor', 'supervisor', 'central')
+                              OR EXISTS (SELECT 1 FROM public.escolta_efetivo ee WHERE ee.escolta_id = e.id AND ee.vigilante_id = v_vigilante)
+                            THEN public._presenca_da_equipe(e.id) ELSE 'sim' END,
+           'eu_confirmei', EXISTS (SELECT 1 FROM public.mural_presencas mp WHERE mp.escolta_id = e.id AND mp.vigilante_id = v_vigilante AND mp.anulado_em IS NULL),
+           'sou_da_equipe', EXISTS (SELECT 1 FROM public.escolta_efetivo ee WHERE ee.escolta_id = e.id AND ee.vigilante_id = v_vigilante),
+           'pedido', (SELECT jsonb_build_object('id', p.id, 'expira_em', p.expira_em, 'meu', p.solicitante_usuario_id = v_usuario)
+                      FROM public.mural_pedidos p WHERE p.escolta_id = e.id AND p.status = 'pendente'))), '{}'::jsonb)
+    INTO v
+  FROM public.escoltas e CROSS JOIN public.configuracoes_mural cfg
+  WHERE e.id = ANY (p_escolta_ids) AND cfg.id = 1 AND e.status = 'agendada' AND e.arquivada_em IS NULL;
+  RETURN v;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.enviar_avisos_telegram()
+ RETURNS integer
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE
+  r record; v_token text; v_central text; v_base text; v_chat text; v_req bigint; n int := 0;
+BEGIN
+  IF NOT public.avisos_pelo_banco_ativos() THEN RETURN 0; END IF;
+  -- Onda I: aviso pendente de escolta arquivada, gravado antes do arquivamento, não sai
+  -- (o aviso do próprio arquivamento nasce na mesma transação e sai).
+  UPDATE public.avisos_telegram a SET situacao = 'erro', erro = 'Não enviado: escolta arquivada.'
+    FROM public.escoltas e
+   WHERE e.id = a.escolta_id AND a.situacao = 'pendente' AND e.arquivada_em IS NOT NULL AND a.criado_em < e.arquivada_em;
+  EXECUTE $q$SELECT max(decrypted_secret) FILTER (WHERE name = 'telegram_bot_token'),
+                    max(decrypted_secret) FILTER (WHERE name = 'telegram_chat_central')
+             FROM vault.decrypted_secrets$q$ INTO v_token, v_central;
+  SELECT telegram_api_base INTO v_base FROM public.configuracao_avisos WHERE id = 1;
+  FOR r IN
+    SELECT a.id, a.destino, a.texto, c.telegram_chat_id AS chat_cliente
+    FROM public.avisos_telegram a
+    LEFT JOIN public.escoltas e ON e.id = a.escolta_id
+    LEFT JOIN public.clientes c ON c.id = e.cliente_id
+    WHERE a.situacao = 'pendente'
+    ORDER BY a.criado_em
+    LIMIT 20
+    FOR UPDATE OF a SKIP LOCKED
+  LOOP
+    v_chat := CASE WHEN r.destino = 'cliente' THEN coalesce(nullif(r.chat_cliente, ''), v_central) ELSE v_central END;
+    UPDATE public.avisos_telegram SET situacao = 'enviando', enviado_em = now() WHERE id = r.id;
+    EXECUTE $q$SELECT net.http_post(url := $1, body := $2, headers := '{"Content-Type": "application/json"}'::jsonb)$q$
+      INTO v_req
+      USING v_base || '/bot' || v_token || '/sendMessage',
+            jsonb_build_object('chat_id', v_chat, 'text', r.texto, 'parse_mode', 'HTML', 'disable_web_page_preview', true);
+    UPDATE public.avisos_telegram SET pg_net_id = v_req WHERE id = r.id;
+    n := n + 1;
+  END LOOP;
+  RETURN n;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.registrar_etapa_escolta(p_escolta_id uuid, p_pontos jsonb DEFAULT '[]'::jsonb, p_status_atual text DEFAULT NULL::text, p_status_novo text DEFAULT NULL::text, p_observacao text DEFAULT NULL::text, p_latitude numeric DEFAULT NULL::numeric, p_longitude numeric DEFAULT NULL::numeric, p_observacao_fechamento text DEFAULT NULL::text, p_data_hora_prevista timestamp with time zone DEFAULT NULL::timestamp with time zone, p_tipo_ponto_todas uuid DEFAULT NULL::uuid)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SET search_path TO 'public', 'pg_temp'
+AS $function$
+DECLARE v_n int; v_faltando text[]; v_status text; v_arquivada timestamptz;
+BEGIN
+  -- 0. Trava a escolta e confere a etapa ANTES de gravar qualquer coisa. Serializa duas
+  --    viaturas do comboio registrando ao mesmo tempo (a segunda vê o ponto da primeira)
+  --    e impede ponto de uma etapa que já passou.
+  SELECT status, arquivada_em INTO v_status, v_arquivada FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
+  IF v_status IS NULL THEN RAISE EXCEPTION 'Escolta nao encontrada.'; END IF;
+  -- Onda I (218): escolta arquivada não recebe registro (só o administrador a enxerga).
+  IF v_arquivada IS NOT NULL THEN RAISE EXCEPTION 'Escolta arquivada: o administrador precisa recuperá-la antes.'; END IF;
+  IF p_status_atual IS NOT NULL AND v_status IS DISTINCT FROM p_status_atual THEN
+    RAISE EXCEPTION 'ERRO_SEM_TRANSICAO';
+  END IF;
+
+  -- 1. Pontos de controle (todas as viaturas num statement só). Onda I: o autor é sempre
+  --    quem está na sessão (em nome de quem fez); sem sessão (SQL), vale o informado.
+  IF jsonb_array_length(coalesce(p_pontos, '[]'::jsonb)) > 0 THEN
+    IF EXISTS (SELECT 1 FROM jsonb_to_recordset(p_pontos) AS x(escolta_veiculo_id uuid)
+               WHERE NOT EXISTS (SELECT 1 FROM public.escolta_veiculos ev
+                                 WHERE ev.id = x.escolta_veiculo_id AND ev.escolta_id = p_escolta_id)) THEN
+      RAISE EXCEPTION 'Ponto de controle de viatura que nao pertence a esta escolta.';
+    END IF;
+    INSERT INTO public.pontos_controle (escolta_veiculo_id, tipo_ponto_id, data_hora, latitude, longitude,
+                                        precisao_metros, sem_sinal_gps, foto_id, lancado_por, observacoes,
+                                        sincronizado, criado_offline)
+    SELECT x.escolta_veiculo_id, x.tipo_ponto_id, coalesce(x.data_hora, now()), x.latitude, x.longitude,
+           x.precisao_metros, coalesce(x.sem_sinal_gps, false), x.foto_id,
+           coalesce(public.get_meu_usuario_id(), x.lancado_por), x.observacoes,
+           coalesce(x.sincronizado, true), coalesce(x.criado_offline, false)
+    FROM jsonb_to_recordset(p_pontos) AS x(escolta_veiculo_id uuid, tipo_ponto_id uuid, data_hora timestamptz,
+                                           latitude numeric, longitude numeric, precisao_metros numeric,
+                                           sem_sinal_gps boolean, foto_id uuid, lancado_por uuid, observacoes text,
+                                           sincronizado boolean, criado_offline boolean);
+  END IF;
+
+  IF p_status_novo IS NULL THEN
+    RETURN jsonb_build_object('ok', true, 'avancou', false);
+  END IF;
+
+  -- 2. Comboio: a etapa só avança quando todas as viaturas registraram o ponto dela.
+  --    Onda I: ponto anulado (etapa desfeita pela gestão) não conta.
+  IF p_tipo_ponto_todas IS NOT NULL THEN
+    SELECT array_agg(coalesce(ve.placa, 'sem placa') ORDER BY ev.criado_em) INTO v_faltando
+    FROM public.escolta_veiculos ev
+    LEFT JOIN public.veiculos ve ON ve.id = ev.veiculo_id
+    WHERE ev.escolta_id = p_escolta_id
+      AND NOT EXISTS (SELECT 1 FROM public.pontos_controle pc
+                      WHERE pc.escolta_veiculo_id = ev.id AND pc.tipo_ponto_id = p_tipo_ponto_todas
+                        AND pc.anulado_em IS NULL);
+    IF v_faltando IS NOT NULL THEN
+      RETURN jsonb_build_object('ok', true, 'avancou', false, 'faltando', to_jsonb(v_faltando));
+    END IF;
+  END IF;
+
+  -- 3. Status, com a guarda do status atual (a trigger valida a transição).
+  UPDATE public.escoltas SET
+         status = p_status_novo,
+         observacao_fechamento = CASE
+           WHEN p_status_novo IN ('finalizada', 'cancelada') THEN p_observacao_fechamento
+           WHEN p_data_hora_prevista IS NOT NULL THEN NULL
+           ELSE observacao_fechamento END,
+         data_finalizacao = CASE WHEN p_status_novo = 'finalizada' THEN now() ELSE data_finalizacao END,
+         data_hora_prevista = coalesce(p_data_hora_prevista, data_hora_prevista)
+   WHERE id = p_escolta_id AND status = p_status_atual;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  IF v_n = 0 THEN
+    RAISE EXCEPTION 'ERRO_SEM_TRANSICAO';
+  END IF;
+
+  -- 4. Histórico, com autor, na mesma transação. Onda I: via_rpc = true (escolta.historico_rpc).
+  PERFORM set_config('escolta.historico_rpc', 'on', true);
+  INSERT INTO public.escolta_status_historico (escolta_id, status_anterior, status_novo, alterado_por, data_hora,
+                                               latitude, longitude, observacao)
+  VALUES (p_escolta_id, p_status_atual, p_status_novo, public.get_meu_usuario_id(), now(),
+          p_latitude, p_longitude, p_observacao);
+  PERFORM set_config('escolta.historico_rpc', 'off', true);
+
+  RETURN jsonb_build_object('ok', true, 'avancou', true);
+END;
+$function$;
+
+-- Privilégios das recriadas (CREATE OR REPLACE mantém os anteriores; repetidos por clareza).
+DO $$
+DECLARE f text;
+BEGIN
+  FOREACH f IN ARRAY ARRAY['_conflito_comandante(uuid, uuid)', '_presenca_da_equipe(uuid)', '_executar_substituicao(uuid, text)',
+                           'enviar_avisos_telegram()'] LOOP
+    EXECUTE format('REVOKE ALL ON FUNCTION public.%s FROM PUBLIC, anon, authenticated', f);
+  END LOOP;
+  FOREACH f IN ARRAY ARRAY['assumir_escolta(uuid, uuid[], uuid, text)', 'puxar_escolta(uuid)', 'devolver_escolta(uuid)',
+                           'incluir_vigilante_na_minha_escolta(uuid, uuid)', 'confirmar_presenca_base(uuid, numeric, numeric, numeric)',
+                           'listar_pedidos_mural(timestamptz)', 'mural_info(uuid[])',
+                           'registrar_etapa_escolta(uuid, jsonb, text, text, text, numeric, numeric, text, timestamptz, uuid)'] LOOP
+    EXECUTE format('REVOKE ALL ON FUNCTION public.%s FROM PUBLIC, anon', f);
+    EXECUTE format('GRANT EXECUTE ON FUNCTION public.%s TO authenticated', f);
+  END LOOP;
+END $$;
+
+-- Conferência (funções reescritas em cadeia, docs/14 18.4):
+-- SELECT prosrc LIKE '%anulado_em IS NULL%' AND prosrc LIKE '%arquivada%' AND prosrc LIKE '%historico_rpc%'
+--   FROM pg_proc WHERE proname = 'registrar_etapa_escolta';                                   -- true
+-- SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ('editar_escolta',
+--   'pendencias_da_escolta','concluir_escolta_antecipada','voltar_etapa_escolta','zerar_escolta','arquivar_escolta','recuperar_escolta');  -- 7
+-- SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'lote_interno'::regnamespace
+--   AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE'));   -- 0
+
 COMMIT;
 
 -- Conferência do bloco 2 (somente leitura):
@@ -2822,8 +5103,11 @@ UNION ALL SELECT 'escoltas abertas com periodicidade (esperado 0)', count(*)::te
 UNION ALL SELECT 'índices únicos do efetivo (esperado 2)', count(*)::text FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
   WHERE c.relname IN ('escolta_efetivo_escolta_vigilante_uk', 'escolta_veiculos_escolta_veiculo_uk') AND i.indisunique
 UNION ALL SELECT 'avisos do mural pela central (esperado true)', (prosrc LIKE '%lote_interno.notificar%')::text FROM pg_proc WHERE oid = 'public._avisar_app(uuid, text, uuid[], text, text, uuid)'::regprocedure
-UNION ALL SELECT 'Telegram do check-in pelo cron (esperado true)', checkin_telegram_pelo_cron::text FROM public.configuracao_avisos WHERE id = 1;
--- Esperado: true; lote2026_avisos_telegram, lote2026_pedidos_vencidos, lote2026_avisos_checkin; false; fotos_leitura_autenticada; 0; 2; true; true.
+UNION ALL SELECT 'Telegram do check-in pelo cron (esperado true)', checkin_telegram_pelo_cron::text FROM public.configuracao_avisos WHERE id = 1
+UNION ALL SELECT 'onda I: RPCs da gestão (esperado 7)', count(*)::text FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ('editar_escolta','pendencias_da_escolta','concluir_escolta_antecipada','voltar_etapa_escolta','zerar_escolta','arquivar_escolta','recuperar_escolta')
+UNION ALL SELECT 'onda I: registrar_etapa_escolta com anulado, arquivada e via_rpc (esperado true)', (prosrc LIKE '%pc.anulado_em IS NULL%' AND prosrc LIKE '%v_arquivada%' AND prosrc LIKE '%historico_rpc%')::text FROM pg_proc WHERE proname = 'registrar_etapa_escolta'
+UNION ALL SELECT 'onda I: funções do lote_interno executáveis por anon ou authenticated (esperado 0)', count(*)::text FROM pg_proc p WHERE p.pronamespace = 'lote_interno'::regnamespace AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE'));
+-- Esperado: true; lote2026_avisos_telegram, lote2026_pedidos_vencidos, lote2026_avisos_checkin; false; fotos_leitura_autenticada; 0; 2; true; true; onda I: 7; true; 0.
 -- Com 'envio pelo banco ativo' falso (conferência do bloco 1), o Telegram do check-in continua
 -- saindo pelo navegador, com reserva no banco (reservar_alertas_checkin); registrar no relatório.
 -- Teste rápido sem escrever dado: abrir em aba anônima a URL pública antiga de uma foto (deve falhar).
@@ -2832,6 +5116,687 @@ UNION ALL SELECT 'Telegram do check-in pelo cron (esperado true)', checkin_teleg
 -- REVERSÃO (só se o teste de produção de uma onda falhar; na ordem abaixo)
 -- Cada bloco vem do arquivo NNN_..._reverter.sql, testado na homologação.
 -- ════════════════════════════════════════════════════════════════════════════
+
+-- ──────── reverter 218_poder_total_rpcs ────────
+-- -- 218_poder_total_rpcs_reverter.sql
+-- -- ORDEM: primeiro o git revert do código da onda I e o deploy; depois este arquivo; a 214 e
+-- -- a 213 só depois dele. Tira as RPCs da gestão e as auxiliares do lote_interno, devolve os
+-- -- corpos anteriores (204 com a 217, 202 e 214) e a restrição única de mural_presencas.
+-- -- Presenças do mural anuladas que repetem uma válida vão para backup_20261008 antes (senão
+-- -- a restrição única não volta).
+-- DROP FUNCTION IF EXISTS public.editar_escolta(uuid, jsonb, jsonb, text);
+-- DROP FUNCTION IF EXISTS public.pendencias_da_escolta(uuid);
+-- DROP FUNCTION IF EXISTS public.concluir_escolta_antecipada(uuid, text);
+-- DROP FUNCTION IF EXISTS public.voltar_etapa_escolta(uuid, text, boolean);
+-- DROP FUNCTION IF EXISTS public.zerar_escolta(uuid, text, boolean);
+-- DROP FUNCTION IF EXISTS public.arquivar_escolta(uuid, text);
+-- DROP FUNCTION IF EXISTS public.recuperar_escolta(uuid, text);
+-- DROP FUNCTION IF EXISTS lote_interno.executar_reset(uuid, text, text, boolean);
+-- DROP FUNCTION IF EXISTS lote_interno.viatura_tem_registro(uuid);
+-- DROP FUNCTION IF EXISTS lote_interno.modo_gestao(boolean);
+-- DROP FUNCTION IF EXISTS lote_interno.exigir_motivo(text);
+-- DROP FUNCTION IF EXISTS lote_interno.exigir_gestao(boolean);
+-- DROP FUNCTION IF EXISTS lote_interno.pendencias(uuid);
+-- DROP FUNCTION IF EXISTS lote_interno.destino_voltar(uuid, text);
+-- DROP FUNCTION IF EXISTS lote_interno.alvos_anulacao(uuid, text, boolean);
+-- DROP FUNCTION IF EXISTS lote_interno.ancora_etapa(uuid, text);
+-- DROP FUNCTION IF EXISTS lote_interno.registros_validos(uuid);
+-- DROP FUNCTION IF EXISTS lote_interno.avisar_acao_gestao(uuid, text, text, text, text[]);
+-- DROP FUNCTION IF EXISTS lote_interno.auditar(text, uuid, jsonb, jsonb);
+-- DROP FUNCTION IF EXISTS lote_interno.tipo_ponto_da_etapa(text);
+-- DROP FUNCTION IF EXISTS lote_interno.sequencia_status();
+-- DROP FUNCTION IF EXISTS lote_interno.rotulo_status(text);
+--
+-- CREATE SCHEMA IF NOT EXISTS backup_20261008;
+-- REVOKE ALL ON SCHEMA backup_20261008 FROM PUBLIC, anon, authenticated;
+-- CREATE TABLE IF NOT EXISTS backup_20261008.mural_presencas_anuladas (linha jsonb NOT NULL, gravado_em timestamptz NOT NULL DEFAULT now());
+-- REVOKE ALL ON backup_20261008.mural_presencas_anuladas FROM PUBLIC, anon, authenticated;
+-- DO $$
+-- BEGIN
+--   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'mural_presencas_escolta_id_vigilante_id_key'
+--                   AND conrelid = 'public.mural_presencas'::regclass) THEN
+--     INSERT INTO backup_20261008.mural_presencas_anuladas (linha)
+--     SELECT to_jsonb(m) FROM public.mural_presencas m
+--      WHERE m.anulado_em IS NOT NULL
+--        AND EXISTS (SELECT 1 FROM public.mural_presencas o WHERE o.escolta_id = m.escolta_id AND o.vigilante_id = m.vigilante_id AND o.id <> m.id);
+--     DELETE FROM public.mural_presencas m
+--      WHERE m.anulado_em IS NOT NULL
+--        AND EXISTS (SELECT 1 FROM public.mural_presencas o WHERE o.escolta_id = m.escolta_id AND o.vigilante_id = m.vigilante_id AND o.id <> m.id);
+--     DROP INDEX IF EXISTS public.mural_presencas_valida_uk;
+--     ALTER TABLE public.mural_presencas ADD CONSTRAINT mural_presencas_escolta_id_vigilante_id_key UNIQUE (escolta_id, vigilante_id);
+--   END IF;
+-- END $$;
+-- DROP INDEX IF EXISTS public.mural_presencas_valida_uk;
+--
+-- -- Corpos anteriores (copiados do banco montado na ordem dos blocos, antes da 218).
+-- CREATE OR REPLACE FUNCTION public._conflito_comandante(p_vigilante_id uuid, p_escolta_id uuid)
+--  RETURNS text
+--  LANGUAGE sql
+--  STABLE SECURITY DEFINER
+--  SET search_path TO 'public', 'pg_temp'
+-- AS $function$
+--   SELECT o.codigo_escolta
+--   FROM public.escoltas alvo
+--   CROSS JOIN public.configuracoes_mural cfg
+--   JOIN public.escolta_efetivo ee ON ee.vigilante_id = p_vigilante_id AND ee.papel_na_escolta = 'comandante'
+--   JOIN public.escoltas o ON o.id = ee.escolta_id
+--   WHERE alvo.id = p_escolta_id AND cfg.id = 1
+--     AND o.id <> p_escolta_id AND o.status = 'agendada'
+--     AND abs(extract(epoch FROM (o.data_hora_prevista - alvo.data_hora_prevista))) < cfg.intervalo_comandante_h * 3600
+--   LIMIT 1
+-- $function$;
+--
+-- CREATE OR REPLACE FUNCTION public._presenca_da_equipe(p_escolta_id uuid)
+--  RETURNS text
+--  LANGUAGE sql
+--  STABLE SECURITY DEFINER
+--  SET search_path TO 'public', 'pg_temp'
+-- AS $function$
+--   SELECT string_agg(v.nome_completo, ', ')
+--   FROM public.mural_presencas mp
+--   JOIN public.escolta_efetivo ee ON ee.escolta_id = mp.escolta_id AND ee.vigilante_id = mp.vigilante_id
+--   JOIN public.vigilantes v ON v.id = mp.vigilante_id
+--   WHERE mp.escolta_id = p_escolta_id
+-- $function$;
+--
+-- CREATE OR REPLACE FUNCTION public._executar_substituicao(p_pedido_id uuid, p_via text)
+--  RETURNS boolean
+--  LANGUAGE plpgsql
+--  SECURITY DEFINER
+--  SET search_path TO 'public', 'pg_temp'
+-- AS $function$
+-- DECLARE
+--   p public.mural_pedidos%ROWTYPE;
+--   e record; v_motivo text; v_ev uuid; v_acomp uuid; v_equipe_agora jsonb; v_presenca text; v_conflito text;
+--   v_nome text; v_aviso boolean;
+-- BEGIN
+--   SELECT * INTO p FROM public.mural_pedidos WHERE id = p_pedido_id;
+--   IF p.id IS NULL OR p.status NOT IN ('aprovado', 'liberado_por_tempo') THEN
+--     RAISE EXCEPTION 'Pedido nao esta liberado para execucao.';
+--   END IF;
+--   SELECT id, status, escala_fixa, codigo_escolta, data_hora_prevista INTO e FROM public.escoltas WHERE id = p.escolta_id;
+--   PERFORM public._travar_vigilante(p.solicitante_vigilante_id);
+--   v_equipe_agora := public._equipe_atual(p.escolta_id);
+--   v_presenca := CASE WHEN (SELECT presenca_ligada FROM public.configuracoes_mural WHERE id = 1)
+--                      THEN public._presenca_da_equipe(p.escolta_id) END;
+--   v_conflito := public._conflito_comandante(p.solicitante_vigilante_id, p.escolta_id);
+--
+--   v_motivo := CASE
+--     WHEN e.status IS DISTINCT FROM 'agendada' THEN 'a escolta ja comecou ou foi encerrada'
+--     WHEN e.escala_fixa THEN 'a escolta passou a ser de escala fixa'
+--     WHEN now() < e.data_hora_prevista - make_interval(mins => (SELECT janela_substituicao_min FROM public.configuracoes_mural WHERE id = 1))
+--       THEN 'a escolta foi remarcada e saiu da janela de substituicao'
+--     WHEN v_presenca IS NOT NULL THEN 'a equipe confirmou presenca na base (' || v_presenca || ')'
+--     WHEN public._ids_da_equipe(v_equipe_agora) IS DISTINCT FROM public._ids_da_equipe(p.equipe_antes) THEN 'a equipe da escolta mudou depois do pedido'
+--     WHEN v_conflito IS NOT NULL THEN 'o solicitante passou a comandar a escolta ' || v_conflito || ' a menos do intervalo minimo'
+--     WHEN NOT EXISTS (SELECT 1 FROM public.vigilantes v JOIN public.usuarios u ON u.id = v.usuario_id
+--                      WHERE v.id = p.solicitante_vigilante_id AND v.status = 'ativo' AND u.status = 'ativo') THEN 'o solicitante nao esta mais ativo'
+--     WHEN EXISTS (SELECT 1 FROM unnest(p.acompanhantes) a WHERE NOT EXISTS
+--                  (SELECT 1 FROM public.vigilantes v WHERE v.id = a AND v.status = 'ativo')) THEN 'um acompanhante nao esta mais ativo'
+--     WHEN p.veiculo_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.veiculos WHERE id = p.veiculo_id AND status = 'ativo') THEN 'a viatura indicada nao esta mais ativa'
+--     -- Onda G (210): a placa escolhida não pode estar em outra viatura da mesma escolta.
+--     WHEN p.veiculo_id IS NOT NULL AND EXISTS (
+--            SELECT 1 FROM public.escolta_veiculos ev WHERE ev.escolta_id = p.escolta_id AND ev.veiculo_id = p.veiculo_id
+--               AND ev.id IS DISTINCT FROM (SELECT id FROM public.escolta_veiculos WHERE escolta_id = p.escolta_id ORDER BY criado_em LIMIT 1))
+--       THEN 'a viatura indicada já está em outra viatura da escolta'
+--   END;
+--
+--   -- Onda G (210): os índices únicos do efetivo e das viaturas recusam repetição. Se uma
+--   -- gravação esbarrar neles, a troca inteira é desfeita e o pedido é invalidado com o
+--   -- motivo, em vez de o erro técnico subir para quem aprovou ou para o cron.
+--   IF v_motivo IS NULL THEN
+--     BEGIN
+--       SELECT id INTO v_ev FROM public.escolta_veiculos WHERE escolta_id = p.escolta_id ORDER BY criado_em LIMIT 1;
+--       IF p.veiculo_id IS NOT NULL THEN
+--         UPDATE public.escolta_veiculos SET veiculo_id = p.veiculo_id, atualizado_em = now(), atualizado_por = p.solicitante_usuario_id
+--          WHERE id = v_ev;
+--       END IF;
+--       DELETE FROM public.escolta_efetivo WHERE escolta_id = p.escolta_id;
+--       INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
+--       VALUES (p.escolta_id, v_ev, p.solicitante_vigilante_id, 'comandante', true, p.solicitante_usuario_id);
+--       FOREACH v_acomp IN ARRAY p.acompanhantes LOOP
+--         IF v_acomp IS DISTINCT FROM p.solicitante_vigilante_id THEN
+--           INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
+--           VALUES (p.escolta_id, v_ev, v_acomp, 'operador', false, p.solicitante_usuario_id) ON CONFLICT DO NOTHING;
+--         END IF;
+--       END LOOP;
+--     EXCEPTION WHEN unique_violation THEN
+--       v_motivo := 'a viatura ou um vigilante indicado já está na escolta';
+--     END;
+--   END IF;
+--
+--   IF v_motivo IS NOT NULL THEN
+--     UPDATE public.mural_pedidos SET status = 'invalidado', decidido_em = coalesce(decidido_em, now()),
+--            observacao_decisao = trim(coalesce(observacao_decisao, '') || ' Invalidado: ' || v_motivo || '.')
+--      WHERE id = p.id;
+--     INSERT INTO public.logs_auditoria (usuario_id, acao, entidade_afetada, registro_id, dados_antes, dados_depois, data_hora)
+--     VALUES (p.decidido_por, 'pedido_substituicao_invalidado', 'escoltas', p.escolta_id, jsonb_build_object('pedido_id', p.id),
+--             jsonb_build_object('pedido_id', p.id, 'via', p_via, 'motivo', v_motivo), now());
+--     PERFORM public._avisar_app(p.escolta_id, 'decisao_substituicao', ARRAY[p.solicitante_usuario_id],
+--       'Pedido de substituição invalidado', 'O pedido para a escolta ' || e.codigo_escolta || ' não foi executado: ' || v_motivo || '.', p.id);
+--     RETURN false;
+--   END IF;
+--
+--   SELECT nome_completo INTO v_nome FROM public.vigilantes WHERE id = p.solicitante_vigilante_id;
+--   INSERT INTO public.logs_auditoria (usuario_id, acao, entidade_afetada, registro_id, dados_antes, dados_depois, data_hora)
+--   VALUES (p.solicitante_usuario_id, 'substituicao_de_equipe', 'escoltas', p.escolta_id,
+--           jsonb_build_object('equipe', p.equipe_antes),
+--           jsonb_build_object('pedido_id', p.id, 'via', p_via, 'assumida_por', v_nome, 'motivo', p.motivo,
+--                              'acompanhantes', (SELECT coalesce(jsonb_agg(nome_completo), '[]'::jsonb) FROM public.vigilantes WHERE id = ANY (p.acompanhantes)),
+--                              'trocou_viatura', p.veiculo_id IS NOT NULL,
+--                              'decidido_por', (SELECT nome_completo FROM public.usuarios WHERE id = p.decidido_por)),
+--           now());
+--
+--   PERFORM public._avisar_app(p.escolta_id, 'substituicao_equipe',
+--     public._usuarios_dos_vigilantes(public._ids_da_equipe(p.equipe_antes)) || public._supervisao_ids() || ARRAY[p.solicitante_usuario_id],
+--     'Equipe substituída na escolta ' || e.codigo_escolta,
+--     v_nome || ' assumiu a escolta em ' || public._hora_br(now()) || CASE WHEN p_via = 'liberado_por_tempo' THEN ' (liberado por tempo, sem resposta da supervisão)' ELSE ' (aprovado pela supervisão)' END
+--       || '. Equipe anterior: ' || public._nomes_da_equipe(p.equipe_antes) || '. Motivo: ' || p.motivo,
+--     p.id);
+--   v_aviso := public._enfileirar_aviso('substituicao:' || p.id, 'central', p.escolta_id,
+--     public._texto_aviso_mural('Equipe substituída', p.escolta_id, ARRAY[
+--       'Assumiu: ' || v_nome,
+--       'Equipe anterior: ' || public._nomes_da_equipe(p.equipe_antes),
+--       'Quando: ' || public._hora_br(now()) || CASE WHEN p_via = 'liberado_por_tempo' THEN ' (liberado por tempo)' ELSE ' (aprovado)' END,
+--       'Motivo: ' || p.motivo]));
+--   RETURN true;
+-- END;
+-- $function$;
+--
+-- CREATE OR REPLACE FUNCTION public.assumir_escolta(p_escolta_id uuid, p_acompanhantes uuid[] DEFAULT '{}'::uuid[], p_veiculo_id uuid DEFAULT NULL::uuid, p_motivo text DEFAULT NULL::text)
+--  RETURNS jsonb
+--  LANGUAGE plpgsql
+--  SECURITY DEFINER
+--  SET search_path TO 'public', 'pg_temp'
+-- AS $function$
+-- DECLARE
+--   v_perfil text; v_usuario uuid; v_vigilante uuid; e record; cfg record; v_qtd int; v_ev uuid; v_acomp uuid;
+--   v_conflito text; v_presenca text; v_ped record; v_equipe jsonb; v_nome text; v_aviso boolean; v_inicio timestamptz;
+--   v_acomp_limpo uuid[];
+-- BEGIN
+--   SELECT public.get_meu_perfil() INTO v_perfil;
+--   IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+--   v_usuario := public.get_meu_usuario_id();
+--   v_vigilante := public.get_meu_vigilante_id();
+--   IF v_vigilante IS NULL THEN
+--     RAISE EXCEPTION 'Sua conta nao esta vinculada a um vigilante ativo. Fale com o administrador.';
+--   END IF;
+--
+--   -- Trava a linha: duas pessoas assumindo ao mesmo tempo produziriam duas equipes.
+--   SELECT id, status, escala_fixa, data_hora_prevista, codigo_escolta INTO e FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
+--   IF e.id IS NULL THEN RAISE EXCEPTION 'Escolta nao encontrada.'; END IF;
+--   IF e.status <> 'agendada' THEN
+--     RAISE EXCEPTION 'Esta escolta ja comecou e nao pode ter a equipe trocada. Fale com o supervisor.';
+--   END IF;
+--   IF e.escala_fixa THEN
+--     RAISE EXCEPTION 'Escolta de escala fixa: a equipe e definida pela supervisao.';
+--   END IF;
+--   PERFORM public._travar_vigilante(v_vigilante);
+--
+--   v_acomp_limpo := ARRAY(SELECT DISTINCT a FROM unnest(coalesce(p_acompanhantes, '{}')) a WHERE a IS DISTINCT FROM v_vigilante);
+--   IF EXISTS (SELECT 1 FROM unnest(v_acomp_limpo) a WHERE NOT EXISTS
+--              (SELECT 1 FROM public.vigilantes v WHERE v.id = a AND v.status = 'ativo')) THEN
+--     RAISE EXCEPTION 'Acompanhante invalido ou inativo.';
+--   END IF;
+--   IF p_veiculo_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.veiculos WHERE id = p_veiculo_id AND status = 'ativo') THEN
+--     RAISE EXCEPTION 'Viatura invalida ou fora de operacao.';
+--   END IF;
+--   -- Onda G (210): a placa escolhida troca a primeira viatura; não pode ser a de outra
+--   -- viatura da mesma escolta.
+--   IF p_veiculo_id IS NOT NULL AND EXISTS (
+--        SELECT 1 FROM public.escolta_veiculos ev WHERE ev.escolta_id = p_escolta_id AND ev.veiculo_id = p_veiculo_id
+--           AND ev.id IS DISTINCT FROM (SELECT id FROM public.escolta_veiculos WHERE escolta_id = p_escolta_id ORDER BY criado_em LIMIT 1)) THEN
+--     RAISE EXCEPTION 'Esta viatura já está em outra viatura desta escolta. Escolha outra placa ou mantenha a atual.';
+--   END IF;
+--
+--   SELECT * INTO cfg FROM public.configuracoes_mural WHERE id = 1;
+--   SELECT count(*) INTO v_qtd FROM public.escolta_efetivo WHERE escolta_id = p_escolta_id;
+--   SELECT nome_completo INTO v_nome FROM public.vigilantes WHERE id = v_vigilante;
+--
+--   -- Escolta sem equipe: assume na hora, como antes, com T5.
+--   IF v_qtd = 0 THEN
+--     v_conflito := public._conflito_comandante(v_vigilante, p_escolta_id);
+--     IF v_conflito IS NOT NULL THEN
+--       RAISE EXCEPTION 'Voce ja e comandante da escolta % a menos de % h desta. Fale com o supervisor.', v_conflito, cfg.intervalo_comandante_h;
+--     END IF;
+--     SELECT id INTO v_ev FROM public.escolta_veiculos WHERE escolta_id = p_escolta_id ORDER BY criado_em LIMIT 1;
+--     IF v_ev IS NULL THEN RAISE EXCEPTION 'Escolta sem viatura vinculada. Fale com o supervisor.'; END IF;
+--     BEGIN
+--       IF p_veiculo_id IS NOT NULL THEN
+--         UPDATE public.escolta_veiculos SET veiculo_id = p_veiculo_id, atualizado_em = now(), atualizado_por = v_usuario WHERE id = v_ev;
+--       END IF;
+--       INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
+--       VALUES (p_escolta_id, v_ev, v_vigilante, 'comandante', true, v_usuario);
+--       FOREACH v_acomp IN ARRAY v_acomp_limpo LOOP
+--         INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
+--         VALUES (p_escolta_id, v_ev, v_acomp, 'operador', false, v_usuario) ON CONFLICT DO NOTHING;
+--       END LOOP;
+--     EXCEPTION WHEN unique_violation THEN
+--       RAISE EXCEPTION 'A viatura ou um vigilante escolhido já está nesta escolta. Revise a equipe e a viatura e tente de novo.';
+--     END;
+--     PERFORM public._auditar_mural('assumiu_escolta_do_mural', p_escolta_id, '{"equipe": []}'::jsonb,
+--       jsonb_build_object('assumida_por', v_nome, 'acompanhantes',
+--         (SELECT coalesce(jsonb_agg(nome_completo), '[]'::jsonb) FROM public.vigilantes WHERE id = ANY (v_acomp_limpo)),
+--         'trocou_viatura', p_veiculo_id IS NOT NULL));
+--     RETURN jsonb_build_object('ok', true, 'status', 'assumida', 'substituiu_equipe', false);
+--   END IF;
+--
+--   -- Escolta com equipe: vira pedido, dentro das travas.
+--   IF EXISTS (SELECT 1 FROM public.escolta_efetivo WHERE escolta_id = p_escolta_id AND vigilante_id = v_vigilante) THEN
+--     RAISE EXCEPTION 'Voce ja esta na equipe desta escolta.';
+--   END IF;
+--   IF p_motivo IS NULL OR length(trim(p_motivo)) < 20 THEN
+--     RAISE EXCEPTION 'Informe o motivo da substituicao com pelo menos 20 caracteres.';
+--   END IF;
+--   IF length(trim(p_motivo)) > 500 THEN
+--     RAISE EXCEPTION 'O motivo pode ter no maximo 500 caracteres.';
+--   END IF;
+--   v_inicio := e.data_hora_prevista - make_interval(mins => cfg.janela_substituicao_min);
+--   IF now() < v_inicio THEN
+--     RAISE EXCEPTION 'Substituicao de equipe liberada a partir de % (horario de Brasilia).', public._hora_br(v_inicio);
+--   END IF;
+--   IF cfg.presenca_ligada THEN
+--     v_presenca := public._presenca_da_equipe(p_escolta_id);
+--     IF v_presenca IS NOT NULL THEN
+--       RAISE EXCEPTION 'A equipe escalada ja confirmou presenca na base. Fale com o supervisor.';
+--     END IF;
+--   END IF;
+--   v_conflito := public._conflito_comandante(v_vigilante, p_escolta_id);
+--   IF v_conflito IS NOT NULL THEN
+--     RAISE EXCEPTION 'Voce ja e comandante da escolta % a menos de % h desta. Fale com o supervisor.', v_conflito, cfg.intervalo_comandante_h;
+--   END IF;
+--
+--   SELECT id, solicitante_usuario_id, expira_em INTO v_ped FROM public.mural_pedidos
+--   WHERE escolta_id = p_escolta_id AND status = 'pendente' FOR UPDATE;
+--   IF v_ped.id IS NOT NULL THEN
+--     IF v_ped.solicitante_usuario_id = v_usuario THEN
+--       RETURN jsonb_build_object('ok', true, 'status', 'pendente', 'pedido_id', v_ped.id, 'expira_em', v_ped.expira_em, 'ja_existia', true);
+--     END IF;
+--     RAISE EXCEPTION 'Ja existe um pedido de substituicao em analise para esta escolta.';
+--   END IF;
+--
+--   v_equipe := public._equipe_atual(p_escolta_id);
+--   INSERT INTO public.mural_pedidos (escolta_id, solicitante_usuario_id, solicitante_vigilante_id, acompanhantes, veiculo_id,
+--                                     motivo, equipe_antes, expira_em, antecedencia_min)
+--   VALUES (p_escolta_id, v_usuario, v_vigilante, v_acomp_limpo, p_veiculo_id, trim(p_motivo), v_equipe,
+--           now() + make_interval(mins => cfg.aprovacao_tempo_limite_min),
+--           round(extract(epoch FROM (e.data_hora_prevista - now())) / 60)::int)
+--   RETURNING id, expira_em INTO v_ped;
+--
+--   PERFORM public._auditar_mural('pedido_substituicao', p_escolta_id, jsonb_build_object('equipe', v_equipe),
+--     jsonb_build_object('pedido_id', v_ped.id, 'solicitante', v_nome, 'motivo', trim(p_motivo), 'expira_em', v_ped.expira_em));
+--   PERFORM public._avisar_app(p_escolta_id, 'pedido_substituicao', public._supervisao_ids(),
+--     'Pedido de substituição na escolta ' || e.codigo_escolta,
+--     v_nome || ' pediu para assumir. Equipe atual: ' || public._nomes_da_equipe(v_equipe) || '. Motivo: ' || trim(p_motivo)
+--       || '. Sem resposta até ' || public._hora_br(v_ped.expira_em) || ', o pedido é liberado automaticamente.', v_ped.id);
+--   v_aviso := public._enfileirar_aviso('pedido:' || v_ped.id, 'central', p_escolta_id,
+--     public._texto_aviso_mural('Pedido de substituição de equipe', p_escolta_id, ARRAY[
+--       'Solicitante: ' || v_nome,
+--       'Equipe atual: ' || public._nomes_da_equipe(v_equipe),
+--       'Motivo: ' || trim(p_motivo),
+--       'Sem resposta até ' || public._hora_br(v_ped.expira_em) || ', o pedido é liberado automaticamente.']));
+--   RETURN jsonb_build_object('ok', true, 'status', 'pendente', 'pedido_id', v_ped.id, 'expira_em', v_ped.expira_em,
+--                             'aviso_pelo_banco', v_aviso, 'codigo', e.codigo_escolta, 'equipe_atual', public._nomes_da_equipe(v_equipe));
+-- END;
+-- $function$;
+--
+-- CREATE OR REPLACE FUNCTION public.puxar_escolta(p_escolta_id uuid)
+--  RETURNS jsonb
+--  LANGUAGE plpgsql
+--  SECURITY DEFINER
+--  SET search_path TO 'public', 'pg_temp'
+-- AS $function$
+-- DECLARE v_perfil text; v_usuario uuid; v_vigilante uuid; e record; v_ev uuid; v_ja int; v_conflito text;
+-- BEGIN
+--   SELECT public.get_meu_perfil() INTO v_perfil;
+--   IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+--   v_usuario := public.get_meu_usuario_id();
+--   v_vigilante := public.get_meu_vigilante_id();
+--   IF v_vigilante IS NULL THEN
+--     RAISE EXCEPTION 'Sua conta nao esta vinculada a um vigilante ativo. Fale com o administrador.';
+--   END IF;
+--   -- Trava a linha: sem isto, dois operadores puxam a mesma escolta no mesmo instante.
+--   SELECT id, status, escala_fixa INTO e FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
+--   IF e.id IS NULL THEN RAISE EXCEPTION 'Escolta nao encontrada.'; END IF;
+--   IF e.status <> 'agendada' THEN RAISE EXCEPTION 'Esta escolta nao esta mais disponivel: ela ja saiu do mural.'; END IF;
+--   IF e.escala_fixa THEN RAISE EXCEPTION 'Escolta de escala fixa: a equipe e definida pela supervisao.'; END IF;
+--   PERFORM public._travar_vigilante(v_vigilante);
+--   SELECT count(*) INTO v_ja FROM public.escolta_efetivo WHERE escolta_id = p_escolta_id;
+--   IF v_ja > 0 THEN RAISE EXCEPTION 'Esta escolta ja tem equipe designada.'; END IF;
+--   v_conflito := public._conflito_comandante(v_vigilante, p_escolta_id);
+--   IF v_conflito IS NOT NULL THEN
+--     RAISE EXCEPTION 'Voce ja e comandante da escolta % a menos de % h desta. Fale com o supervisor.', v_conflito,
+--       (SELECT intervalo_comandante_h FROM public.configuracoes_mural WHERE id = 1);
+--   END IF;
+--   SELECT id INTO v_ev FROM public.escolta_veiculos WHERE escolta_id = p_escolta_id ORDER BY criado_em LIMIT 1;
+--   IF v_ev IS NULL THEN RAISE EXCEPTION 'Escolta sem viatura vinculada. Fale com o supervisor.'; END IF;
+--   INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
+--   VALUES (p_escolta_id, v_ev, v_vigilante, 'comandante', true, v_usuario);
+--   PERFORM public._auditar_mural('puxou_escolta_do_mural', p_escolta_id, '{"equipe": []}'::jsonb,
+--     jsonb_build_object('assumida_por', (SELECT nome_completo FROM public.vigilantes WHERE id = v_vigilante)));
+--   RETURN jsonb_build_object('ok', true, 'escolta_veiculo_id', v_ev);
+-- END;
+-- $function$;
+--
+-- CREATE OR REPLACE FUNCTION public.devolver_escolta(p_escolta_id uuid)
+--  RETURNS jsonb
+--  LANGUAGE plpgsql
+--  SECURITY DEFINER
+--  SET search_path TO 'public', 'pg_temp'
+-- AS $function$
+-- DECLARE v_perfil text; v_vigilante uuid; e record; v_sou_cmd int; v_equipe jsonb; v_gestao boolean;
+-- BEGIN
+--   SELECT public.get_meu_perfil() INTO v_perfil;
+--   IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+--   v_vigilante := public.get_meu_vigilante_id();
+--   v_gestao := v_perfil IN ('administrador', 'gestor', 'supervisor', 'central');
+--   SELECT id, status, escala_fixa INTO e FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
+--   IF e.id IS NULL THEN RAISE EXCEPTION 'Escolta nao encontrada.'; END IF;
+--   -- So devolve enquanto nao comecou. Depois de iniciada, sair da escolta e decisao de supervisor.
+--   IF e.status <> 'agendada' THEN RAISE EXCEPTION 'A escolta ja comecou. Fale com o supervisor para sair dela.'; END IF;
+--   IF NOT v_gestao THEN
+--     IF e.escala_fixa THEN RAISE EXCEPTION 'Escolta de escala fixa: so a supervisao altera a equipe.'; END IF;
+--     SELECT count(*) INTO v_sou_cmd FROM public.escolta_efetivo
+--     WHERE escolta_id = p_escolta_id AND vigilante_id = v_vigilante AND papel_na_escolta = 'comandante';
+--     IF v_sou_cmd = 0 THEN RAISE EXCEPTION 'Apenas o comandante devolve a escolta ao mural.'; END IF;
+--   END IF;
+--   v_equipe := public._equipe_atual(p_escolta_id);
+--   DELETE FROM public.escolta_efetivo WHERE escolta_id = p_escolta_id;
+--   DELETE FROM public.mural_presencas WHERE escolta_id = p_escolta_id;
+--   PERFORM public._auditar_mural('devolveu_escolta_ao_mural', p_escolta_id, jsonb_build_object('equipe', v_equipe), '{"equipe": []}'::jsonb);
+--   -- Quem saiu junto (acompanhantes) fica sabendo pelo aplicativo.
+--   PERFORM public._avisar_app(p_escolta_id, 'substituicao_equipe',
+--     ARRAY(SELECT u FROM unnest(public._usuarios_dos_vigilantes(public._ids_da_equipe(v_equipe))) u WHERE u IS DISTINCT FROM public.get_meu_usuario_id()),
+--     'Escolta devolvida ao mural', 'A escolta ' || (SELECT codigo_escolta FROM public.escoltas WHERE id = p_escolta_id)
+--       || ' foi devolvida ao mural em ' || public._hora_br(now()) || '. Você não está mais escalado nela.', NULL);
+--   RETURN jsonb_build_object('ok', true);
+-- END;
+-- $function$;
+--
+-- CREATE OR REPLACE FUNCTION public.incluir_vigilante_na_minha_escolta(p_escolta_id uuid, p_vigilante_id uuid)
+--  RETURNS jsonb
+--  LANGUAGE plpgsql
+--  SECURITY DEFINER
+--  SET search_path TO 'public', 'pg_temp'
+-- AS $function$
+-- DECLARE v_perfil text; v_usuario uuid; v_vigilante uuid; e record; v_sou_cmd int; v_ev uuid; v_dup int;
+-- BEGIN
+--   SELECT public.get_meu_perfil() INTO v_perfil;
+--   IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+--   v_usuario := public.get_meu_usuario_id();
+--   v_vigilante := public.get_meu_vigilante_id();
+--   SELECT id, status, escala_fixa INTO e FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
+--   IF e.id IS NULL THEN RAISE EXCEPTION 'Escolta nao encontrada.'; END IF;
+--   IF e.status <> 'agendada' THEN RAISE EXCEPTION 'A escolta ja comecou. Alteracao de equipe passa pelo supervisor.'; END IF;
+--   IF v_perfil NOT IN ('administrador', 'gestor', 'supervisor', 'central') THEN
+--     IF e.escala_fixa THEN RAISE EXCEPTION 'Escolta de escala fixa: so a supervisao altera a equipe.'; END IF;
+--     SELECT count(*) INTO v_sou_cmd FROM public.escolta_efetivo
+--     WHERE escolta_id = p_escolta_id AND vigilante_id = v_vigilante AND papel_na_escolta = 'comandante';
+--     IF v_sou_cmd = 0 THEN RAISE EXCEPTION 'Apenas o comandante inclui vigilante nesta escolta.'; END IF;
+--   END IF;
+--   IF NOT EXISTS (SELECT 1 FROM public.vigilantes WHERE id = p_vigilante_id AND status = 'ativo') THEN
+--     RAISE EXCEPTION 'Vigilante invalido ou inativo.';
+--   END IF;
+--   SELECT count(*) INTO v_dup FROM public.escolta_efetivo WHERE escolta_id = p_escolta_id AND vigilante_id = p_vigilante_id;
+--   IF v_dup > 0 THEN RAISE EXCEPTION 'Este vigilante ja esta na escolta.'; END IF;
+--   SELECT id INTO v_ev FROM public.escolta_veiculos WHERE escolta_id = p_escolta_id ORDER BY criado_em LIMIT 1;
+--   IF v_ev IS NULL THEN RAISE EXCEPTION 'Escolta sem viatura vinculada.'; END IF;
+--   BEGIN
+--     INSERT INTO public.escolta_efetivo (escolta_id, escolta_veiculo_id, vigilante_id, papel_na_escolta, confirmado, criado_por)
+--     VALUES (p_escolta_id, v_ev, p_vigilante_id, 'operador', false, v_usuario);
+--   EXCEPTION WHEN unique_violation THEN
+--     RAISE EXCEPTION 'Este vigilante ja esta na escolta.';
+--   END;
+--   PERFORM public._auditar_mural('incluiu_vigilante', p_escolta_id, '{}'::jsonb,
+--     jsonb_build_object('vigilante', (SELECT nome_completo FROM public.vigilantes WHERE id = p_vigilante_id)));
+--   RETURN jsonb_build_object('ok', true);
+-- END;
+-- $function$;
+--
+-- CREATE OR REPLACE FUNCTION public.confirmar_presenca_base(p_escolta_id uuid, p_lat numeric DEFAULT NULL::numeric, p_lng numeric DEFAULT NULL::numeric, p_precisao numeric DEFAULT NULL::numeric)
+--  RETURNS jsonb
+--  LANGUAGE plpgsql
+--  SECURITY DEFINER
+--  SET search_path TO 'public', 'pg_temp'
+-- AS $function$
+-- DECLARE v_perfil text; v_usuario uuid; v_vigilante uuid; e record; v_inicio timestamptz; v_ped uuid;
+-- BEGIN
+--   SELECT public.get_meu_perfil() INTO v_perfil;
+--   IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+--   v_usuario := public.get_meu_usuario_id();
+--   v_vigilante := public.get_meu_vigilante_id();
+--   IF v_vigilante IS NULL THEN RAISE EXCEPTION 'Sua conta nao esta vinculada a um vigilante ativo.'; END IF;
+--   SELECT id, status, data_hora_prevista, codigo_escolta INTO e FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
+--   IF e.id IS NULL THEN RAISE EXCEPTION 'Escolta nao encontrada.'; END IF;
+--   IF e.status <> 'agendada' THEN RAISE EXCEPTION 'A presenca na base so e confirmada antes do inicio da escolta.'; END IF;
+--   IF NOT EXISTS (SELECT 1 FROM public.escolta_efetivo WHERE escolta_id = p_escolta_id AND vigilante_id = v_vigilante) THEN
+--     RAISE EXCEPTION 'Voce nao esta na equipe desta escolta.';
+--   END IF;
+--   v_inicio := e.data_hora_prevista - make_interval(mins => (SELECT janela_substituicao_min FROM public.configuracoes_mural WHERE id = 1));
+--   IF now() < v_inicio THEN
+--     RAISE EXCEPTION 'A confirmacao de presenca abre as % (horario de Brasilia).', public._hora_br(v_inicio);
+--   END IF;
+--   INSERT INTO public.mural_presencas (escolta_id, vigilante_id, usuario_id, latitude, longitude, precisao_metros, sem_gps)
+--   VALUES (p_escolta_id, v_vigilante, v_usuario, p_lat, p_lng, p_precisao, p_lat IS NULL OR p_lng IS NULL)
+--   ON CONFLICT (escolta_id, vigilante_id) DO NOTHING;
+--   PERFORM public._auditar_mural('presenca_na_base', p_escolta_id, '{}'::jsonb,
+--     jsonb_build_object('vigilante', (SELECT nome_completo FROM public.vigilantes WHERE id = v_vigilante),
+--                        'latitude', p_lat, 'longitude', p_lng, 'precisao_metros', p_precisao));
+--   -- Pedido pendente perde o objeto: a equipe chegou.
+--   UPDATE public.mural_pedidos SET status = 'invalidado', decidido_em = now(),
+--          observacao_decisao = 'Invalidado: a equipe confirmou presenca na base.'
+--    WHERE escolta_id = p_escolta_id AND status = 'pendente'
+--   RETURNING id INTO v_ped;
+--   IF v_ped IS NOT NULL THEN
+--     PERFORM public._avisar_app(p_escolta_id, 'decisao_substituicao',
+--       ARRAY[(SELECT solicitante_usuario_id FROM public.mural_pedidos WHERE id = v_ped)],
+--       'Pedido de substituição invalidado', 'A equipe da escolta ' || e.codigo_escolta || ' confirmou presença na base.', v_ped);
+--   END IF;
+--   RETURN jsonb_build_object('ok', true, 'confirmado_em', now());
+-- END;
+-- $function$;
+--
+-- CREATE OR REPLACE FUNCTION public.listar_pedidos_mural(p_desde timestamp with time zone DEFAULT (now() - '30 days'::interval))
+--  RETURNS jsonb
+--  LANGUAGE plpgsql
+--  SECURITY DEFINER
+--  SET search_path TO 'public', 'pg_temp'
+-- AS $function$
+-- DECLARE v_perfil text; v_usuario uuid; v jsonb;
+-- BEGIN
+--   SELECT public.get_meu_perfil() INTO v_perfil;
+--   IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+--   v_usuario := public.get_meu_usuario_id();
+--   PERFORM public.processar_pedidos_vencidos();
+--   SELECT coalesce(jsonb_agg(jsonb_build_object(
+--            'id', p.id, 'escolta_id', p.escolta_id, 'codigo', e.codigo_escolta, 'cliente', c.nome_cliente,
+--            'data_hora_prevista', e.data_hora_prevista, 'solicitante', sv.nome_completo, 'solicitante_usuario_id', p.solicitante_usuario_id,
+--            'equipe_antes', public._nomes_da_equipe(p.equipe_antes), 'motivo', p.motivo, 'status', p.status,
+--            'criado_em', p.criado_em, 'expira_em', p.expira_em, 'antecedencia_min', p.antecedencia_min,
+--            'decidido_por', du.nome_completo, 'decidido_em', p.decidido_em, 'observacao_decisao', p.observacao_decisao)
+--          ORDER BY p.criado_em DESC), '[]'::jsonb) INTO v
+--   FROM public.mural_pedidos p
+--   JOIN public.escoltas e ON e.id = p.escolta_id
+--   JOIN public.clientes c ON c.id = e.cliente_id
+--   JOIN public.vigilantes sv ON sv.id = p.solicitante_vigilante_id
+--   LEFT JOIN public.usuarios du ON du.id = p.decidido_por
+--   WHERE p.criado_em >= p_desde
+--     AND (v_perfil IN ('administrador', 'gestor', 'supervisor') OR p.solicitante_usuario_id = v_usuario);
+--   RETURN v;
+-- END;
+-- $function$;
+--
+-- CREATE OR REPLACE FUNCTION public.mural_info(p_escolta_ids uuid[])
+--  RETURNS jsonb
+--  LANGUAGE plpgsql
+--  SECURITY DEFINER
+--  SET search_path TO 'public', 'pg_temp'
+-- AS $function$
+-- DECLARE v_perfil text; v_usuario uuid; v_vigilante uuid; v jsonb;
+-- BEGIN
+--   SELECT public.get_meu_perfil() INTO v_perfil;
+--   IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+--   v_usuario := public.get_meu_usuario_id();
+--   v_vigilante := public.get_meu_vigilante_id();
+--   PERFORM public.processar_pedidos_vencidos();
+--   SELECT coalesce(jsonb_object_agg(e.id, jsonb_build_object(
+--            'janela_inicio', e.data_hora_prevista - make_interval(mins => cfg.janela_substituicao_min),
+--            'escala_fixa', e.escala_fixa,
+--            -- O operador não lê o efetivo dos colegas pela RLS; sem isto a tela via toda
+--            -- escolta agendada como "sem equipe".
+--            'tem_equipe', EXISTS (SELECT 1 FROM public.escolta_efetivo ee WHERE ee.escolta_id = e.id),
+--            -- Nomes só para a gestão e para a própria equipe (a RLS de mural_presencas é assim).
+--            'presenca', CASE WHEN public._presenca_da_equipe(e.id) IS NULL THEN NULL
+--                             WHEN v_perfil IN ('administrador', 'gestor', 'supervisor', 'central')
+--                               OR EXISTS (SELECT 1 FROM public.escolta_efetivo ee WHERE ee.escolta_id = e.id AND ee.vigilante_id = v_vigilante)
+--                             THEN public._presenca_da_equipe(e.id) ELSE 'sim' END,
+--            'eu_confirmei', EXISTS (SELECT 1 FROM public.mural_presencas mp WHERE mp.escolta_id = e.id AND mp.vigilante_id = v_vigilante),
+--            'sou_da_equipe', EXISTS (SELECT 1 FROM public.escolta_efetivo ee WHERE ee.escolta_id = e.id AND ee.vigilante_id = v_vigilante),
+--            'pedido', (SELECT jsonb_build_object('id', p.id, 'expira_em', p.expira_em, 'meu', p.solicitante_usuario_id = v_usuario)
+--                       FROM public.mural_pedidos p WHERE p.escolta_id = e.id AND p.status = 'pendente'))), '{}'::jsonb)
+--     INTO v
+--   FROM public.escoltas e CROSS JOIN public.configuracoes_mural cfg
+--   WHERE e.id = ANY (p_escolta_ids) AND cfg.id = 1 AND e.status = 'agendada';
+--   RETURN v;
+-- END;
+-- $function$;
+--
+-- CREATE OR REPLACE FUNCTION public.enviar_avisos_telegram()
+--  RETURNS integer
+--  LANGUAGE plpgsql
+--  SECURITY DEFINER
+--  SET search_path TO 'public', 'pg_temp'
+-- AS $function$
+-- DECLARE
+--   r record; v_token text; v_central text; v_base text; v_chat text; v_req bigint; n int := 0;
+-- BEGIN
+--   IF NOT public.avisos_pelo_banco_ativos() THEN RETURN 0; END IF;
+--   EXECUTE $q$SELECT max(decrypted_secret) FILTER (WHERE name = 'telegram_bot_token'),
+--                     max(decrypted_secret) FILTER (WHERE name = 'telegram_chat_central')
+--              FROM vault.decrypted_secrets$q$ INTO v_token, v_central;
+--   SELECT telegram_api_base INTO v_base FROM public.configuracao_avisos WHERE id = 1;
+--   FOR r IN
+--     SELECT a.id, a.destino, a.texto, c.telegram_chat_id AS chat_cliente
+--     FROM public.avisos_telegram a
+--     LEFT JOIN public.escoltas e ON e.id = a.escolta_id
+--     LEFT JOIN public.clientes c ON c.id = e.cliente_id
+--     WHERE a.situacao = 'pendente'
+--     ORDER BY a.criado_em
+--     LIMIT 20
+--     FOR UPDATE OF a SKIP LOCKED
+--   LOOP
+--     v_chat := CASE WHEN r.destino = 'cliente' THEN coalesce(nullif(r.chat_cliente, ''), v_central) ELSE v_central END;
+--     UPDATE public.avisos_telegram SET situacao = 'enviando', enviado_em = now() WHERE id = r.id;
+--     EXECUTE $q$SELECT net.http_post(url := $1, body := $2, headers := '{"Content-Type": "application/json"}'::jsonb)$q$
+--       INTO v_req
+--       USING v_base || '/bot' || v_token || '/sendMessage',
+--             jsonb_build_object('chat_id', v_chat, 'text', r.texto, 'parse_mode', 'HTML', 'disable_web_page_preview', true);
+--     UPDATE public.avisos_telegram SET pg_net_id = v_req WHERE id = r.id;
+--     n := n + 1;
+--   END LOOP;
+--   RETURN n;
+-- END;
+-- $function$;
+--
+-- CREATE OR REPLACE FUNCTION public.registrar_etapa_escolta(p_escolta_id uuid, p_pontos jsonb DEFAULT '[]'::jsonb, p_status_atual text DEFAULT NULL::text, p_status_novo text DEFAULT NULL::text, p_observacao text DEFAULT NULL::text, p_latitude numeric DEFAULT NULL::numeric, p_longitude numeric DEFAULT NULL::numeric, p_observacao_fechamento text DEFAULT NULL::text, p_data_hora_prevista timestamp with time zone DEFAULT NULL::timestamp with time zone, p_tipo_ponto_todas uuid DEFAULT NULL::uuid)
+--  RETURNS jsonb
+--  LANGUAGE plpgsql
+--  SET search_path TO 'public', 'pg_temp'
+-- AS $function$
+-- DECLARE v_n int; v_faltando text[]; v_status text;
+-- BEGIN
+--   -- 0. Trava a escolta e confere a etapa ANTES de gravar qualquer coisa. Serializa duas
+--   --    viaturas do comboio registrando ao mesmo tempo (a segunda vê o ponto da primeira)
+--   --    e impede ponto de uma etapa que já passou.
+--   SELECT status INTO v_status FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
+--   IF v_status IS NULL THEN RAISE EXCEPTION 'Escolta nao encontrada.'; END IF;
+--   IF p_status_atual IS NOT NULL AND v_status IS DISTINCT FROM p_status_atual THEN
+--     RAISE EXCEPTION 'ERRO_SEM_TRANSICAO';
+--   END IF;
+--
+--   -- 1. Pontos de controle (todas as viaturas num statement só). Onda I: o autor é sempre
+--   --    quem está na sessão (em nome de quem fez); sem sessão (SQL), vale o informado.
+--   IF jsonb_array_length(coalesce(p_pontos, '[]'::jsonb)) > 0 THEN
+--     IF EXISTS (SELECT 1 FROM jsonb_to_recordset(p_pontos) AS x(escolta_veiculo_id uuid)
+--                WHERE NOT EXISTS (SELECT 1 FROM public.escolta_veiculos ev
+--                                  WHERE ev.id = x.escolta_veiculo_id AND ev.escolta_id = p_escolta_id)) THEN
+--       RAISE EXCEPTION 'Ponto de controle de viatura que nao pertence a esta escolta.';
+--     END IF;
+--     INSERT INTO public.pontos_controle (escolta_veiculo_id, tipo_ponto_id, data_hora, latitude, longitude,
+--                                         precisao_metros, sem_sinal_gps, foto_id, lancado_por, observacoes,
+--                                         sincronizado, criado_offline)
+--     SELECT x.escolta_veiculo_id, x.tipo_ponto_id, coalesce(x.data_hora, now()), x.latitude, x.longitude,
+--            x.precisao_metros, coalesce(x.sem_sinal_gps, false), x.foto_id,
+--            coalesce(public.get_meu_usuario_id(), x.lancado_por), x.observacoes,
+--            coalesce(x.sincronizado, true), coalesce(x.criado_offline, false)
+--     FROM jsonb_to_recordset(p_pontos) AS x(escolta_veiculo_id uuid, tipo_ponto_id uuid, data_hora timestamptz,
+--                                            latitude numeric, longitude numeric, precisao_metros numeric,
+--                                            sem_sinal_gps boolean, foto_id uuid, lancado_por uuid, observacoes text,
+--                                            sincronizado boolean, criado_offline boolean);
+--   END IF;
+--
+--   IF p_status_novo IS NULL THEN
+--     RETURN jsonb_build_object('ok', true, 'avancou', false);
+--   END IF;
+--
+--   -- 2. Comboio: a etapa só avança quando todas as viaturas registraram o ponto dela.
+--   --    Onda I: ponto anulado (etapa desfeita pela gestão) não conta.
+--   IF p_tipo_ponto_todas IS NOT NULL THEN
+--     SELECT array_agg(coalesce(ve.placa, 'sem placa') ORDER BY ev.criado_em) INTO v_faltando
+--     FROM public.escolta_veiculos ev
+--     LEFT JOIN public.veiculos ve ON ve.id = ev.veiculo_id
+--     WHERE ev.escolta_id = p_escolta_id
+--       AND NOT EXISTS (SELECT 1 FROM public.pontos_controle pc
+--                       WHERE pc.escolta_veiculo_id = ev.id AND pc.tipo_ponto_id = p_tipo_ponto_todas
+--                         AND pc.anulado_em IS NULL);
+--     IF v_faltando IS NOT NULL THEN
+--       RETURN jsonb_build_object('ok', true, 'avancou', false, 'faltando', to_jsonb(v_faltando));
+--     END IF;
+--   END IF;
+--
+--   -- 3. Status, com a guarda do status atual (a trigger valida a transição).
+--   UPDATE public.escoltas SET
+--          status = p_status_novo,
+--          observacao_fechamento = CASE
+--            WHEN p_status_novo IN ('finalizada', 'cancelada') THEN p_observacao_fechamento
+--            WHEN p_data_hora_prevista IS NOT NULL THEN NULL
+--            ELSE observacao_fechamento END,
+--          data_finalizacao = CASE WHEN p_status_novo = 'finalizada' THEN now() ELSE data_finalizacao END,
+--          data_hora_prevista = coalesce(p_data_hora_prevista, data_hora_prevista)
+--    WHERE id = p_escolta_id AND status = p_status_atual;
+--   GET DIAGNOSTICS v_n = ROW_COUNT;
+--   IF v_n = 0 THEN
+--     RAISE EXCEPTION 'ERRO_SEM_TRANSICAO';
+--   END IF;
+--
+--   -- 4. Histórico, com autor, na mesma transação. Onda I: via_rpc = true (escolta.historico_rpc).
+--   PERFORM set_config('escolta.historico_rpc', 'on', true);
+--   INSERT INTO public.escolta_status_historico (escolta_id, status_anterior, status_novo, alterado_por, data_hora,
+--                                                latitude, longitude, observacao)
+--   VALUES (p_escolta_id, p_status_atual, p_status_novo, public.get_meu_usuario_id(), now(),
+--           p_latitude, p_longitude, p_observacao);
+--   PERFORM set_config('escolta.historico_rpc', 'off', true);
+--
+--   RETURN jsonb_build_object('ok', true, 'avancou', true);
+-- END;
+-- $function$;
+--
+-- -- Privilégios das recriadas (CREATE OR REPLACE mantém os anteriores; repetidos por clareza).
+-- DO $$
+-- DECLARE f text;
+-- BEGIN
+--   FOREACH f IN ARRAY ARRAY['_conflito_comandante(uuid, uuid)', '_presenca_da_equipe(uuid)', '_executar_substituicao(uuid, text)',
+--                            'enviar_avisos_telegram()'] LOOP
+--     EXECUTE format('REVOKE ALL ON FUNCTION public.%s FROM PUBLIC, anon, authenticated', f);
+--   END LOOP;
+--   FOREACH f IN ARRAY ARRAY['assumir_escolta(uuid, uuid[], uuid, text)', 'puxar_escolta(uuid)', 'devolver_escolta(uuid)',
+--                            'incluir_vigilante_na_minha_escolta(uuid, uuid)', 'confirmar_presenca_base(uuid, numeric, numeric, numeric)',
+--                            'listar_pedidos_mural(timestamptz)', 'mural_info(uuid[])',
+--                            'registrar_etapa_escolta(uuid, jsonb, text, text, text, numeric, numeric, text, timestamptz, uuid)'] LOOP
+--     EXECUTE format('REVOKE ALL ON FUNCTION public.%s FROM PUBLIC, anon', f);
+--     EXECUTE format('GRANT EXECUTE ON FUNCTION public.%s TO authenticated', f);
+--   END LOOP;
+-- END $$;
 
 -- ──────── reverter 217_mural_central ────────
 -- -- 217_mural_central_reverter.sql
@@ -3209,6 +6174,507 @@ UNION ALL SELECT 'Telegram do check-in pelo cron (esperado true)', checkin_teleg
 -- DROP FUNCTION IF EXISTS public._equipe_atual(uuid);
 -- DROP FUNCTION IF EXISTS public._hora_br(timestamptz);
 -- DROP FUNCTION IF EXISTS public._travar_vigilante(uuid);
+
+-- ──────── reverter 214_poder_total_travas ────────
+-- -- 214_poder_total_travas_reverter.sql
+-- -- ORDEM: primeiro o git revert do código da onda I e o deploy; depois 218_reverter (bloco 2);
+-- -- então este arquivo; a 213 só depois dele. Aborta se a 218 ainda estiver aplicada.
+-- -- Recria os corpos anteriores (207, 208, 212 e o da produção para as triggers de status),
+-- -- tira as três triggers tr_impedir_edicao_escolta_iniciada e as três policies novas.
+-- DO $$
+-- BEGIN
+--   IF to_regprocedure('public.editar_escolta(uuid, jsonb, jsonb, text)') IS NOT NULL THEN
+--     RAISE EXCEPTION 'Reverta a 218 antes da 214.';
+--   END IF;
+-- END $$;
+--
+-- DROP POLICY IF EXISTS escoltas_arquivada_so_admin ON public.escoltas;
+-- DROP POLICY IF EXISTS pontos_insert_autor ON public.pontos_controle;
+-- DROP POLICY IF EXISTS escoltas_delete_so_rascunho ON public.escoltas;
+-- DROP TRIGGER IF EXISTS tr_impedir_edicao_escolta_iniciada ON public.escoltas;
+-- DROP TRIGGER IF EXISTS tr_impedir_edicao_escolta_iniciada ON public.escolta_veiculos;
+-- DROP TRIGGER IF EXISTS tr_impedir_edicao_escolta_iniciada ON public.escolta_efetivo;
+-- DROP FUNCTION IF EXISTS lote_interno.impedir_edicao_escolta_iniciada();
+--
+-- -- Corpos anteriores (copiados do banco montado na ordem dos blocos, antes da 214).
+-- CREATE OR REPLACE FUNCTION public.validar_transicao_status_escolta()
+--  RETURNS trigger
+--  LANGUAGE plpgsql
+--  SET search_path TO 'public', 'pg_temp'
+-- AS $function$
+-- DECLARE
+--   v_ok boolean := false;
+-- BEGIN
+--   IF OLD.status IS NOT DISTINCT FROM NEW.status THEN
+--     RETURN NEW;
+--   END IF;
+--
+--   IF NEW.status = 'cancelada' AND OLD.status NOT IN ('finalizada','cancelada') THEN
+--     RETURN NEW;
+--   END IF;
+--
+--   v_ok := (
+--     (OLD.status = 'rascunho'            AND NEW.status = 'agendada') OR
+--     (OLD.status = 'agendada'            AND NEW.status = 'em_pre_inicio') OR
+--     (OLD.status = 'em_pre_inicio'       AND NEW.status = 'em_andamento') OR
+--     (OLD.status = 'em_andamento'        AND NEW.status = 'na_origem') OR
+--     (OLD.status = 'na_origem'           AND NEW.status = 'em_transito_destino') OR
+--     (OLD.status = 'em_transito_destino' AND NEW.status = 'no_destino') OR
+--     (OLD.status = 'no_destino'          AND NEW.status = 'em_transito_retorno') OR
+--     (OLD.status = 'em_transito_retorno' AND NEW.status = 'retornando') OR
+--     (OLD.status = 'retornando'          AND NEW.status = 'na_base') OR
+--     (OLD.status = 'na_base'             AND NEW.status = 'finalizada')
+--   );
+--
+--   IF NOT v_ok AND COALESCE(NEW.fluxo_versao, 1) = 1 THEN
+--     v_ok := (
+--       (OLD.status = 'na_origem'  AND NEW.status = 'no_destino') OR
+--       (OLD.status = 'no_destino' AND NEW.status = 'retornando')
+--     );
+--   END IF;
+--
+--   IF NOT v_ok THEN
+--     RAISE EXCEPTION 'Transicao de status invalida: % para %', OLD.status, NEW.status
+--       USING ERRCODE = 'P0001';
+--   END IF;
+--
+--   RETURN NEW;
+-- END;
+-- $function$
+-- ;
+--
+-- CREATE OR REPLACE FUNCTION public.exigir_ponto_transito_retorno()
+--  RETURNS trigger
+--  LANGUAGE plpgsql
+--  SET search_path TO 'public', 'pg_temp'
+-- AS $function$
+-- DECLARE
+--   v_tem boolean;
+-- BEGIN
+--   IF NEW.status = 'na_base' AND OLD.status = 'retornando'
+--      AND COALESCE(NEW.fluxo_versao, 1) = 2 THEN
+--     SELECT EXISTS (
+--       SELECT 1
+--       FROM public.pontos_controle pc
+--       JOIN public.escolta_veiculos ev ON ev.id = pc.escolta_veiculo_id
+--       JOIN public.dom_tipos_ponto tp ON tp.id = pc.tipo_ponto_id
+--       WHERE ev.escolta_id = NEW.id
+--         AND tp.codigo = 'transito_retorno'
+--     ) INTO v_tem;
+--
+--     IF NOT v_tem THEN
+--       RAISE EXCEPTION 'Nao e possivel concluir o retorno sem registrar o ponto de Transito para o Retorno.'
+--         USING ERRCODE = 'P0001';
+--     END IF;
+--   END IF;
+--
+--   RETURN NEW;
+-- END;
+-- $function$
+-- ;
+--
+-- CREATE OR REPLACE FUNCTION public.verificar_checklist_pendente()
+--  RETURNS trigger
+--  LANGUAGE plpgsql
+--  SET search_path TO 'public', 'pg_temp'
+-- AS $function$
+-- DECLARE
+--   v_total_veiculos INTEGER;
+--   v_veiculos_ok INTEGER;
+-- BEGIN
+--   IF OLD.status = 'em_pre_inicio' AND NEW.status = 'em_andamento' THEN
+--     SELECT COUNT(*) INTO v_total_veiculos
+--     FROM escolta_veiculos WHERE escolta_id = NEW.id;
+--
+--     SELECT COUNT(DISTINCT ev.id) INTO v_veiculos_ok
+--     FROM escolta_veiculos ev
+--     WHERE ev.escolta_id = NEW.id
+--       AND EXISTS (
+--         SELECT 1 FROM checklists c
+--         WHERE c.escolta_veiculo_id = ev.id AND c.tipo = 'viatura' AND c.concluido = true
+--       )
+--       AND EXISTS (
+--         SELECT 1 FROM checklists c
+--         WHERE c.escolta_veiculo_id = ev.id AND c.tipo = 'material' AND c.concluido = true
+--       );
+--
+--     IF v_veiculos_ok < v_total_veiculos THEN
+--       NEW.checklist_pendente_no_inicio := true;
+--     END IF;
+--   END IF;
+--   RETURN NEW;
+-- END;
+-- $function$
+-- ;
+--
+-- CREATE OR REPLACE FUNCTION public.registrar_etapa_escolta(p_escolta_id uuid, p_pontos jsonb DEFAULT '[]'::jsonb, p_status_atual text DEFAULT NULL::text, p_status_novo text DEFAULT NULL::text, p_observacao text DEFAULT NULL::text, p_latitude numeric DEFAULT NULL::numeric, p_longitude numeric DEFAULT NULL::numeric, p_observacao_fechamento text DEFAULT NULL::text, p_data_hora_prevista timestamp with time zone DEFAULT NULL::timestamp with time zone, p_tipo_ponto_todas uuid DEFAULT NULL::uuid)
+--  RETURNS jsonb
+--  LANGUAGE plpgsql
+--  SET search_path TO 'public', 'pg_temp'
+-- AS $function$
+-- DECLARE v_n int; v_faltando text[]; v_status text;
+-- BEGIN
+--   -- 0. Trava a escolta e confere a etapa ANTES de gravar qualquer coisa. Serializa duas
+--   --    viaturas do comboio registrando ao mesmo tempo (a segunda vê o ponto da primeira)
+--   --    e impede ponto de uma etapa que já passou.
+--   SELECT status INTO v_status FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
+--   IF v_status IS NULL THEN RAISE EXCEPTION 'Escolta nao encontrada.'; END IF;
+--   IF p_status_atual IS NOT NULL AND v_status IS DISTINCT FROM p_status_atual THEN
+--     RAISE EXCEPTION 'ERRO_SEM_TRANSICAO';
+--   END IF;
+--
+--   -- 1. Pontos de controle (todas as viaturas num statement só).
+--   IF jsonb_array_length(coalesce(p_pontos, '[]'::jsonb)) > 0 THEN
+--     IF EXISTS (SELECT 1 FROM jsonb_to_recordset(p_pontos) AS x(escolta_veiculo_id uuid)
+--                WHERE NOT EXISTS (SELECT 1 FROM public.escolta_veiculos ev
+--                                  WHERE ev.id = x.escolta_veiculo_id AND ev.escolta_id = p_escolta_id)) THEN
+--       RAISE EXCEPTION 'Ponto de controle de viatura que nao pertence a esta escolta.';
+--     END IF;
+--     INSERT INTO public.pontos_controle (escolta_veiculo_id, tipo_ponto_id, data_hora, latitude, longitude,
+--                                         precisao_metros, sem_sinal_gps, foto_id, lancado_por, observacoes,
+--                                         sincronizado, criado_offline)
+--     SELECT x.escolta_veiculo_id, x.tipo_ponto_id, coalesce(x.data_hora, now()), x.latitude, x.longitude,
+--            x.precisao_metros, coalesce(x.sem_sinal_gps, false), x.foto_id, x.lancado_por, x.observacoes,
+--            coalesce(x.sincronizado, true), coalesce(x.criado_offline, false)
+--     FROM jsonb_to_recordset(p_pontos) AS x(escolta_veiculo_id uuid, tipo_ponto_id uuid, data_hora timestamptz,
+--                                            latitude numeric, longitude numeric, precisao_metros numeric,
+--                                            sem_sinal_gps boolean, foto_id uuid, lancado_por uuid, observacoes text,
+--                                            sincronizado boolean, criado_offline boolean);
+--   END IF;
+--
+--   IF p_status_novo IS NULL THEN
+--     RETURN jsonb_build_object('ok', true, 'avancou', false);
+--   END IF;
+--
+--   -- 2. Comboio: a etapa só avança quando todas as viaturas registraram o ponto dela.
+--   IF p_tipo_ponto_todas IS NOT NULL THEN
+--     SELECT array_agg(coalesce(ve.placa, 'sem placa') ORDER BY ev.criado_em) INTO v_faltando
+--     FROM public.escolta_veiculos ev
+--     LEFT JOIN public.veiculos ve ON ve.id = ev.veiculo_id
+--     WHERE ev.escolta_id = p_escolta_id
+--       AND NOT EXISTS (SELECT 1 FROM public.pontos_controle pc
+--                       WHERE pc.escolta_veiculo_id = ev.id AND pc.tipo_ponto_id = p_tipo_ponto_todas);
+--     IF v_faltando IS NOT NULL THEN
+--       RETURN jsonb_build_object('ok', true, 'avancou', false, 'faltando', to_jsonb(v_faltando));
+--     END IF;
+--   END IF;
+--
+--   -- 3. Status, com a guarda do status atual (a trigger valida a transição).
+--   UPDATE public.escoltas SET
+--          status = p_status_novo,
+--          observacao_fechamento = CASE
+--            WHEN p_status_novo IN ('finalizada', 'cancelada') THEN p_observacao_fechamento
+--            WHEN p_data_hora_prevista IS NOT NULL THEN NULL
+--            ELSE observacao_fechamento END,
+--          data_finalizacao = CASE WHEN p_status_novo = 'finalizada' THEN now() ELSE data_finalizacao END,
+--          data_hora_prevista = coalesce(p_data_hora_prevista, data_hora_prevista)
+--    WHERE id = p_escolta_id AND status = p_status_atual;
+--   GET DIAGNOSTICS v_n = ROW_COUNT;
+--   IF v_n = 0 THEN
+--     RAISE EXCEPTION 'ERRO_SEM_TRANSICAO';
+--   END IF;
+--
+--   -- 4. Histórico, com autor, na mesma transação.
+--   INSERT INTO public.escolta_status_historico (escolta_id, status_anterior, status_novo, alterado_por, data_hora,
+--                                                latitude, longitude, observacao)
+--   VALUES (p_escolta_id, p_status_atual, p_status_novo, public.get_meu_usuario_id(), now(),
+--           p_latitude, p_longitude, p_observacao);
+--
+--   RETURN jsonb_build_object('ok', true, 'avancou', true);
+-- END;
+-- $function$
+-- ;
+--
+-- CREATE OR REPLACE FUNCTION lote_interno.enfileirar_alerta_checkin(p_escolta_id uuid)
+--  RETURNS jsonb
+--  LANGUAGE plpgsql
+--  SECURITY DEFINER
+--  SET search_path TO 'public', 'pg_temp'
+-- AS $function$
+-- DECLARE e record; v_ultima timestamptz; v_atraso int; v_ok boolean; v_chave text;
+-- BEGIN
+--   SELECT es.id, es.codigo_escolta, es.status, es.periodicidade_checkin_min, c.nome_cliente INTO e
+--   FROM public.escoltas es JOIN public.clientes c ON c.id = es.cliente_id WHERE es.id = p_escolta_id;
+--   IF e.id IS NULL OR e.periodicidade_checkin_min IS NULL
+--      OR e.status NOT IN ('em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando') THEN
+--     RETURN jsonb_build_object('enfileirado', false, 'motivo', 'sem check-in periodico');
+--   END IF;
+--   -- Regra antiga (pendência 0.3 de docs/12): qualquer PARADA zera o prazo; sem nenhuma, não notifica.
+--   SELECT max(pc.data_hora) INTO v_ultima
+--   FROM public.pontos_controle pc JOIN public.escolta_veiculos ev ON ev.id = pc.escolta_veiculo_id
+--   WHERE ev.escolta_id = p_escolta_id AND pc.tipo_ponto_id = 'e1601f15-5ef9-44e8-abd0-17f65b3aa760';
+--   IF v_ultima IS NULL THEN RETURN jsonb_build_object('enfileirado', false, 'motivo', 'sem parada'); END IF;
+--   v_atraso := floor(extract(epoch FROM (now() - v_ultima)) / 60) - e.periodicidade_checkin_min;
+--   IF v_atraso < 1 THEN RETURN jsonb_build_object('enfileirado', false, 'motivo', 'em dia'); END IF;
+--   -- Uma mensagem por período vencido sem check-in (chave: escolta, última parada e
+--   -- número do período).
+--   v_chave := 'checkin:' || p_escolta_id || ':' || extract(epoch FROM v_ultima)::bigint
+--              || ':' || floor(v_atraso::numeric / e.periodicidade_checkin_min)::int;
+--   -- Já mandada por um navegador (reservar_alertas_checkin): não manda de novo.
+--   IF EXISTS (SELECT 1 FROM public.avisos_reservados WHERE chave = v_chave) THEN
+--     RETURN jsonb_build_object('enfileirado', false, 'motivo', 'enviado pelo navegador');
+--   END IF;
+--   v_ok := public._enfileirar_aviso(v_chave, 'cliente', p_escolta_id,
+--     '<b>Alerta: check-in em atraso</b>' || E'\n'
+--     || 'Escolta: <code>' || public.escapar_html(e.codigo_escolta) || '</code> · ' || public.escapar_html(e.nome_cliente) || E'\n'
+--     || 'Sem check-in há ' || (v_atraso + e.periodicidade_checkin_min) || ' minutos (periodicidade de '
+--     || e.periodicidade_checkin_min || ' min).' || E'\n'
+--     || 'Registrado em ' || to_char(now() AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY HH24:MI') || ' (Brasília)');
+--   RETURN jsonb_build_object('enfileirado', v_ok);
+-- END;
+-- $function$
+-- ;
+--
+-- CREATE OR REPLACE FUNCTION lote_interno.gerar_avisos_checkin(p_agora timestamp with time zone DEFAULT now())
+--  RETURNS integer
+--  LANGUAGE plpgsql
+--  SECURITY DEFINER
+--  SET search_path TO 'public', 'pg_temp'
+-- AS $function$
+-- DECLARE
+--   r record; v_gestao uuid[]; v_n int := 0; v_decorrido numeric; v_atraso int; v_periodo int; v_telegram boolean;
+-- BEGIN
+--   SELECT coalesce(array_agg(u.id), '{}') INTO v_gestao
+--   FROM public.usuarios u JOIN public.dom_perfis p ON p.id = u.perfil_id
+--   WHERE u.status = 'ativo' AND p.codigo IN ('administrador', 'gestor', 'supervisor', 'central');
+--   v_telegram := public.avisos_pelo_banco_ativos()
+--                 AND coalesce((SELECT checkin_telegram_pelo_cron FROM public.configuracao_avisos WHERE id = 1), false);
+--
+--   FOR r IN
+--     SELECT e.id, e.codigo_escolta, e.periodicidade_checkin_min AS per, c.nome_cliente,
+--            coalesce(
+--              (SELECT max(pc.data_hora) FROM public.pontos_controle pc
+--                 JOIN public.escolta_veiculos ev ON ev.id = pc.escolta_veiculo_id
+--                WHERE ev.escolta_id = e.id AND pc.tipo_ponto_id = 'e1601f15-5ef9-44e8-abd0-17f65b3aa760'
+--                  AND lote_interno.tipo_da_observacao(pc.observacoes) = 'reporte_periodico'),
+--              (SELECT min(pc.data_hora) FROM public.pontos_controle pc
+--                 JOIN public.escolta_veiculos ev ON ev.id = pc.escolta_veiculo_id
+--                WHERE ev.escolta_id = e.id),
+--              e.data_hora_prevista) AS referencia
+--     FROM public.escoltas e JOIN public.clientes c ON c.id = e.cliente_id
+--     WHERE e.periodicidade_checkin_min > 0
+--       AND e.status IN ('em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando')
+--   LOOP
+--     -- Aviso na central: erro numa escolta (usuário apagado entre a leitura e o INSERT, tipo
+--     -- ausente) fica nela e vira WARNING; o ciclo segue.
+--     BEGIN
+--       IF r.referencia IS NOT NULL THEN
+--         v_decorrido := extract(epoch FROM (p_agora - r.referencia));
+--         -- Mesmo arredondamento de minutosAteCheckin: atraso = -floor((per*60 - decorrido) / 60).
+--         v_atraso := -floor((r.per * 60 - v_decorrido) / 60)::int;
+--         IF v_atraso >= 1 THEN
+--           -- Período n: de n a n+1 periodicidades decorridas (o 1º vence com a periodicidade).
+--           v_periodo := ceil(v_decorrido / (r.per * 60))::int - 1;
+--           v_n := v_n + lote_interno.notificar(
+--             'checkin:' || r.id || ':' || floor(extract(epoch FROM r.referencia))::bigint || ':' || v_periodo,
+--             r.id, 'checkin_vencido',
+--             ARRAY(SELECT v.usuario_id FROM public.escolta_efetivo ee JOIN public.vigilantes v ON v.id = ee.vigilante_id
+--                    WHERE ee.escolta_id = r.id AND v.usuario_id IS NOT NULL) || v_gestao,
+--             'Check-in atrasado: ' || r.codigo_escolta,
+--             'Escolta ' || r.codigo_escolta || ' · ' || r.nome_cliente || ': sem check-in há ' || (v_atraso + r.per)
+--               || ' min (periodicidade de ' || r.per || ' min, ' || v_atraso || ' min de atraso). Prazo vencido em '
+--               || to_char((r.referencia + make_interval(mins => r.per * v_periodo)) AT TIME ZONE 'America/Sao_Paulo', 'DD/MM/YYYY HH24:MI')
+--               || ' (Brasília).',
+--             jsonb_build_object('referencia', r.referencia, 'periodo', v_periodo, 'periodicidade_min', r.per));
+--         END IF;
+--       END IF;
+--     EXCEPTION WHEN others THEN
+--       RAISE WARNING 'gerar_avisos_checkin: aviso da escolta % falhou: %', r.id, SQLERRM;
+--     END;
+--     -- Telegram pela regra antiga (a função decide); erro numa escolta não para o ciclo.
+--     IF v_telegram THEN
+--       BEGIN
+--         PERFORM lote_interno.enfileirar_alerta_checkin(r.id);
+--       EXCEPTION WHEN others THEN
+--         RAISE WARNING 'gerar_avisos_checkin: Telegram da escolta % falhou: %', r.id, SQLERRM;
+--       END;
+--     END IF;
+--   END LOOP;
+--
+--   DELETE FROM public.notificacoes WHERE lida AND lida_em < p_agora - interval '90 days';
+--   RETURN v_n;
+-- END;
+-- $function$
+-- ;
+--
+-- CREATE OR REPLACE FUNCTION public.reservar_alertas_checkin()
+--  RETURNS jsonb
+--  LANGUAGE plpgsql
+--  SECURITY DEFINER
+--  SET search_path TO 'public', 'pg_temp'
+-- AS $function$
+-- DECLARE
+--   v_perfil text; v_eu uuid; v_gestao boolean; r record; v_ultima timestamptz; v_atraso int;
+--   v_chave text; v_n int; v_saida jsonb := '[]'::jsonb;
+-- BEGIN
+--   SELECT public.get_meu_perfil() INTO v_perfil;
+--   IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessão inválida.'; END IF;
+--   -- O cron manda: nada para o navegador.
+--   IF public.avisos_pelo_banco_ativos()
+--      AND coalesce((SELECT checkin_telegram_pelo_cron FROM public.configuracao_avisos WHERE id = 1), false) THEN
+--     RETURN v_saida;
+--   END IF;
+--   v_eu := public.get_meu_usuario_id();
+--   v_gestao := v_perfil IN ('administrador', 'gestor', 'supervisor', 'central');
+--   FOR r IN
+--     SELECT e.id, e.codigo_escolta, e.status, e.periodicidade_checkin_min AS per, c.nome_cliente
+--     FROM public.escoltas e JOIN public.clientes c ON c.id = e.cliente_id
+--     WHERE e.periodicidade_checkin_min > 0
+--       AND e.status IN ('em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando')
+--       AND (v_gestao OR public.sou_do_efetivo(e.id))
+--   LOOP
+--     -- Regra antiga (pendência 0.3), a mesma de lote_interno.enfileirar_alerta_checkin.
+--     SELECT max(pc.data_hora) INTO v_ultima
+--     FROM public.pontos_controle pc JOIN public.escolta_veiculos ev ON ev.id = pc.escolta_veiculo_id
+--     WHERE ev.escolta_id = r.id AND pc.tipo_ponto_id = 'e1601f15-5ef9-44e8-abd0-17f65b3aa760';
+--     CONTINUE WHEN v_ultima IS NULL;
+--     v_atraso := floor(extract(epoch FROM (now() - v_ultima)) / 60) - r.per;
+--     CONTINUE WHEN v_atraso < 1;
+--     v_chave := 'checkin:' || r.id || ':' || extract(epoch FROM v_ultima)::bigint || ':' || floor(v_atraso::numeric / r.per)::int;
+--     -- Já enfileirada pelo cron (envio pelo banco ligado há pouco): não manda de novo.
+--     CONTINUE WHEN EXISTS (SELECT 1 FROM public.avisos_telegram WHERE evento_chave = v_chave);
+--     INSERT INTO public.avisos_reservados (chave, usuario_id) VALUES (v_chave, v_eu) ON CONFLICT (chave) DO NOTHING;
+--     GET DIAGNOSTICS v_n = ROW_COUNT;
+--     CONTINUE WHEN v_n = 0;
+--     v_saida := v_saida || jsonb_build_object(
+--       'escolta_id', r.id, 'codigo', r.codigo_escolta, 'cliente', r.nome_cliente, 'status', r.status,
+--       'atraso_min', v_atraso, 'periodicidade_min', r.per,
+--       'efetivos', coalesce((SELECT jsonb_agg(v.nome_completo || coalesce(' (' || ee.papel_na_escolta || ')', '') ORDER BY ee.papel_na_escolta, v.nome_completo)
+--                             FROM public.escolta_efetivo ee JOIN public.vigilantes v ON v.id = ee.vigilante_id
+--                             WHERE ee.escolta_id = r.id), '[]'::jsonb));
+--   END LOOP;
+--   RETURN v_saida;
+-- END;
+-- $function$
+-- ;
+--
+-- CREATE OR REPLACE FUNCTION public.reservar_aviso_presenca(p_presenca_id uuid)
+--  RETURNS boolean
+--  LANGUAGE plpgsql
+--  SECURITY DEFINER
+--  SET search_path TO 'public', 'pg_temp'
+-- AS $function$
+-- DECLARE v_perfil text; v_esc uuid; v_n int;
+-- BEGIN
+--   SELECT public.get_meu_perfil() INTO v_perfil;
+--   IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+--   SELECT escolta_id INTO v_esc FROM public.presencas WHERE id = p_presenca_id;
+--   IF v_esc IS NULL THEN RETURN false; END IF;
+--   IF v_perfil NOT IN ('administrador', 'gestor', 'supervisor', 'central') AND NOT public.sou_do_efetivo(v_esc) THEN
+--     RETURN false;
+--   END IF;
+--   INSERT INTO public.avisos_reservados (chave, usuario_id) VALUES ('presenca:' || p_presenca_id, public.get_meu_usuario_id())
+--   ON CONFLICT (chave) DO NOTHING;
+--   GET DIAGNOSTICS v_n = ROW_COUNT;
+--   RETURN v_n = 1;
+-- END;
+-- $function$
+-- ;
+--
+-- REVOKE ALL ON FUNCTION public.registrar_etapa_escolta(uuid, jsonb, text, text, text, numeric, numeric, text, timestamptz, uuid) FROM PUBLIC, anon;
+-- GRANT EXECUTE ON FUNCTION public.registrar_etapa_escolta(uuid, jsonb, text, text, text, numeric, numeric, text, timestamptz, uuid) TO authenticated;
+-- REVOKE ALL ON FUNCTION lote_interno.enfileirar_alerta_checkin(uuid) FROM PUBLIC, anon, authenticated;
+-- REVOKE ALL ON FUNCTION lote_interno.gerar_avisos_checkin(timestamptz) FROM PUBLIC, anon, authenticated;
+-- REVOKE ALL ON FUNCTION public.reservar_alertas_checkin() FROM PUBLIC, anon;
+-- GRANT EXECUTE ON FUNCTION public.reservar_alertas_checkin() TO authenticated;
+-- REVOKE ALL ON FUNCTION public.reservar_aviso_presenca(uuid) FROM PUBLIC, anon;
+-- GRANT EXECUTE ON FUNCTION public.reservar_aviso_presenca(uuid) TO authenticated;
+
+-- ──────── reverter 213_poder_total_estrutura ────────
+-- -- 213_poder_total_estrutura_reverter.sql
+-- -- ORDEM: primeiro o git revert do código da onda I e o deploy; depois 218_reverter (bloco 2)
+-- -- e 214_reverter; só então este arquivo. Aborta se a 214 ainda estiver aplicada.
+-- -- Guarda em backup_20261008 as colunas novas que tiverem valor (arquivamento, versão, anulação,
+-- -- carimbo e via_rpc) e as linhas inteiras de escolta_resets e escolta_conclusoes_antecipadas;
+-- -- depois remove a estrutura da 213. Nenhum registro de campo é apagado.
+-- DO $$
+-- BEGIN
+--   IF to_regprocedure('lote_interno.impedir_edicao_escolta_iniciada()') IS NOT NULL THEN
+--     RAISE EXCEPTION 'Reverta a 214 antes da 213.';
+--   END IF;
+-- END $$;
+--
+-- CREATE SCHEMA IF NOT EXISTS backup_20261008;
+-- REVOKE ALL ON SCHEMA backup_20261008 FROM PUBLIC, anon, authenticated;
+-- CREATE TABLE IF NOT EXISTS backup_20261008.poder_total_colunas (
+--   tabela     text NOT NULL,
+--   id         uuid NOT NULL,
+--   dados      jsonb NOT NULL,
+--   gravado_em timestamptz NOT NULL DEFAULT now()
+-- );
+-- CREATE TABLE IF NOT EXISTS backup_20261008.poder_total_linhas (
+--   tabela     text NOT NULL,
+--   linha      jsonb NOT NULL,
+--   gravado_em timestamptz NOT NULL DEFAULT now()
+-- );
+-- REVOKE ALL ON backup_20261008.poder_total_colunas FROM PUBLIC, anon, authenticated;
+-- REVOKE ALL ON backup_20261008.poder_total_linhas FROM PUBLIC, anon, authenticated;
+--
+-- DO $$
+-- DECLARE t text;
+-- BEGIN
+--   IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'escoltas' AND column_name = 'versao_gestao') THEN
+--     EXECUTE $q$
+--       INSERT INTO backup_20261008.poder_total_colunas (tabela, id, dados)
+--       SELECT 'escoltas', id, jsonb_build_object('arquivada_em', arquivada_em, 'arquivada_por', arquivada_por,
+--              'motivo_arquivamento', motivo_arquivamento, 'reiniciada_em', reiniciada_em, 'versao_gestao', versao_gestao)
+--       FROM public.escoltas
+--       WHERE arquivada_em IS NOT NULL OR reiniciada_em IS NOT NULL OR versao_gestao <> 0 OR motivo_arquivamento IS NOT NULL$q$;
+--   END IF;
+--   FOREACH t IN ARRAY ARRAY['pontos_controle', 'checklists', 'ocorrencias', 'emergencias', 'presencas', 'mural_presencas',
+--                            'atualizacoes_status', 'rastreamento', 'escolta_status_historico']
+--   LOOP
+--     IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = t AND column_name = 'anulado_em') THEN
+--       EXECUTE format($q$
+--         INSERT INTO backup_20261008.poder_total_colunas (tabela, id, dados)
+--         SELECT %L, id, jsonb_build_object('anulado_em', anulado_em, 'anulado_por', anulado_por, 'motivo_anulacao', motivo_anulacao,
+--                'anulacao_id', anulacao_id, 'status_escolta_no_registro', status_escolta_no_registro)
+--                || CASE WHEN %L = 'escolta_status_historico' THEN jsonb_build_object('via_rpc', to_jsonb(x) -> 'via_rpc') ELSE '{}'::jsonb END
+--         FROM public.%I x
+--         WHERE anulado_em IS NOT NULL OR status_escolta_no_registro IS NOT NULL$q$, t, t, t);
+--     END IF;
+--   END LOOP;
+--   IF to_regclass('public.escolta_resets') IS NOT NULL THEN
+--     INSERT INTO backup_20261008.poder_total_linhas (tabela, linha) SELECT 'escolta_resets', to_jsonb(r) FROM public.escolta_resets r;
+--   END IF;
+--   IF to_regclass('public.escolta_conclusoes_antecipadas') IS NOT NULL THEN
+--     INSERT INTO backup_20261008.poder_total_linhas (tabela, linha)
+--     SELECT 'escolta_conclusoes_antecipadas', to_jsonb(c) FROM public.escolta_conclusoes_antecipadas c;
+--   END IF;
+-- END $$;
+--
+-- DROP VIEW IF EXISTS public.vw_pendencias_conclusao;
+-- DROP TABLE IF EXISTS public.escolta_conclusoes_antecipadas;
+-- DROP TABLE IF EXISTS public.escolta_resets;
+--
+-- DROP TRIGGER IF EXISTS tr_preencher_lancado_por ON public.pontos_controle;
+-- DROP TRIGGER IF EXISTS tr_travar_colunas_gestao_escoltas ON public.escoltas;
+-- DO $$
+-- DECLARE t text;
+-- BEGIN
+--   FOREACH t IN ARRAY ARRAY['pontos_controle', 'checklists', 'ocorrencias', 'emergencias', 'presencas', 'mural_presencas',
+--                            'atualizacoes_status', 'rastreamento', 'escolta_status_historico']
+--   LOOP
+--     EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I', 'tr_carimbar_etapa_' || t, t);
+--     EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I', 'tr_travar_colunas_gestao_' || t, t);
+--     EXECUTE format('ALTER TABLE public.%I DROP COLUMN IF EXISTS anulado_em, DROP COLUMN IF EXISTS anulado_por,
+--                     DROP COLUMN IF EXISTS motivo_anulacao, DROP COLUMN IF EXISTS anulacao_id,
+--                     DROP COLUMN IF EXISTS status_escolta_no_registro', t);
+--   END LOOP;
+-- END $$;
+-- DROP INDEX IF EXISTS public.idx_anulacao_pontos;
+-- ALTER TABLE public.escolta_status_historico DROP COLUMN IF EXISTS via_rpc;
+-- DROP FUNCTION IF EXISTS lote_interno.carimbar_etapa();
+-- DROP FUNCTION IF EXISTS lote_interno.travar_colunas_gestao();
+-- DROP FUNCTION IF EXISTS lote_interno.preencher_lancado_por();
+--
+-- DROP INDEX IF EXISTS public.idx_escoltas_nao_arquivadas;
+-- ALTER TABLE public.escoltas
+--   DROP COLUMN IF EXISTS arquivada_em,
+--   DROP COLUMN IF EXISTS arquivada_por,
+--   DROP COLUMN IF EXISTS motivo_arquivamento,
+--   DROP COLUMN IF EXISTS reiniciada_em,
+--   DROP COLUMN IF EXISTS versao_gestao;
 
 -- ──────── reverter 212_aviso_checkin_servidor ────────
 -- -- 212_aviso_checkin_servidor_reverter.sql
