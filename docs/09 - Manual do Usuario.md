@@ -232,6 +232,19 @@ O botão **Cancelar** exige um motivo, que fica registrado. O cancelamento é po
 
 `[PRINT P21]`
 
+### A3.7 Ações da gestão (gestor e administrador)
+
+Na tela da escolta, o botão **Ações da gestão** (canto superior) aparece só para gestor e administrador. Toda ação pede **motivo** (mínimo de 10 caracteres) e a marcação "Li a lista acima e confirmo", fica na Auditoria e no histórico da escolta, e avisa a supervisão e a equipe na Central de avisos e no chat central do Telegram. **Nada é apagado**: o que é desfeito fica **anulado**, riscado na Timeline com a etiqueta "Anulado em DD/MM/AAAA HH:MM (Brasília) por Nome: motivo", e não conta em relatório, PDF, indicadores nem no Campo.
+
+- **Editar escolta:** abre o formulário em qualquer status. Com a escolta já iniciada, a revisão pede o motivo. Os registros de campo não mudam; viatura que já registrou algo não sai nem troca de placa; vigilante e placa não se repetem. Supervisor e central editam só escolta em rascunho ou agendada (a central não mexe na equipe).
+- **Voltar uma etapa:** a escolta volta para a etapa imediatamente anterior da sequência (de uma escolta concluída com pendências, volta ao status em que ela estava). Antes de confirmar, a tela mostra a lista do que será anulado (pontos, checklists, fotos, KM e linhas do histórico da etapa desfeita). A equipe refaz a etapa: o Campo pede de novo a foto. Voltar do Pré-Início leva a Agendada e tem o efeito do zerar.
+- **Zerar para agendada:** todos os registros de campo ficam anulados; equipe e viaturas continuam. A escolta volta ao mural com a etiqueta **Reiniciada pela gestão**, a presença na base precisa ser confirmada de novo e o pré-início é refeito do começo. Se a data prevista passou, reagende.
+- **Concluir agora:** mostra o que não foi feito, por etapa e por viatura, e conclui com a observação, que vai para o relatório final. A escolta ganha a faixa **Concluída com pendências** (detalhe, lista, impressão e PDF) e aparece na tela **Pendências de conclusão** (supervisor ou acima, com filtro de período e cliente). A lista de escoltas tem o filtro "Concluída com pendências".
+- **Arquivar:** só rascunho, agendada, finalizada ou cancelada (em andamento, conclua ou cancele antes). A escolta some das listas, do mural, do Campo, do mapa e dos indicadores. O administrador vê em **Arquivadas** (motivo, autor e data) e pode **Recuperar**, também com motivo; ela volta no status em que estava.
+- Não é possível voltar nem zerar com **emergência aberta**: encerre a emergência antes. Escolta não pode ser apagada pelo sistema, só arquivada (exceto rascunho sem registro, pelo administrador).
+- Gestor e administrador também registram ponto, check-in, checklist, foto e etapa sem estar na equipe; o registro fica em nome de quem fez. No Campo, eles veem também as agendadas de qualquer equipe e o botão "Voltar ao Painel Guiado".
+- Logo depois de uma atualização do sistema, por alguns minutos, as ações podem mostrar "Atualização em andamento". Tente de novo em seguida.
+
 ## A4. Acompanhamento em tempo real
 
 Além da tela de detalhe, o Supervisor tem duas telas de monitoramento.
