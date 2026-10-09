@@ -14,6 +14,9 @@ import { AiTextButton } from '@/components/ui/ai-text-button'
 import { AtalhosLocais } from '@/components/endereco/atalhos-locais'
 import { ConferenciaCoordenada } from '@/components/endereco/conferencia-coordenada'
 import { LocalSalvo, carregarLocaisAtivos, PERFIS_CADASTRAM_LOCAL } from '@/lib/locais'
+import { PODE_PODER_TOTAL, temPermissao } from '@/lib/permissions'
+import { MSG_ATUALIZACAO, ehFuncaoAusente } from '@/lib/gestao'
+import { rotuloStatus } from '@/lib/fluxo-escolta'
 
 // ─── Palette ──────────────────────────────────────────────────────────────────
 const P = {
@@ -39,7 +42,8 @@ interface VigilanteOpt  { id: string; nome_completo: string; funcao: { nome: str
 interface MembroForm    { uid: string; vigilante_id: string; papel_na_escolta: 'comandante' | 'operador'; valor_pago: string }
 
 const PERFIS_FINANCEIRO = ['administrador', 'gestor', 'supervisor']
-interface ViaturaForm   { uid: string; veiculo_id: string; membros: MembroForm[] }
+// Onda I: escolta_veiculo_id da linha gravada; a edição grava por diferença (editar_escolta).
+interface ViaturaForm   { uid: string; veiculo_id: string; membros: MembroForm[]; escolta_veiculo_id?: string | null }
 interface DadosBasicos  {
   cliente_id: string
   data_prevista: string
@@ -415,6 +419,10 @@ function FormularioEscolta() {
   const editandoId = params.get('editar')
   const [carregandoEdicao, setCarregandoEdicao] = useState(!!editandoId)
   const [bloqueioEdicao, setBloqueioEdicao] = useState<string | null>(null)
+  // Onda I: status da escolta em edição e motivo (obrigatório fora de rascunho e agendada).
+  const [statusEdicao, setStatusEdicao] = useState<string | null>(null)
+  const [motivoEdicao, setMotivoEdicao] = useState('')
+  const edicaoIniciada = !!editandoId && !!statusEdicao && !['rascunho', 'agendada'].includes(statusEdicao)
   const [valorCobrado, setValorCobrado] = useState('')
   const [outrosCustos, setOutrosCustos] = useState('')
   const [obsFinanceiro, setObsFinanceiro] = useState('')
@@ -484,11 +492,9 @@ function FormularioEscolta() {
       if (!e) { setBloqueioEdicao('Escolta não encontrada.'); return }
 
       // A trava real esta no banco; aqui e so para nao abrir um formulario que nao vai
-      // conseguir salvar.
-      if (!['rascunho', 'agendada'].includes(e.status)) {
-        setBloqueioEdicao('Esta escolta já começou e não pode mais ser editada. Para corrigir algo, fale com a gestão.')
-        return
-      }
+      // conseguir salvar. Onda I: gestor e administrador editam em qualquer status (a
+      // conferência do perfil fica no render, depois de o usuário carregar).
+      setStatusEdicao(e.status)
 
       const dt = new Date(e.data_hora_prevista)
       const meta = (e.metadados ?? {}) as ComplementosSalvos
@@ -523,6 +529,7 @@ function FormularioEscolta() {
       setViaturas(vts.length
         ? vts.map((v) => ({
             uid: uid(),
+            escolta_veiculo_id: v.id,
             veiculo_id: v.veiculo_id ?? '',
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             membros: (v.efetivo ?? []).map((m: any) => ({
@@ -676,37 +683,35 @@ function FormularioEscolta() {
       const valorPagoAntes = new Map<string, number | null>()
 
       if (editandoId) {
-        // A precondicao de status vive junto do update: se a escolta tiver comecado
-        // enquanto o formulario estava aberto, nenhuma linha casa e o salvamento para,
-        // em vez de sobrescrever dados de uma operacao em andamento.
-        const { data: atualizadas, error: eU } = await sb
-          .from('escoltas')
-          .update(camposEscolta)
-          .eq('id', editandoId)
-          .in('status', ['rascunho', 'agendada'])
-          .select('id')
-        if (eU) throw new Error(eU.message)
-        if (!atualizadas || atualizadas.length === 0) {
-          throw new Error('A escolta já começou enquanto você editava. Recarregue a página: as alterações não foram salvas.')
+        // Onda I: edição pela RPC editar_escolta (migration 218), numa transação, por
+        // diferença: viatura mantida pelo escolta_veiculo_id, nova inserida, retirada só sem
+        // registro de campo (S9). Nada é apagado e recriado; o combustível e o valor pago de
+        // quem continua ficam como estão. O banco confere perfil e status.
+        if (edicaoIniciada && motivoEdicao.trim().length < 10) {
+          throw new Error('Informe o motivo da alteração (mínimo de 10 caracteres): a escolta já começou.')
         }
-        escoltaId = editandoId
-
-        // Viaturas e efetivo sao substituidos por inteiro. Trocar linha a linha exigiria
-        // casar o que ficou, o que saiu e o que entrou, e o ganho nao paga o risco de
-        // deixar vinculo orfao. Como a escolta ainda nao comecou, nao ha ponto de
-        // controle nem foto apontando para essas linhas.
-        const { data: viatsAntes } = await sb.from('escolta_veiculos')
-          .select('veiculo_id, abastecimento_litros, abastecimento_valor, efetivo:escolta_efetivo(vigilante_id, valor_pago_vigilante)')
-          .eq('escolta_id', editandoId)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        for (const va of (viatsAntes ?? []) as any[]) {
-          if (va.abastecimento_litros != null || va.abastecimento_valor != null)
-            combustivelAntes.set(va.veiculo_id, { litros: va.abastecimento_litros, valor: va.abastecimento_valor })
-          for (const ef of va.efetivo ?? []) valorPagoAntes.set(ef.vigilante_id, ef.valor_pago_vigilante)
+        const metaEdicao = {
+          observacoes: dados.observacoes.trim() || null,
+          origem_complemento: dados.origem_complemento.trim() || null,
+          destino_complemento: dados.destino_complemento.trim() || null,
         }
-        await sb.from('escolta_efetivo').delete().eq('escolta_id', editandoId)
-        const { error: eDel } = await sb.from('escolta_veiculos').delete().eq('escolta_id', editandoId)
-        if (eDel) throw new Error('Não foi possível atualizar as viaturas: ' + eDel.message)
+        const { error: eRpc } = await sb.rpc('editar_escolta', {
+          p_escolta_id: editandoId,
+          p_campos: { ...camposEscolta, metadados: metaEdicao },
+          p_viaturas: viaturas.map(v => ({
+            escolta_veiculo_id: v.escolta_veiculo_id ?? null,
+            veiculo_id: v.veiculo_id,
+            membros: v.membros.map(m => ({
+              vigilante_id: m.vigilante_id,
+              papel_na_escolta: m.papel_na_escolta,
+              ...(verFinanceiro ? { valor_pago_vigilante: m.valor_pago ? parseFloat(m.valor_pago) : null } : {}),
+            })),
+          })),
+          p_motivo: motivoEdicao.trim() || null,
+        })
+        if (eRpc) throw new Error(ehFuncaoAusente(eRpc) ? MSG_ATUALIZACAO : eRpc.message)
+        router.push(`/dashboard/escoltas/${editandoId}`)
+        return
       } else {
         const { data: nova, error: e1 } = await sb
           .from('escoltas')
@@ -789,6 +794,18 @@ function FormularioEscolta() {
     return (
       <div className="max-w-3xl mx-auto py-16 text-center">
         <p className="text-sm" style={{ color: P.sub }}>Carregando escolta para edição…</p>
+      </div>
+    )
+  }
+
+  // Onda I: escolta já iniciada só abre para gestor e administrador.
+  if (!bloqueioEdicao && edicaoIniciada && user && !temPermissao(user.perfil?.codigo, PODE_PODER_TOTAL)) {
+    return (
+      <div className="max-w-3xl mx-auto py-12 px-3">
+        <div className="p-5 text-center" style={{ border: `1px solid ${P.border}`, backgroundColor: P.surface }}>
+          <AlertTriangle size={26} className="mx-auto mb-3" style={{ color: '#C8813A' }} />
+          <p className="text-sm" style={{ color: P.text }}>Esta escolta já começou e só o gestor ou o administrador pode editá-la. Para corrigir algo, fale com a gestão.</p>
+        </div>
       </div>
     )
   }
@@ -1376,6 +1393,25 @@ function FormularioEscolta() {
             <p className="text-sm font-black text-white uppercase tracking-wide">Confirme todos os dados antes de criar a operação</p>
           </div>
 
+          {/* Onda I: edição de escolta já iniciada exige motivo (vai para a auditoria e o aviso). */}
+          {edicaoIniciada && (
+            <div className="p-4" style={{ border: '1.5px solid #C8813A', backgroundColor: '#FFFBEB', borderRadius: '2px' }}>
+              <p className="text-xs font-black uppercase tracking-wide mb-1" style={{ color: '#8A5A10' }}>
+                Escolta em {rotuloStatus(statusEdicao ?? '')}: motivo da alteração *
+              </p>
+              <p className="text-xs mb-2" style={{ color: '#8A5A10' }}>Os registros de campo não mudam. Viatura com registro não sai nem troca de placa. A supervisão e a equipe são avisadas.</p>
+              <textarea
+                value={motivoEdicao}
+                onChange={e => setMotivoEdicao(e.target.value)}
+                rows={2}
+                className="w-full text-sm p-2"
+                style={{ border: `1.5px solid ${P.border}`, borderRadius: '2px' }}
+                placeholder="Mínimo de 10 caracteres"
+                data-teste="motivo-edicao"
+              />
+            </div>
+          )}
+
           {/* Sem equipe em nenhuma viatura: a escolta nasce no mural. Avisar aqui, e nao
               so na tela anterior, porque e a ultima chance antes de gravar. */}
           {iraParaOMural && (
@@ -1515,7 +1551,7 @@ function FormularioEscolta() {
             style={{ backgroundColor: P.success, borderRadius: '2px', minHeight: '56px' }}
           >
             <CheckCircle size={14} />
-            {salvando ? 'Criando...' : 'Confirmar e Criar Escolta'}
+            {editandoId ? (salvando ? 'Salvando...' : 'Confirmar e Salvar Alterações') : (salvando ? 'Criando...' : 'Confirmar e Criar Escolta')}
           </button>
         )}
       </div>

@@ -19,6 +19,8 @@ import {
   PODE_CANCELAR_ESCOLTA,
   PODE_VER_FINANCEIRO,
   PODE_ALTERAR_PERIODICIDADE,
+  PODE_PODER_TOTAL,
+  temPermissao,
 } from '@/lib/permissions'
 import { podeOperarEscolta } from '@/lib/acesso-escolta'
 import { minutosAteCheckin as calcularMinutosAteCheckin, inicioOperacaoEm, registrarCheckin, TIPO_CHECKIN, periodicidadePadraoDoCliente } from '@/lib/checkin'
@@ -46,6 +48,8 @@ import { urlsAssinadas, urlDoMapa, urlAssinada } from '@/lib/fotos-url'
 import { carregarLocaisAtivos } from '@/lib/locais'
 import { CombustivelViaturas } from '@/components/escolta/combustivel-viaturas'
 import { rotuloDoPonto } from '@/lib/rotulo-ponto'
+import { AcoesGestao, PendenciasConclusao } from '@/components/escolta/acoes-gestao'
+import { COLUNAS_ANULACAO, textoAnulado, type Anulacao } from '@/lib/gestao'
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -854,45 +858,47 @@ export default function EscoltaDetalhePage() {
     // ── Histórico de status ───────────────────────────────────────────────────
     const { data: hist } = await sb
       .from('escolta_status_historico')
-      .select(`id, status_anterior, status_novo, data_hora, observacao, alterado_por, autor:usuarios!alterado_por(nome_completo)`)
+      .select(`id, status_anterior, status_novo, data_hora, observacao, alterado_por, autor:usuarios!alterado_por(nome_completo), ${COLUNAS_ANULACAO}`)
       .eq('escolta_id', id)
       .order('data_hora', { ascending: true })
 
-    const histNorm = (hist ?? []) as HistoricoItem[]
-    setHistorico(histNorm)
+    // Onda I: anulados (voltar etapa, zerar) só na timeline, marcados; fora das contagens.
+    const histNorm = (hist ?? []) as (HistoricoItem & Anulacao)[]
+    setHistorico(histNorm.filter((h) => !h.anulado_em))
 
     // ── Ocorrências ───────────────────────────────────────────────────────────
     const { data: ocorrs } = await sb
       .from('ocorrencias')
-      .select(`id, descricao, data_hora, registrado_por, tipo:dom_tipos_ocorrencia(nome), autor:usuarios!registrado_por(nome_completo)`)
+      .select(`id, descricao, data_hora, registrado_por, tipo:dom_tipos_ocorrencia(nome), autor:usuarios!registrado_por(nome_completo), ${COLUNAS_ANULACAO}`)
       .eq('escolta_id', id)
       .order('data_hora', { ascending: false })
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    setOcorrencias((ocorrs ?? []) as any[])
+    setOcorrencias((ocorrs ?? []).filter((o: any) => !o.anulado_em) as any[])
 
     // ── Pontos de controle ────────────────────────────────────────────────────
     const { data: pts } = viaturaIds.length > 0
       ? await sb
           .from('pontos_controle')
-          .select(`id, escolta_veiculo_id, data_hora, latitude, longitude, precisao_metros, sem_sinal_gps, lancado_por, observacoes, tipo:dom_tipos_ponto(codigo, nome_exibicao), foto:fotos(id, caminho_arquivo), autor:usuarios!lancado_por(nome_completo)`)
+          .select(`id, escolta_veiculo_id, data_hora, latitude, longitude, precisao_metros, sem_sinal_gps, lancado_por, observacoes, tipo:dom_tipos_ponto(codigo, nome_exibicao), foto:fotos(id, caminho_arquivo), autor:usuarios!lancado_por(nome_completo), ${COLUNAS_ANULACAO}`)
           .in('escolta_veiculo_id', viaturaIds)
       : { data: null }
 
     // ── Presenças ─────────────────────────────────────────────────────────────
     const { data: pres } = await sb
       .from('presencas')
-      .select(`id, escolta_id, vigilante_id, data_hora, latitude, longitude, vigilante:vigilantes(nome_completo), foto:fotos(id, caminho_arquivo), autor:usuarios!criado_por(nome_completo)`)
+      .select(`id, escolta_id, vigilante_id, data_hora, latitude, longitude, vigilante:vigilantes(nome_completo), foto:fotos(id, caminho_arquivo), autor:usuarios!criado_por(nome_completo), ${COLUNAS_ANULACAO}`)
       .eq('escolta_id', id)
 
     // ── Checklists ────────────────────────────────────────────────────────────
     const { data: chks } = viaturaIds.length > 0
       ? await sb
           .from('checklists')
-          .select(`id, escolta_veiculo_id, tipo, concluido, data_inicio, data_conclusao, modelo:checklist_modelos(nome), autor:usuarios!responsavel_id(nome_completo), respostas:checklist_respostas(id, descricao_item, conforme, observacao, foto:fotos(id, caminho_arquivo))`)
+          .select(`id, escolta_veiculo_id, tipo, concluido, data_inicio, data_conclusao, modelo:checklist_modelos(nome), autor:usuarios!responsavel_id(nome_completo), respostas:checklist_respostas(id, descricao_item, conforme, observacao, foto:fotos(id, caminho_arquivo)), ${COLUNAS_ANULACAO}`)
           .in('escolta_veiculo_id', viaturaIds)
       : { data: null }
-    setChecklists(chks ?? [])
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setChecklists((chks ?? []).filter((c: any) => !c.anulado_em))
 
     // ── Montar timeline integrada ─────────────────────────────────────────────
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -959,7 +965,7 @@ export default function EscoltaDetalhePage() {
         titulo: `${STATUS_INFO[h.status_anterior]?.label ?? h.status_anterior} → ${STATUS_INFO[h.status_novo]?.label ?? h.status_novo}`,
         descricao: h.observacao,
         usuario: h.autor?.nome_completo ?? 'Sistema',
-        extra: { status_anterior: h.status_anterior, status_novo: h.status_novo },
+        extra: { status_anterior: h.status_anterior, status_novo: h.status_novo, anulado: textoAnulado(h) },
       })
     })
 
@@ -980,7 +986,7 @@ export default function EscoltaDetalhePage() {
         rotulo: rotuloDoPonto({ latitude: p.latitude, longitude: p.longitude, precisao_metros: p.precisao_metros, endereco: info.endereco }, locaisAtivos),
         foto_url: fotosPonto[0] ?? null,
         foto_urls: fotosPonto,
-        extra: { sem_sinal_gps: p.sem_sinal_gps === true },
+        extra: { sem_sinal_gps: p.sem_sinal_gps === true, anulado: textoAnulado(p) },
       })
     })
 
@@ -995,12 +1001,23 @@ export default function EscoltaDetalhePage() {
         usuario: p.autor?.nome_completo ?? 'Sistema',
         coordenadas: p.latitude && p.longitude ? { lat: Number(p.latitude), lng: Number(p.longitude) } : null,
         foto_url: getFotoUrl(p.foto),
+        extra: { anulado: textoAnulado(p) },
       })
     })
 
     // Consolidar TODOS os checklists em UM único entry na timeline
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const checklistsConcluidos = (chks ?? []).filter((c: any) => !!c.data_conclusao)
+    const checklistsConcluidos = (chks ?? []).filter((c: any) => !!c.data_conclusao && !c.anulado_em)
+    // Onda I: checklist anulado fica na timeline, marcado, fora do consolidado.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(chks ?? []).filter((c: any) => !!c.anulado_em).forEach((c: any) => {
+      const viat = viatsNorm.find((v) => v.id === c.escolta_veiculo_id)
+      tl.push({
+        id: c.id, tipo: 'checklist', data_hora: c.data_conclusao ?? c.data_inicio,
+        titulo: `Checklist de ${c.tipo === 'material' ? 'material' : 'viatura'}${viat?.veiculo?.placa ? ` (${formatarPlaca(viat.veiculo.placa)})` : ''}`,
+        descricao: null, usuario: c.autor?.nome_completo ?? null, extra: { anulado: textoAnulado(c), checklists: [] },
+      })
+    })
     if (checklistsConcluidos.length > 0) {
       // Foto representativa — primeira foto encontrada em qualquer checklist
       let primeiraFotoUrl: string | null = null
@@ -1060,6 +1077,7 @@ export default function EscoltaDetalhePage() {
         titulo: `Ocorrência: ${o.tipo?.nome ?? 'Geral'}`,
         descricao: o.descricao,
         usuario: o.autor?.nome_completo ?? 'Operador',
+        extra: { anulado: textoAnulado(o) },
       })
     })
 
@@ -1067,11 +1085,12 @@ export default function EscoltaDetalhePage() {
     setTimeline(tl)
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    setInicioOperacao(inicioOperacaoEm(((pts ?? []) as any[]).map((p: any) => ({ data_hora: p.data_hora }))))
+    setInicioOperacao(inicioOperacaoEm(((pts ?? []) as any[]).filter((p: any) => !p.anulado_em).map((p: any) => ({ data_hora: p.data_hora }))))
 
     // ── Paradas registradas ────────────────────────────────────────────────────
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const paradasFiltradas = (pts ?? []).filter((p: any) => {
+      if (p.anulado_em) return false
       const { tipo } = lerObservacao(p.observacoes)
       return !!tipo && TIPOS_PARADA.some(t => t.value === tipo)
     })
@@ -2387,7 +2406,7 @@ export default function EscoltaDetalhePage() {
 
       // Linha do tempo completa a partir da timeline
       const eventos = [...timeline]
-        .filter(t => t.tipo !== 'presenca')
+        .filter(t => t.tipo !== 'presenca' && !t.extra?.anulado)
         .sort((a, b) => new Date(a.data_hora).getTime() - new Date(b.data_hora).getTime())
         .map(t => {
           let label = ''
@@ -2777,7 +2796,7 @@ export default function EscoltaDetalhePage() {
 
   const TABS: { key: Tab; label: string; count?: number }[] = [
     { key: 'geral',       label: 'Visão Geral' },
-    { key: 'timeline',    label: 'Timeline',    count: timeline.length },
+    { key: 'timeline',    label: 'Timeline',    count: timeline.filter(t => !t.extra?.anulado).length },
     { key: 'efetivo',     label: 'Efetivo',     count: totalEfetivo },
     { key: 'veiculos',    label: 'Veículos',    count: viaturas.length },
     { key: 'ocorrencias', label: 'Ocorrências', count: ocorrencias.length },
@@ -3073,9 +3092,10 @@ export default function EscoltaDetalhePage() {
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-5">
+      <AcoesGestao escolta={escolta} perfil={perfil} onAlterado={carregar} />
 
       {/* ── Retorno ao Painel Operacional Guiado ── */}
-      {(voltaCampo || (modoGuiado && vinculadoAEscolta)) && (
+      {(voltaCampo || (modoGuiado && (vinculadoAEscolta || temPermissao(perfil, PODE_PODER_TOTAL)))) && (
         <button
           type="button"
           onClick={() => router.push('/dashboard/campo')}
@@ -3133,6 +3153,7 @@ export default function EscoltaDetalhePage() {
                       {escolta.checklist_pendente_no_inicio && (
                         <span className="badge-warning">Checklist pendente</span>
                       )}
+                      <PendenciasConclusao escoltaId={escolta.id} modo="faixa" chave={escolta.status} />
                     </div>
                     {escolta.cliente && (
                       <p className="text-sm mt-0.5" style={{ color: '#6B7E8A' }}>
@@ -3649,6 +3670,7 @@ export default function EscoltaDetalhePage() {
             </div>
           </div>
 
+          <PendenciasConclusao escoltaId={escolta.id} modo="secao" chave={escolta.status} />
           {historico.length > 0 && (
             <div className="card-light p-5">
               <h3 className="text-[10px] font-black uppercase tracking-widest mb-3" style={{ color: '#5A6A80' }}>Histórico de Status</h3>
@@ -3783,9 +3805,12 @@ export default function EscoltaDetalhePage() {
                                       </span>
                                     )}
                                   </div>
-                                  <h4 style={{ fontSize: '13px', fontWeight: 800, color: '#0E1A33', margin: 0, letterSpacing: '0.01em', lineHeight: 1.3 }}>
+                                  <h4 style={{ fontSize: '13px', fontWeight: 800, color: '#0E1A33', margin: 0, letterSpacing: '0.01em', lineHeight: 1.3, textDecoration: item.extra?.anulado ? 'line-through' : undefined, opacity: item.extra?.anulado ? 0.6 : undefined }}>
                                     {item.titulo}
                                   </h4>
+                                  {typeof item.extra?.anulado === 'string' && (
+                                    <p data-teste="anulado" style={{ fontSize: '11px', fontWeight: 700, color: '#B83832', margin: '3px 0 0' }}>{String(item.extra.anulado)}</p>
+                                  )}
                                   {item.descricao && (
                                     <p style={{ fontSize: '12px', color: '#5A6A80', margin: '3px 0 0', lineHeight: 1.4 }}>{item.descricao}</p>
                                   )}

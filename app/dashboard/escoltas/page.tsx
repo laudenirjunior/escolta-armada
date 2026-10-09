@@ -6,7 +6,7 @@ import { Plus, Search, Eye, Pencil, ArrowRight, MapPin, Clock, Truck, CheckCircl
 import { printEscolta } from '@/utils/print'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
-import { PODE_CRIAR_ESCOLTA, PODE_EDITAR_ESCOLTA } from '@/lib/permissions'
+import { PODE_CRIAR_ESCOLTA, PODE_EDITAR_ESCOLTA, PODE_PODER_TOTAL } from '@/lib/permissions'
 import { DialogoAssumirEscolta } from '@/components/escolta/dialogo-assumir-escolta'
 import { AcaoMural } from '@/components/escolta/acao-mural'
 import { AvisosMural } from '@/components/escolta/avisos-mural'
@@ -21,7 +21,12 @@ interface EscoltaRow {
   destino_endereco: string
   checklist_pendente_no_inicio: boolean
   cliente: { nome_cliente: string; cor_destaque: string } | null
+  // Onda I: reiniciada pela gestão (S15) e conclusão antecipada válida (etiqueta e filtro).
+  reiniciada_em?: string | null
+  conclusao?: { id: string; anulado_em: string | null }[] | null
 }
+
+const comPendencias = (e: EscoltaRow) => e.status === 'finalizada' && (e.conclusao ?? []).some(c => !c.anulado_em)
 
 const STATUS_MAP: Record<string, { label: string; cls: string }> = {
   rascunho:      { label: 'Rascunho',     cls: 'badge-neutral' },
@@ -44,6 +49,7 @@ const STATUS_OPTIONS = [
   { value: 'em_pre_inicio', label: 'Pré-Início' },
   { value: 'finalizada', label: 'Finalizada' },
   { value: 'cancelada', label: 'Cancelada' },
+  { value: 'com_pendencias', label: 'Concluída com pendências' },
 ]
 
 const PODE_CRIAR = PODE_CRIAR_ESCOLTA
@@ -100,17 +106,23 @@ export default function EscoltasPage() {
       .from('escoltas')
       .select(`
         id, codigo_escolta, status, data_hora_prevista,
-        origem_endereco, destino_endereco, checklist_pendente_no_inicio,
-        cliente:clientes(nome_cliente, cor_destaque)
+        origem_endereco, destino_endereco, checklist_pendente_no_inicio, reiniciada_em,
+        cliente:clientes(nome_cliente, cor_destaque),
+        conclusao:escolta_conclusoes_antecipadas(id, anulado_em)
       `)
+      // Onda I: arquivada fora (o administrador as vê em Arquivadas).
+      .is('arquivada_em', null)
       .order('data_hora_prevista', { ascending: false })
 
-    if (filtroStatus !== 'todos') {
+    if (filtroStatus === 'com_pendencias') {
+      q = q.eq('status', 'finalizada')
+    } else if (filtroStatus !== 'todos') {
       q = q.eq('status', filtroStatus)
     }
 
     const { data } = await q
     let rows = (data ?? []) as EscoltaRow[]
+    if (filtroStatus === 'com_pendencias') rows = rows.filter(comPendencias)
 
     let escoltaIdsOperador: string[] = []
     // Filtragem de Visibilidade (Operador vê apenas escoltas ativas)
@@ -323,6 +335,8 @@ export default function EscoltasPage() {
                       {e.checklist_pendente_no_inicio && (
                         <span className="badge-warning ml-2">Checklist</span>
                       )}
+                      {comPendencias(e) && <span className="badge-warning ml-2" data-teste="etiqueta-pendencias">Concluída com pendências</span>}
+                      {e.status === 'agendada' && e.reiniciada_em && <span className="badge-info ml-2" data-teste="etiqueta-reiniciada">Reiniciada pela gestão</span>}
                       {/* Aviso antes do clique: assumir esta pede confirmacao e motivo. */}
                       {ehOperador && e.status === 'agendada' && !semEquipeIds.includes(e.id) && (
                         <span className="ml-2 text-[9px] font-black uppercase tracking-wider px-1 py-0.5"
@@ -378,7 +392,8 @@ export default function EscoltasPage() {
                             comecou. Mostrar para operador seria oferecer um caminho que a
                             trigger do banco recusa, e mostrar em escolta iniciada levaria
                             a uma tela que abre so para dizer que nao da. */}
-                        {podeEditar && ['rascunho', 'agendada'].includes(e.status) && (
+                        {/* Onda I: gestor e administrador editam em qualquer status. */}
+                        {podeEditar && (['rascunho', 'agendada'].includes(e.status) || PODE_PODER_TOTAL.includes(perfil)) && (
                         <button
                           onClick={() => router.push(`/dashboard/escoltas/nova?editar=${e.id}`)}
                           className="flex items-center justify-center transition-all"
@@ -432,6 +447,8 @@ export default function EscoltasPage() {
                     {e.checklist_pendente_no_inicio && (
                       <span className="badge-warning ml-2 text-[10px]">Checklist</span>
                     )}
+                    {comPendencias(e) && <span className="badge-warning ml-2 text-[10px]" data-teste="etiqueta-pendencias">Concluída com pendências</span>}
+                    {e.status === 'agendada' && e.reiniciada_em && <span className="badge-info ml-2 text-[10px]" data-teste="etiqueta-reiniciada">Reiniciada pela gestão</span>}
                     {ehOperador && e.status === 'agendada' && !semEquipeIds.includes(e.id) && (
                       <span className="ml-2 text-[9px] font-black uppercase tracking-wider px-1 py-0.5"
                         style={{ backgroundColor: '#FFF7E6', color: '#8A5A10' }}>já escalada</span>
@@ -485,7 +502,7 @@ export default function EscoltasPage() {
                     <Eye size={14} />
                     Ver
                   </button>
-                  {podeEditar && ['rascunho', 'agendada'].includes(e.status) && (
+                  {podeEditar && (['rascunho', 'agendada'].includes(e.status) || PODE_PODER_TOTAL.includes(perfil)) && (
                     <button
                       onClick={() => router.push(`/dashboard/escoltas/nova?editar=${e.id}`)}
                       className="flex-1 flex items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors"

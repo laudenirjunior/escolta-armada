@@ -7,7 +7,7 @@ import {
   LayoutDashboard, Shield, Radio, Map, Database,
   Crosshair, ClipboardList, BarChart2, FileText,
   Users, Settings, AlertTriangle, Bell, Send,
- Repeat, MapPin } from 'lucide-react'
+ Repeat, MapPin, Archive, ListChecks } from 'lucide-react'
 import { Sidebar, MobileDrawer, SidebarContent, SidebarSection, SidebarItem, SidebarFooter } from '@/components/layout/sidebar'
 import { TopBar } from '@/components/layout/topbar'
 import { TelegramNotificacoesProvider } from '@/components/telegram-notificacoes-provider'
@@ -45,6 +45,9 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { label: 'Checklists',  href: '/dashboard/checklists',  icon: <ClipboardList size={16} />, perfis: ['administrador','gestor','supervisor','central'] as Perfil[] },
       // Lote 2026-10 (M5): pedidos de substituição do mural, para supervisor ou acima.
       { label: 'Substituições', href: '/dashboard/substituicoes', icon: <Repeat size={16} />, perfis: ['administrador','gestor','supervisor'] as Perfil[] },
+      // Lote 2026-10 (onda I): pendências de conclusão (supervisor ou acima) e arquivadas (administrador).
+      { label: 'Pendências de conclusão', href: '/dashboard/escoltas/pendencias', icon: <ListChecks size={16} />, perfis: ['administrador','gestor','supervisor'] as Perfil[] },
+      { label: 'Arquivadas', href: '/dashboard/escoltas/arquivadas', icon: <Archive size={16} />, perfis: ['administrador'] as Perfil[] },
     ],
   },
   {
