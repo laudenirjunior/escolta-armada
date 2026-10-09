@@ -7,6 +7,8 @@ import {
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
+import { COR_PADRAO_CLIENTE, corDoCliente } from '@/lib/paleta-clientes'
+import { SeletorCorCliente } from '@/components/escolta/seletor-cor-cliente'
 import { mascaraCPF, mascaraTelefone, gerarLoginOperador } from '@/utils/formatters'
 
 const supabase = createClient()
@@ -34,7 +36,7 @@ interface Cliente {
 }
 const emptyCliente = (): Omit<Cliente,'id'> => ({
   nome_cliente:'', cnpj:'', contato:'', telefone:'',
-  cor_destaque:'#3b82f6', status:'ativo', observacoes:'',
+  cor_destaque:COR_PADRAO_CLIENTE, status:'ativo', observacoes:'',
   telegram_chat_id:'', valor_padrao_escolta:null, km_franquia:null, valor_km_excedente:null,
 })
 
@@ -367,7 +369,7 @@ export default function CadastrosPage() {
                     <tr key={c.id}>
                       <td>
                         <div className="flex items-center gap-2.5">
-                          <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: c.cor_destaque ?? '#3b82f6' }} />
+                          <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: corDoCliente(c.cor_destaque) }} />
                           <span className="font-semibold text-gray-800">{c.nome_cliente}</span>
                         </div>
                       </td>
@@ -378,7 +380,7 @@ export default function CadastrosPage() {
                       {canEdit && (
                         <td className="text-right">
                           <div className="flex items-center justify-end gap-1">
-                            <button onClick={() => { setEditCliente(c.id); setFormCliente({ nome_cliente:c.nome_cliente, cnpj:c.cnpj??'', contato:c.contato??'', telefone:c.telefone??'', cor_destaque:c.cor_destaque??'#3b82f6', status:c.status, observacoes:c.observacoes??'', telegram_chat_id:c.telegram_chat_id??'', valor_padrao_escolta:c.valor_padrao_escolta??null, km_franquia:c.km_franquia??null, valor_km_excedente:c.valor_km_excedente??null }); setDialogCliente(true) }}
+                            <button onClick={() => { setEditCliente(c.id); setFormCliente({ nome_cliente:c.nome_cliente, cnpj:c.cnpj??'', contato:c.contato??'', telefone:c.telefone??'', cor_destaque:corDoCliente(c.cor_destaque), status:c.status, observacoes:c.observacoes??'', telegram_chat_id:c.telegram_chat_id??'', valor_padrao_escolta:c.valor_padrao_escolta??null, km_franquia:c.km_franquia??null, valor_km_excedente:c.valor_km_excedente??null }); setDialogCliente(true) }}
                               className="p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors">
                               <Pencil size={14} />
                             </button>
@@ -404,7 +406,7 @@ export default function CadastrosPage() {
                 <div key={c.id} className="bg-white rounded-xl p-4 shadow-sm border border-gray-100">
                   <div className="flex items-start justify-between gap-2 mb-2">
                     <div className="flex items-center gap-2.5">
-                      <div className="w-4 h-4 rounded-full shrink-0 mt-0.5" style={{ backgroundColor: c.cor_destaque ?? '#3b82f6' }} />
+                      <div className="w-4 h-4 rounded-full shrink-0 mt-0.5" style={{ backgroundColor: corDoCliente(c.cor_destaque) }} />
                       <span className="font-bold text-gray-800 text-sm">{c.nome_cliente}</span>
                     </div>
                     <StatusBadge status={c.status} />
@@ -432,7 +434,7 @@ export default function CadastrosPage() {
                   {canEdit && (
                     <div className="flex gap-2 pt-3 border-t border-gray-100">
                       <button
-                        onClick={() => { setEditCliente(c.id); setFormCliente({ nome_cliente:c.nome_cliente, cnpj:c.cnpj??'', contato:c.contato??'', telefone:c.telefone??'', cor_destaque:c.cor_destaque??'#3b82f6', status:c.status, observacoes:c.observacoes??'', telegram_chat_id:c.telegram_chat_id??'', valor_padrao_escolta:c.valor_padrao_escolta??null, km_franquia:c.km_franquia??null, valor_km_excedente:c.valor_km_excedente??null }); setDialogCliente(true) }}
+                        onClick={() => { setEditCliente(c.id); setFormCliente({ nome_cliente:c.nome_cliente, cnpj:c.cnpj??'', contato:c.contato??'', telefone:c.telefone??'', cor_destaque:corDoCliente(c.cor_destaque), status:c.status, observacoes:c.observacoes??'', telegram_chat_id:c.telegram_chat_id??'', valor_padrao_escolta:c.valor_padrao_escolta??null, km_franquia:c.km_franquia??null, valor_km_excedente:c.valor_km_excedente??null }); setDialogCliente(true) }}
                         className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold"
                         style={{ backgroundColor: '#EBF3FC', color: '#2166A8' }}>
                         <Pencil size={14} /> Editar
@@ -684,12 +686,10 @@ export default function CadastrosPage() {
           <input className="input-light min-h-[48px] md:min-h-0" value={formCliente.contato??''} onChange={e => setFormCliente(p => ({...p, contato:e.target.value}))} />
         </Field>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <Field label="Cor de Destaque">
-            <div className="flex items-center gap-2">
-              <input type="color" value={formCliente.cor_destaque??'#3b82f6'} onChange={e => setFormCliente(p => ({...p, cor_destaque:e.target.value}))}
-                className="w-10 h-9 rounded-lg border border-gray-300 cursor-pointer" />
-              <span className="text-sm font-mono text-gray-500">{formCliente.cor_destaque}</span>
-            </div>
+          <Field label="Cor do cliente">
+            {/* Onda K: paleta fechada; aviso quando outro cliente ativo usa a mesma cor (S6). */}
+            <SeletorCorCliente valor={formCliente.cor_destaque} onChange={cor => setFormCliente(p => ({...p, cor_destaque:cor}))}
+              clientes={clientes} clienteAtualId={editCliente} />
           </Field>
           <Field label="Status">
             <select className="input-light min-h-[48px] md:min-h-0" value={formCliente.status} onChange={e => setFormCliente(p => ({...p, status:e.target.value}))}>

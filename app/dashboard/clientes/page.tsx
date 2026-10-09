@@ -13,6 +13,8 @@ import { Label } from '@/components/ui/label'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
 import { urlsAssinadas, urlDoMapa } from '@/lib/fotos-url'
+import { COR_PADRAO_CLIENTE, corDoCliente } from '@/lib/paleta-clientes'
+import { SeletorCorCliente } from '@/components/escolta/seletor-cor-cliente'
 
 interface ClienteRow {
   id: string
@@ -50,7 +52,7 @@ const FORM_VAZIO: FormData = {
   cnpj: '',
   contato: '',
   telefone: '',
-  cor_destaque: '#3B82F6',
+  cor_destaque: COR_PADRAO_CLIENTE,
   telegram_chat_id: '',
   observacoes: '',
   status: 'ativo',
@@ -117,7 +119,7 @@ export default function ClientesPage() {
       cnpj: c.cnpj ?? '',
       contato: c.contato,
       telefone: c.telefone,
-      cor_destaque: c.cor_destaque,
+      cor_destaque: corDoCliente(c.cor_destaque),
       telegram_chat_id: c.telegram_chat_id ?? '',
       observacoes: c.observacoes ?? '',
       status: c.status,
@@ -262,7 +264,7 @@ export default function ClientesPage() {
             <div
               key={c.id}
               className="flex items-center gap-4 p-4 bg-white/2 border border-white/5 hover:border-white/10 rounded-sm transition-colors"
-              style={{ borderLeftColor: c.cor_destaque, borderLeftWidth: 3 }}
+              style={{ borderLeftColor: corDoCliente(c.cor_destaque), borderLeftWidth: 3 }}
             >
               {/* Logo do cliente */}
               <div style={{ width: '40px', height: '40px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)', overflow: 'hidden', flexShrink: 0, backgroundColor: 'rgba(255,255,255,0.04)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -357,16 +359,10 @@ export default function ClientesPage() {
               />
             </div>
             <div>
-              <Label className="text-xs text-text-secondary mb-1 block">Cor destaque</Label>
-              <div className="flex items-center gap-2 h-8">
-                <input
-                  type="color"
-                  value={form.cor_destaque}
-                  onChange={(e) => upd({ cor_destaque: e.target.value })}
-                  className="w-8 h-8 rounded-sm cursor-pointer border border-border bg-transparent"
-                />
-                <span className="text-xs text-text-secondary font-mono">{form.cor_destaque}</span>
-              </div>
+              <Label className="text-xs text-text-secondary mb-1 block">Cor do cliente</Label>
+              {/* Onda K: paleta fechada; aviso quando outro cliente ativo usa a mesma cor (S6). */}
+              <SeletorCorCliente valor={form.cor_destaque} onChange={(cor) => upd({ cor_destaque: cor })}
+                clientes={clientes} clienteAtualId={editando?.id ?? null} />
             </div>
           </div>
 
