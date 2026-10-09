@@ -82,7 +82,7 @@ As migrations válidas começam no número 100 e são aplicadas via MCP, registr
 
 ## Wizard de pré-início (lote 2026-10, onda H)
 
-- Só tela (`app/dashboard/escoltas/[id]/page.tsx`), sem banco. O KM inicial e a foto do painel por viatura (estados `kmPartida` e `fotosPartida`, mapas por `escolta_veiculos.id`) são pedidos no Passo 2, num cartão por viatura, e conferidos por `erroPorViaturaPasso2` no avanço do Passo 2 e de novo em `handleWizardSubmit`. O Passo 3 tem só as observações de saída e o resumo do KM.
+- Só tela (`app/dashboard/escoltas/[id]/page.tsx`), sem banco. O KM inicial e a foto do painel por viatura (estados `kmPartida` e `fotosPartida`, mapas por `escolta_veiculos.id`) são pedidos no Passo 2, num cartão por viatura, e conferidos por `erroPorViaturaPasso2` no avanço do Passo 2 e de novo em `handleWizardSubmit`. O Passo 3 tem só as observações de saída e o resumo do KM e da miniatura da foto do painel (`MiniaturaArquivo`); ao voltar ao Passo 2, `CameraInput` reabre com as fotos já registradas (`iniciais`). As consultas de viaturas do detalhe, da impressão e do Campo ordenam por `criado_em` e `id`, a mesma "primeira viatura" das RPCs.
 - Gravação sem mudança: no Confirmar, `gravarPontosPorViatura` grava um ponto `base_saida` por viatura com a foto e o KM daquela viatura (JSON do ponto) na mesma transação da passagem a `em_andamento` (`registrar_etapa_escolta`), e `gravarKmViaturas` grava `escolta_veiculos.quilometragem_saida` depois. Checklists e as 5 fotos de ângulo continuam só na primeira viatura (S1, pendência 0.2). O diálogo "Saída da Base" fora do wizard não muda (S16).
 
 ## Triggers em `escoltas`
