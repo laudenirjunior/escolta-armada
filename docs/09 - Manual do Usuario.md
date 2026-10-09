@@ -240,11 +240,16 @@ Além da tela de detalhe, o Supervisor tem duas telas de monitoramento.
 
   `[PRINT P22]`
 
-- **Notificações** (`/dashboard/notificacoes`): o feed único de tudo que acontece, com uma conversa por escolta (não por pessoa) no painel lateral.
+- **Avisos** (`/dashboard/notificacoes`, o sino da barra superior): três abas.
+  - **Central** (abre primeiro): os seus avisos, um por evento, do mais novo para o mais antigo. Filtre por tipo, por código da escolta ou só as não lidas; cada aviso tem **Abrir** (a escolta), **Marcar como lida** e, no check-in atrasado, **Registrar check-in**. **Marcar todas como lidas** zera o contador. Cada pessoa vê só a própria Central.
+  - **Atividade** (só Supervisor e acima, e Central): o feed de tudo que acontece nas escoltas (pontos, ocorrências, mudanças de status, presenças), com uma conversa por escolta no painel lateral. Não conta no sino.
+  - **Chat Interno**: como antes.
 
   `[PRINT P23]`
 
-Quando o check-in periódico está ligado para a escolta, o sistema dispara um **alerta de check-in atrasado** se a escolta passa da periodicidade sem reportar. Fechar o aviso no X vale para quem fechou, naquela escolta, até haver mudança real: um novo check-in, uma nova etapa ou outra periodicidade. Recarregar a página ou passar mais tempo não faz o aviso voltar.
+**Sino e aviso de 2 segundos (outubro de 2026).** O número no sino (e no item **Avisos** da barra inferior do celular) é a quantidade de avisos **não lidos** da sua Central; ele não zera ao clicar, só quando você marca os avisos como lidos. Cada aviso novo aparece no canto da tela por **2 segundos** e some sozinho, sem botão de fechar; tocar nele abre a escolta (no check-in atrasado, abre direto o registro do check-in). Quem não viu o aviso no canto encontra a mesma linha na Central. Com duas abas ou dois aparelhos abertos, a Central continua com um aviso só.
+
+Quando o check-in periódico está ligado para a escolta, o **sistema** (não mais o navegador) confere a cada minuto se a escolta passou da periodicidade sem reportar e gera **um aviso por período vencido** para a equipe escalada, o supervisor, a central, o gestor e o administrador. A mensagem do Telegram ao cliente sai pelo mesmo cálculo do servidor, uma vez por período, mesmo que ninguém esteja com o sistema aberto. Os avisos do mural (pedido de substituição, decisão e substituição de equipe) também caem na Central e no sino.
 
 `[PRINT P24]`
 
@@ -284,7 +289,7 @@ Regras que valem no painel:
 - **Duas ou mais viaturas**: o painel pede a viatura do registro, já marcando a sua. Dá para trocar e registrar por outra viatura da mesma escolta. A etapa só avança quando todas as viaturas registram; enquanto isso aparece "Aguardando registro da viatura ...".
 - **Confirmação**: depois de cada registro aparece uma tela verde com o horário e a Próxima Ação. Ela só aparece se o registro foi de fato gravado.
 - **Pré-início, chegada na base, finalização e parada** abrem a tela da escolta no diálogo certo. Ao concluir, o sistema volta sozinho para o painel.
-- **Check-in atrasado** (só quando o check-in periódico está ligado para a escolta) vira a Próxima Ação, em vermelho. O aviso de atraso tem o botão **Registrar Check-in**, que abre o registro direto.
+- **Check-in atrasado** (só quando o check-in periódico está ligado para a escolta) vira a Próxima Ação, em vermelho. O aviso de atraso aparece no canto por 2 segundos (tocar nele abre o registro direto) e fica na Central de **Avisos**, com o botão **Registrar check-in**.
 - **Ver tela completa**, no rodapé, desliga o Modo Guiado neste aparelho. O botão **Voltar ao Modo Guiado**, no topo da tela completa, liga de novo.
 
 ## B1. A tela de Campo
