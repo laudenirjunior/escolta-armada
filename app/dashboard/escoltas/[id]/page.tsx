@@ -875,6 +875,8 @@ export default function EscoltaDetalhePage() {
   // dele, leitura sem dados e URLs locais das fotos guardadas no aparelho.
   const authUserIdRef = useRef<string | null>(authUserId)
   authUserIdRef.current = authUserId
+  const userRef = useRef(user)
+  userRef.current = user
   const carregouSemDonoRef = useRef(false)
   const semDadosRef = useRef(false)
   const urlsLocaisRef = useRef<string[]>([])
@@ -885,6 +887,7 @@ export default function EscoltaDetalhePage() {
     // Onda L (16.3.4): dono da fila e da cópia do aparelho; sem rede, a leitura vem da cópia
     // do service worker e, sem ela, da escolta guardada pelo Campo.
     const dono = authUserIdRef.current
+    const eu = userRef.current
     carregouSemDonoRef.current = !dono
     let semRedeNaLeitura = false
 
@@ -916,7 +919,7 @@ export default function EscoltaDetalhePage() {
         const { viaturas: _v, efetivo: _e, conclusao: _c, criador: _cr, ...resto } = copiaCampo
         void _v; void _e; void _c; void _cr
         esc = {
-          data_finalizacao: null, observacao_fechamento: null, criado_em: '', valor_cobrado: null, outros_custos: null,
+          data_finalizacao: null, observacao_fechamento: null, criado_em: copiaCampo.data_hora_prevista, valor_cobrado: null, outros_custos: null,
           observacao_financeira: null, ...resto,
           cliente: copiaCampo.cliente ? { telefone: '', metadados: null, ...copiaCampo.cliente } : null,
         }
@@ -982,10 +985,10 @@ export default function EscoltaDetalhePage() {
 
     // Onda L: sem rede e sem cópia do SW, o próprio vínculo guardado pelo Campo (para o
     // operador continuar operando a escolta dele).
-    const efetNorm = (efet ?? (copiaCampo && user?.id && copiaCampo.escolta_veiculo_id ? [{
-      id: `aparelho-${user.id}`, vigilante_id: '', papel_na_escolta: copiaCampo.papel ?? null, confirmado: true,
+    const efetNorm = (efet ?? (copiaCampo && eu?.id && copiaCampo.escolta_veiculo_id ? [{
+      id: `aparelho-${eu.id}`, vigilante_id: '', papel_na_escolta: copiaCampo.papel ?? null, confirmado: true,
       valor_pago_vigilante: null, escolta_veiculo_id: copiaCampo.escolta_veiculo_id,
-      vigilante: { nome_completo: user.nome_completo, usuario_id: user.id },
+      vigilante: { nome_completo: eu.nome_completo, usuario_id: eu.id },
     }] : [])) as (EfetivoItem & { escolta_veiculo_id: string })[]
     setViaturas(viatsNorm.map((v) => ({ ...v, efetivo: efetNorm.filter((e) => e.escolta_veiculo_id === v.id) })))
 
@@ -1026,7 +1029,7 @@ export default function EscoltaDetalhePage() {
         ...p,
         tipo: TIPO_PONTO_POR_ID[String(p.tipo_ponto_id)] ?? null,
         foto: p.foto_id ? { id: String(p.foto_id), caminho_arquivo: fotosPendentes[String(p.foto_id)] ?? null } : null,
-        autor: { nome_completo: `${user?.nome_completo ?? 'Operador'} (guardado no aparelho, aguardando envio)` },
+        autor: { nome_completo: `${eu?.nome_completo ?? 'Operador'} (guardado no aparelho, aguardando envio)` },
       })),
     ]
 
@@ -3117,7 +3120,10 @@ export default function EscoltaDetalhePage() {
     }
     // Limpa a URL: um refresh nao pode reabrir o dialogo. Registro de etapa nao se
     // apaga, e reabrir e o primeiro passo para gravar duas vezes.
-    router.replace(`/dashboard/escoltas/${escolta.id}`)
+    // Onda L: sem rede, o roteador não busca o payload e recarregaria a página inteira
+    // (perdendo o diálogo aberto); a URL é trocada só no histórico.
+    if (aparelhoSemRede()) window.history.replaceState(null, '', `/dashboard/escoltas/${escolta.id}`)
+    else router.replace(`/dashboard/escoltas/${escolta.id}`)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, escolta, user])
 

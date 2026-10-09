@@ -851,7 +851,11 @@ export default function CampoPage() {
     if (!pedidoCheckin || loading) return
     const alvo = todasEscoltas.find(e => e.id === pedidoCheckin)
     setPedidoCheckin(null)
-    if (window.location.search) router.replace('/dashboard/campo')
+    // Onda L: sem rede, troca só no histórico (o roteador recarregaria a página inteira).
+    if (window.location.search) {
+      if (aparelhoSemRede()) window.history.replaceState(null, '', '/dashboard/campo')
+      else router.replace('/dashboard/campo')
+    }
     if (!alvo || !STATUS_COM_CHECKIN.includes(alvo.status)) {
       showToast('erro', 'O check-in desta escolta não está disponível para você agora. Abra a escolta pela lista.')
       return
