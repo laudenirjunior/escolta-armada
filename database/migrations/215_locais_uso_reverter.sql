@@ -1,8 +1,8 @@
 -- 215_locais_uso_reverter.sql
 -- ORDEM: primeiro o git revert do código da onda D2 e o deploy; depois este arquivo (antes
 -- da 214_reverter e da 205_reverter). Guarda vezes_usado e uf em backup_20261008.locais_uso
--- (uma linha por local; rodar de novo não apaga o que já foi guardado), tira a trigger de
--- uso, as funções internas e as colunas, devolve o corpo da 205 de locais_salvos_regras e
+-- (uma linha por local; rodar de novo não apaga o que já foi guardado), tira as triggers de
+-- uso, as funções internas, o registro de falhas, o resumo das falhas e as colunas, devolve o corpo da 205 de locais_salvos_regras e
 -- os privilégios de tabela da 205 (INSERT e UPDATE sem lista de colunas).
 CREATE SCHEMA IF NOT EXISTS backup_20261008;
 REVOKE ALL ON SCHEMA backup_20261008 FROM PUBLIC, anon, authenticated;
@@ -19,9 +19,15 @@ BEGIN
 END $$;
 
 DROP TRIGGER IF EXISTS tr_contar_uso_local ON public.escoltas;
+DROP TRIGGER IF EXISTS tr_recontar_uso_locais ON public.locais_salvos;
 DROP FUNCTION IF EXISTS lote_interno.contar_uso_local();
+DROP FUNCTION IF EXISTS lote_interno.recontar_uso_locais();
 DROP FUNCTION IF EXISTS lote_interno.carregar_uso_locais();
+DROP FUNCTION IF EXISTS lote_interno.contar_escoltas_do_local(uuid);
 DROP FUNCTION IF EXISTS lote_interno.local_do_endereco(text, numeric, numeric);
+DROP FUNCTION IF EXISTS public.locais_uso_falhas_resumo();
+-- O registro de falhas da contagem é diagnóstico: some com a contagem.
+DROP TABLE IF EXISTS lote_interno.locais_uso_falhas;
 
 -- Privilégios da 205 (o REVOKE de tabela também tira os de coluna).
 REVOKE INSERT, UPDATE ON public.locais_salvos FROM authenticated;
