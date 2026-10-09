@@ -3,14 +3,15 @@
 /**
  * Locais salvos (lote 2026-10, M2). Supervisor ou acima cadastra e edita; só gestor e
  * administrador conferem o pino e ativam (decisão 6). Só os ativos viram atalho na
- * origem e no destino. As regras valem no banco (migration 205).
+ * origem e no destino. As regras valem no banco (migration 205). Onda D2 (215): UF do local
+ * (mostrada e editável) e quantas vezes ele foi usado, que ordena os atalhos.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { MapPin, Plus, CheckCircle2, Ban, Save } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
 import { MapaPino } from '@/components/mapa/mapa-pino'
-import { LocalSalvo, PERFIS_ATIVAM_LOCAL, PERFIS_CADASTRAM_LOCAL } from '@/lib/locais'
+import { LocalSalvo, PERFIS_ATIVAM_LOCAL, PERFIS_CADASTRAM_LOCAL, UFS } from '@/lib/locais'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const sb = createClient() as any
@@ -21,7 +22,7 @@ const SITUACAO: Record<string, { texto: string; cor: string; fundo: string }> = 
   inativo: { texto: 'Inativo', cor: '#6B7E8A', fundo: '#EEF1F5' },
 }
 
-type Edicao = Pick<LocalSalvo, 'nome' | 'endereco' | 'complemento' | 'latitude' | 'longitude'> & { id: string | null }
+type Edicao = Pick<LocalSalvo, 'nome' | 'endereco' | 'complemento' | 'latitude' | 'longitude'> & { id: string | null; uf: string }
 
 export default function LocaisSalvosPage() {
   const { user, loading } = useAuth()
@@ -35,8 +36,8 @@ export default function LocaisSalvosPage() {
 
   const carregar = useCallback(async () => {
     const { data } = await sb.from('locais_salvos')
-      .select('id, nome, endereco, complemento, latitude, longitude, situacao, fonte_coordenada, conferido_em, conferidor:usuarios!conferido_por(nome_completo)')
-      .order('situacao').order('nome')
+      .select('id, nome, endereco, complemento, latitude, longitude, situacao, fonte_coordenada, conferido_em, uf, vezes_usado, conferidor:usuarios!conferido_por(nome_completo)')
+      .order('situacao').order('vezes_usado', { ascending: false }).order('nome')
     setLocais(((data ?? []) as LocalSalvo[]).map(l => ({ ...l, latitude: l.latitude != null ? Number(l.latitude) : null, longitude: l.longitude != null ? Number(l.longitude) : null })))
   }, [])
   useEffect(() => { if (podeEditar) carregar() }, [podeEditar, carregar])
@@ -44,7 +45,7 @@ export default function LocaisSalvosPage() {
   const salvar = async (ativarDepois = false) => {
     if (!edicao) return
     setOcupado(true); setMsg(null)
-    const campos = { nome: edicao.nome.trim(), endereco: edicao.endereco.trim(), complemento: edicao.complemento?.trim() || null, latitude: edicao.latitude, longitude: edicao.longitude }
+    const campos = { nome: edicao.nome.trim(), endereco: edicao.endereco.trim(), complemento: edicao.complemento?.trim() || null, latitude: edicao.latitude, longitude: edicao.longitude, uf: edicao.uf || null }
     const r = edicao.id
       ? await sb.from('locais_salvos').update(campos).eq('id', edicao.id).select('id')
       : await sb.from('locais_salvos').insert({ ...campos, situacao: 'aguardando_conferencia', fonte_coordenada: 'Cadastrado na tela de locais salvos' }).select('id')
@@ -76,13 +77,13 @@ export default function LocaisSalvosPage() {
           <MapPin size={20} style={{ color: '#1E2D35' }} />
           <h1 className="text-xl font-black" style={{ color: '#1E2D35' }}>Locais Salvos</h1>
         </div>
-        <button type="button" onClick={() => setEdicao({ id: null, nome: '', endereco: '', complemento: '', latitude: null, longitude: null })}
+        <button type="button" onClick={() => setEdicao({ id: null, nome: '', endereco: '', complemento: '', latitude: null, longitude: null, uf: '' })}
           className="inline-flex items-center gap-1.5 px-4 text-xs font-black uppercase text-white" style={{ minHeight: '40px', backgroundColor: '#1E2D35' }}>
           <Plus size={14} /> Novo local
         </button>
       </div>
       <p className="text-xs" style={{ color: '#5A6A80' }}>
-        Atalhos de origem e destino. Só os locais <strong>ativos</strong> aparecem no formulário de escolta. Um local só fica ativo depois que gestor ou administrador confere o pino no mapa.
+        Atalhos de origem e destino. Só os locais <strong>ativos</strong> aparecem no formulário de escolta, os mais usados primeiro. Um local só fica ativo depois que gestor ou administrador confere o pino no mapa; mudar endereço, pino ou UF de um local ativo pede nova conferência.
       </p>
 
       {msg && <div className="p-3 text-sm" style={{ backgroundColor: msg.ok ? '#E8F5EE' : 'rgba(184,56,50,0.08)', color: msg.ok ? '#1E7C52' : '#B83832', borderRadius: '4px' }}>{msg.texto}</div>}
@@ -96,8 +97,14 @@ export default function LocaisSalvosPage() {
             <label className="text-xs md:col-span-2" style={{ color: '#5A6A80' }}>Endereço (como deve aparecer na escolta)
               <input value={edicao.endereco} onChange={e => setEdicao({ ...edicao, endereco: e.target.value })} className="input-light w-full mt-1" />
             </label>
-            <label className="text-xs md:col-span-3" style={{ color: '#5A6A80' }}>Complemento (portão, doca)
+            <label className="text-xs md:col-span-2" style={{ color: '#5A6A80' }}>Complemento (portão, doca)
               <input value={edicao.complemento ?? ''} onChange={e => setEdicao({ ...edicao, complemento: e.target.value })} className="input-light w-full mt-1" />
+            </label>
+            <label className="text-xs" style={{ color: '#5A6A80' }}>UF
+              <select value={edicao.uf} onChange={e => setEdicao({ ...edicao, uf: e.target.value })} className="input-light w-full mt-1" data-teste="uf-local">
+                <option value="">Não informada</option>
+                {UFS.map(u => <option key={u} value={u}>{u}</option>)}
+              </select>
             </label>
           </div>
           <p className="text-xs font-bold" style={{ color: '#1E2D35' }}>Arraste o pino até o ponto exato (portão, doca).</p>
@@ -127,6 +134,8 @@ export default function LocaisSalvosPage() {
                 <div className="flex items-center gap-2 flex-wrap">
                   <p className="text-sm font-black" style={{ color: '#1E2D35' }}>{l.nome}</p>
                   <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5" style={{ color: s.cor, backgroundColor: s.fundo }}>{s.texto}</span>
+                  <span className="text-[10px] font-black px-2 py-0.5" style={{ color: '#1E2D35', backgroundColor: '#EEF1F5' }} data-teste="uf">{l.uf ? `UF ${l.uf}` : 'UF não informada'}</span>
+                  <span className="text-[10px] font-bold" style={{ color: '#6B7E8A' }} data-teste="vezes-usado">{`Usado ${l.vezes_usado ?? 0} ${(l.vezes_usado ?? 0) === 1 ? 'vez' : 'vezes'} em escoltas`}</span>
                 </div>
                 <p className="text-sm mt-1" style={{ color: '#1E2D35' }}>{l.endereco}{l.complemento ? ` (${l.complemento})` : ''}</p>
                 <p className="text-xs mt-1" style={{ color: '#6B7E8A' }}>
@@ -138,7 +147,7 @@ export default function LocaisSalvosPage() {
                 )}
               </div>
               <div className="flex gap-2 flex-wrap">
-                <button type="button" onClick={() => setEdicao({ id: l.id, nome: l.nome, endereco: l.endereco, complemento: l.complemento, latitude: l.latitude, longitude: l.longitude })}
+                <button type="button" onClick={() => setEdicao({ id: l.id, nome: l.nome, endereco: l.endereco, complemento: l.complemento, latitude: l.latitude, longitude: l.longitude, uf: l.uf ?? '' })}
                   className="px-3 text-xs font-bold" style={{ minHeight: '36px', border: '1px solid #C8D5DC', color: '#1E2D35' }}>
                   {podeAtivar && l.situacao !== 'ativo' ? 'Conferir no mapa' : 'Editar e pôr o pino'}
                 </button>

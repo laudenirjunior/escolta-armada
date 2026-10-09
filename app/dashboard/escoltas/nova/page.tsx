@@ -13,7 +13,8 @@ import { useAuth } from '@/hooks/useAuth'
 import { AiTextButton } from '@/components/ui/ai-text-button'
 import { AtalhosLocais } from '@/components/endereco/atalhos-locais'
 import { ConferenciaCoordenada } from '@/components/endereco/conferencia-coordenada'
-import { LocalSalvo, carregarLocaisAtivos, PERFIS_CADASTRAM_LOCAL } from '@/lib/locais'
+import { SalvarEnderecoLocal } from '@/components/endereco/salvar-endereco-local'
+import { LocalSalvo, carregarLocaisAtivos, escoltaTemUf, PERFIS_CADASTRAM_LOCAL } from '@/lib/locais'
 import { PODE_PODER_TOTAL, temPermissao } from '@/lib/permissions'
 import { MSG_ATUALIZACAO, ehFuncaoAusente } from '@/lib/gestao'
 import { rotuloStatus } from '@/lib/fluxo-escolta'
@@ -58,6 +59,9 @@ interface DadosBasicos  {
   destino_lat: number
   destino_lng: number
   observacoes: string
+  /** Onda D2: UF preenchida pelo atalho do local salvo; só vai ao banco com a coluna da onda K. */
+  origem_uf: string
+  destino_uf: string
 }
 
 const sb = createClient() as any
@@ -399,6 +403,7 @@ function FormularioEscolta() {
     origem_endereco: '', origem_complemento: '', origem_lat: 0, origem_lng: 0,
     destino_endereco: '', destino_complemento: '', destino_lat: 0, destino_lng: 0,
     observacoes: OBS_PADRAO,
+    origem_uf: '', destino_uf: '',
   })
   const [viaturas,    setViaturas]    = useState<ViaturaForm[]>([novaViatura()])
   const [clientes,    setClientes]    = useState<ClienteOpt[]>([])
@@ -438,14 +443,21 @@ function FormularioEscolta() {
   const [confOrigem, setConfOrigem] = useState(confVazia)
   const [confDestino, setConfDestino] = useState(confVazia)
   const podeSalvarLocal = PERFIS_CADASTRAM_LOCAL.includes((user?.perfil?.codigo ?? '') as string)
-  useEffect(() => { carregarLocaisAtivos(sb).then(setLocais) }, [])
-  const salvarComoLocal = async (nome: string, endereco: string, complemento: string, lat: number, lng: number): Promise<string | null> => {
+  // Onda D2: a escolta só recebe a UF quando a coluna da onda K existir (o código confere).
+  const [ufNaEscolta, setUfNaEscolta] = useState(false)
+  useEffect(() => { carregarLocaisAtivos(sb).then(setLocais); escoltaTemUf(sb).then(setUfNaEscolta) }, [])
+  // "Salvar este endereço" ao lado do campo (onda D2): endereço, complemento, coordenada e UF
+  // do campo; nasce aguardando conferência (a trigger da 205 garante, mesmo pedindo ativo).
+  const salvarComoLocal = async (nome: string, endereco: string, complemento: string, lat: number, lng: number, uf: string): Promise<{ ok: boolean; texto: string }> => {
+    const temCoord = Boolean(lat && lng)
     const { data, error } = await sb.from('locais_salvos').insert({
-      nome, endereco, complemento: complemento || null, latitude: lat, longitude: lng,
-      situacao: 'aguardando_conferencia', fonte_coordenada: 'Busca da Mapbox no formulário de escolta, ajustada no pino',
+      nome, endereco: endereco.trim(), complemento: complemento.trim() || null,
+      latitude: temCoord ? lat : null, longitude: temCoord ? lng : null, uf: uf || null,
+      situacao: 'aguardando_conferencia',
+      fonte_coordenada: temCoord ? 'Formulário de escolta (busca, pino ou atalho); conferir o pino' : 'Formulário de escolta, sem coordenada; pôr o pino na conferência',
     }).select('id')
-    if (error || !data?.length) return `Não foi possível salvar: ${error?.message ?? 'sem permissão'}`
-    return `Local "${nome}" salvo, aguardando conferência por gestor ou administrador em Configurações, Locais salvos.`
+    if (error || !data?.length) return { ok: false, texto: `Não foi possível salvar: ${error?.message ?? 'sem permissão'}` }
+    return { ok: true, texto: `Local "${nome}" salvo, aguardando conferência por gestor ou administrador em Configurações, Locais salvos.` }
   }
 
   const carregar = useCallback(async () => {
@@ -522,6 +534,8 @@ function FormularioEscolta() {
         destino_complemento: destComp,
         destino_lat: Number(e.destino_lat ?? 0), destino_lng: Number(e.destino_lng ?? 0),
         observacoes: meta.observacoes ?? '',
+        // A UF gravada (onda K) não é lida aqui: só o atalho escolhido nesta edição a envia.
+        origem_uf: '', destino_uf: '',
       })
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -674,6 +688,9 @@ function FormularioEscolta() {
           observacao_financeira: obsFinanceiro.trim() ? obsFinanceiro.trim() : null,
         } : {}),
         ...(podeEscalaFixa ? { escala_fixa: escalaFixa } : {}),
+        // Onda D2: UF do atalho só com a coluna da onda K; vazia não vai (não apaga a gravada).
+        ...(ufNaEscolta && dados.origem_uf ? { origem_uf: dados.origem_uf } : {}),
+        ...(ufNaEscolta && dados.destino_uf ? { destino_uf: dados.destino_uf } : {}),
       }
 
       let escoltaId: string
@@ -993,9 +1010,15 @@ function FormularioEscolta() {
 
             {/* Origem */}
             <div>
-              <FieldLabel required>Endereço de Origem</FieldLabel>
-              <AtalhosLocais locais={locais} selecionadoId={confOrigem.localId} onEscolher={(l) => {
-                setDados(d => ({ ...d, origem_endereco: l.endereco, origem_complemento: l.complemento ?? d.origem_complemento, origem_lat: l.latitude ?? 0, origem_lng: l.longitude ?? 0 }))
+              <div className="flex items-start justify-between gap-2 flex-wrap">
+                <FieldLabel required>Endereço de Origem</FieldLabel>
+                {podeSalvarLocal && (
+                  <SalvarEnderecoLocal campo="origem" endereco={dados.origem_endereco} uf={dados.origem_uf}
+                    onSalvar={(nome, uf) => salvarComoLocal(nome, dados.origem_endereco, dados.origem_complemento, dados.origem_lat, dados.origem_lng, uf)} />
+                )}
+              </div>
+              <AtalhosLocais campo="origem" locais={locais} selecionadoId={confOrigem.localId} onEscolher={(l) => {
+                setDados(d => ({ ...d, origem_endereco: l.endereco, origem_complemento: l.complemento ?? '', origem_lat: l.latitude ?? 0, origem_lng: l.longitude ?? 0, origem_uf: l.uf ?? '' }))
                 setConfOrigem({ conferida: true, semNumero: false, viaLocal: l.nome, localId: l.id })
               }} />
               <AddressAutocomplete
@@ -1007,15 +1030,15 @@ function FormularioEscolta() {
                   // nasceria com o endereço de um lugar e a coordenada de outro.
                   origem_lat: lat ?? 0,
                   origem_lng: lon ?? 0,
+                  origem_uf: '',
                 })) }}
                 placeholder="Rua, número, bairro, cidade..."
                 icon={<MapPin size={15} />}
               />
               <ConferenciaCoordenada lat={dados.origem_lat || null} lng={dados.origem_lng || null}
-                conferida={confOrigem.conferida} semNumero={confOrigem.semNumero} viaLocal={confOrigem.viaLocal} podeSalvarLocal={podeSalvarLocal}
+                conferida={confOrigem.conferida} semNumero={confOrigem.semNumero} viaLocal={confOrigem.viaLocal} uf={dados.origem_uf}
                 onMover={(lat, lng) => setDados(d => ({ ...d, origem_lat: lat, origem_lng: lng }))}
-                onConferir={(v) => setConfOrigem(c => ({ ...c, conferida: v }))}
-                onSalvarLocal={(nome) => salvarComoLocal(nome, dados.origem_endereco, dados.origem_complemento, dados.origem_lat, dados.origem_lng)} />
+                onConferir={(v) => setConfOrigem(c => ({ ...c, conferida: v }))} />
             </div>
 
             {/* Complemento da origem: campo separado de propósito, para que digitar aqui
@@ -1040,9 +1063,15 @@ function FormularioEscolta() {
 
             {/* Destino */}
             <div>
-              <FieldLabel required>Endereço de Destino</FieldLabel>
-              <AtalhosLocais locais={locais} selecionadoId={confDestino.localId} onEscolher={(l) => {
-                setDados(d => ({ ...d, destino_endereco: l.endereco, destino_complemento: l.complemento ?? d.destino_complemento, destino_lat: l.latitude ?? 0, destino_lng: l.longitude ?? 0 }))
+              <div className="flex items-start justify-between gap-2 flex-wrap">
+                <FieldLabel required>Endereço de Destino</FieldLabel>
+                {podeSalvarLocal && (
+                  <SalvarEnderecoLocal campo="destino" endereco={dados.destino_endereco} uf={dados.destino_uf}
+                    onSalvar={(nome, uf) => salvarComoLocal(nome, dados.destino_endereco, dados.destino_complemento, dados.destino_lat, dados.destino_lng, uf)} />
+                )}
+              </div>
+              <AtalhosLocais campo="destino" locais={locais} selecionadoId={confDestino.localId} onEscolher={(l) => {
+                setDados(d => ({ ...d, destino_endereco: l.endereco, destino_complemento: l.complemento ?? '', destino_lat: l.latitude ?? 0, destino_lng: l.longitude ?? 0, destino_uf: l.uf ?? '' }))
                 setConfDestino({ conferida: true, semNumero: false, viaLocal: l.nome, localId: l.id })
               }} />
               <AddressAutocomplete
@@ -1053,15 +1082,15 @@ function FormularioEscolta() {
                   // Mesma regra da origem: texto editado à mão perde a coordenada antiga.
                   destino_lat: lat ?? 0,
                   destino_lng: lon ?? 0,
+                  destino_uf: '',
                 })) }}
                 placeholder="Rua, número, bairro, cidade..."
                 icon={<Flag size={15} />}
               />
               <ConferenciaCoordenada lat={dados.destino_lat || null} lng={dados.destino_lng || null}
-                conferida={confDestino.conferida} semNumero={confDestino.semNumero} viaLocal={confDestino.viaLocal} podeSalvarLocal={podeSalvarLocal}
+                conferida={confDestino.conferida} semNumero={confDestino.semNumero} viaLocal={confDestino.viaLocal} uf={dados.destino_uf}
                 onMover={(lat, lng) => setDados(d => ({ ...d, destino_lat: lat, destino_lng: lng }))}
-                onConferir={(v) => setConfDestino(c => ({ ...c, conferida: v }))}
-                onSalvarLocal={(nome) => salvarComoLocal(nome, dados.destino_endereco, dados.destino_complemento, dados.destino_lat, dados.destino_lng)} />
+                onConferir={(v) => setConfDestino(c => ({ ...c, conferida: v }))} />
             </div>
 
             {/* Complemento do destino: mesma regra da origem. */}
