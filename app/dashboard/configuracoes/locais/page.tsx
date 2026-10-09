@@ -11,7 +11,7 @@ import { MapPin, Plus, CheckCircle2, Ban, Save } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
 import { MapaPino } from '@/components/mapa/mapa-pino'
-import { LocalSalvo, PERFIS_ATIVAM_LOCAL, PERFIS_CADASTRAM_LOCAL, UFS } from '@/lib/locais'
+import { LocalSalvo, PERFIS_ATIVAM_LOCAL, PERFIS_CADASTRAM_LOCAL, UFS, mensagemErroLocal } from '@/lib/locais'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const sb = createClient() as any
@@ -33,27 +33,52 @@ export default function LocaisSalvosPage() {
   const [edicao, setEdicao] = useState<Edicao | null>(null)
   const [msg, setMsg] = useState<{ ok: boolean; texto: string } | null>(null)
   const [ocupado, setOcupado] = useState(false)
+  // Onda D2: erro ao ler a lista (sem a 215 no banco: colunas uf e vezes_usado ausentes) não
+  // vira lista vazia, para ninguém recadastrar os locais.
+  const [erroCarga, setErroCarga] = useState<string | null>(null)
+  // Falhas da contagem de uso (215), só para gestor e administrador.
+  const [falhasUso, setFalhasUso] = useState<{ total: number; ultima: string | null } | null>(null)
 
   const carregar = useCallback(async () => {
-    const { data } = await sb.from('locais_salvos')
+    const { data, error } = await sb.from('locais_salvos')
       .select('id, nome, endereco, complemento, latitude, longitude, situacao, fonte_coordenada, conferido_em, uf, vezes_usado, conferidor:usuarios!conferido_por(nome_completo)')
       .order('situacao').order('vezes_usado', { ascending: false }).order('nome')
+    if (error) {
+      setErroCarga(['42703', 'PGRST200', 'PGRST204'].includes(error.code ?? '')
+        ? 'Atualização em andamento: a lista de locais volta em alguns minutos. Não recadastre os locais.'
+        : 'Não foi possível carregar os locais. Tente de novo em instantes.')
+      return
+    }
+    setErroCarga(null)
     setLocais(((data ?? []) as LocalSalvo[]).map(l => ({ ...l, latitude: l.latitude != null ? Number(l.latitude) : null, longitude: l.longitude != null ? Number(l.longitude) : null })))
   }, [])
   useEffect(() => { if (podeEditar) carregar() }, [podeEditar, carregar])
+  useEffect(() => {
+    if (!podeAtivar) return
+    sb.rpc('locais_uso_falhas_resumo').then(({ data, error }: { data: { total: number; ultima: string | null }[] | null; error: unknown }) => {
+      if (!error && data?.[0]) setFalhasUso(data[0])
+    })
+  }, [podeAtivar])
 
   const salvar = async (ativarDepois = false) => {
     if (!edicao) return
     setOcupado(true); setMsg(null)
     const campos = { nome: edicao.nome.trim(), endereco: edicao.endereco.trim(), complemento: edicao.complemento?.trim() || null, latitude: edicao.latitude, longitude: edicao.longitude, uf: edicao.uf || null }
+    const antes = edicao.id ? locais.find(l => l.id === edicao.id)?.situacao : null
     const r = edicao.id
-      ? await sb.from('locais_salvos').update(campos).eq('id', edicao.id).select('id')
-      : await sb.from('locais_salvos').insert({ ...campos, situacao: 'aguardando_conferencia', fonte_coordenada: 'Cadastrado na tela de locais salvos' }).select('id')
-    setMsg(r.error || !r.data?.length ? { ok: false, texto: r.error?.message ?? 'Sem permissão.' } : { ok: true, texto: edicao.id ? 'Local salvo. Se a coordenada mudou, ele volta para conferência.' : 'Local criado, aguardando conferência.' })
+      ? await sb.from('locais_salvos').update(campos).eq('id', edicao.id).select('id, situacao')
+      : await sb.from('locais_salvos').insert({ ...campos, situacao: 'aguardando_conferencia', fonte_coordenada: 'Cadastrado na tela de locais salvos' }).select('id, situacao')
+    // A regra do banco (205 e 215) devolve para conferência o local ativo que muda de nome,
+    // endereço, complemento, pino ou UF: a mensagem diz quando isso aconteceu.
+    const devolvido = antes === 'ativo' && r.data?.[0]?.situacao === 'aguardando_conferencia'
+    setMsg(r.error || !r.data?.length ? { ok: false, texto: mensagemErroLocal(r.error) }
+      : { ok: true, texto: !edicao.id ? 'Local criado, aguardando conferência.'
+        : devolvido ? 'Local salvo e devolvido para conferência: só volta a ser atalho depois que gestor ou administrador conferir o pino.'
+        : 'Local salvo.' })
     if (!r.error && r.data?.length && ativarDepois) {
       // Conferência com o mapa aberto: salva o pino e ativa na mesma ação (decisão 6).
       const a = await sb.from('locais_salvos').update({ situacao: 'ativo' }).eq('id', r.data[0].id).select('id')
-      setMsg(a.error || !a.data?.length ? { ok: false, texto: a.error?.message ?? 'Sem permissão para ativar.' } : { ok: true, texto: `"${edicao.nome}" conferido no mapa e ativo: já aparece como atalho.` })
+      setMsg(a.error || !a.data?.length ? { ok: false, texto: a.error ? mensagemErroLocal(a.error) : 'Sem permissão para ativar.' } : { ok: true, texto: `"${edicao.nome}" conferido no mapa e ativo: já aparece como atalho.` })
     }
     setOcupado(false)
     if (!r.error) { setEdicao(null); await carregar() }
@@ -62,7 +87,7 @@ export default function LocaisSalvosPage() {
   const mudarSituacao = async (l: LocalSalvo, situacao: LocalSalvo['situacao']) => {
     setOcupado(true); setMsg(null)
     const { data, error } = await sb.from('locais_salvos').update({ situacao }).eq('id', l.id).select('id')
-    setMsg(error || !data?.length ? { ok: false, texto: error?.message ?? 'Sem permissão.' }
+    setMsg(error || !data?.length ? { ok: false, texto: mensagemErroLocal(error) }
       : { ok: true, texto: situacao === 'ativo' ? `"${l.nome}" conferido e ativo: já aparece como atalho.` : `"${l.nome}" ${situacao === 'inativo' ? 'inativado' : 'devolvido para conferência'}.` })
     setOcupado(false); await carregar()
   }
@@ -83,9 +108,15 @@ export default function LocaisSalvosPage() {
         </button>
       </div>
       <p className="text-xs" style={{ color: '#5A6A80' }}>
-        Atalhos de origem e destino. Só os locais <strong>ativos</strong> aparecem no formulário de escolta, os mais usados primeiro. Um local só fica ativo depois que gestor ou administrador confere o pino no mapa; mudar endereço, pino ou UF de um local ativo pede nova conferência.
+        Atalhos de origem e destino. Só os locais <strong>ativos</strong> aparecem no formulário de escolta, os mais usados primeiro. Um local só fica ativo depois que gestor ou administrador confere o pino no mapa; mudar nome, endereço, complemento, pino ou UF de um local ativo pede nova conferência.
       </p>
 
+      {falhasUso && falhasUso.total > 0 && (
+        <div className="p-3 text-xs" data-teste="falhas-uso" style={{ backgroundColor: 'rgba(201,138,20,0.10)', color: '#7A5200', borderRadius: '4px' }}>
+          {`A contagem de uso dos locais falhou ${falhasUso.total} ${falhasUso.total === 1 ? 'vez' : 'vezes'}${falhasUso.ultima ? ` (última em ${falhasUso.ultima}, horário de Brasília)` : ''}. A ordem dos atalhos pode estar desatualizada: avise o suporte.`}
+        </div>
+      )}
+      {erroCarga && <div className="p-3 text-sm" data-teste="erro-carga" style={{ backgroundColor: 'rgba(184,56,50,0.08)', color: '#B83832', borderRadius: '4px' }}>{erroCarga}</div>}
       {msg && <div className="p-3 text-sm" style={{ backgroundColor: msg.ok ? '#E8F5EE' : 'rgba(184,56,50,0.08)', color: msg.ok ? '#1E7C52' : '#B83832', borderRadius: '4px' }}>{msg.texto}</div>}
 
       {edicao && (

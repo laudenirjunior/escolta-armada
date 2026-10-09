@@ -15,9 +15,9 @@ export interface LocalSalvo {
   fonte_coordenada: string | null
   conferido_em: string | null
   conferidor?: { nome_completo: string } | null
-  /** UF do local (migration 215); o atalho a leva para a escolta quando a onda K existir. */
+  /** UF do local (migration 215); o atalho a põe no formulário (a escolta só grava a UF com a onda K). */
   uf?: string | null
-  /** Quantas vezes o local virou origem ou destino de escolta (trigger da 215). */
+  /** Quantas vezes o local é origem ou destino de escolta não cancelada (triggers da 215). */
   vezes_usado?: number
 }
 
@@ -44,14 +44,16 @@ export async function carregarLocaisAtivos(sb: any): Promise<LocalSalvo[]> {
 }
 
 /**
- * A escolta já tem as colunas de UF (onda K, migration 216)? Sem elas, a UF que o atalho
- * preenche fica só na tela e não vai para o INSERT (gravar coluna inexistente derrubaria a
- * criação). A editar_escolta (218) já ignora sozinha as colunas que não existem.
+ * Mensagem em português para o erro ao gravar um local salvo (onda D2): nome repetido, sem
+ * permissão, formato recusado ou regra do banco (que já vem em português).
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function escoltaTemUf(sb: any): Promise<boolean> {
-  const { error } = await sb.from('escoltas').select('origem_uf, destino_uf').limit(0)
-  return !error
+export function mensagemErroLocal(erro: { code?: string; message?: string } | null | undefined): string {
+  if (!erro) return 'Sem permissão para salvar locais.'
+  if (erro.code === '23505') return 'Já existe um local com esse nome. Escolha outro nome.'
+  if (erro.code === '42501') return 'Sem permissão para salvar locais.'
+  if (erro.code === '23514') return 'O local tem dados fora do formato aceito: confira a UF e o pino.'
+  if (erro.code === 'P0001' && erro.message) return erro.message
+  return 'Não foi possível salvar o local. Tente de novo.'
 }
 
 /** Distância em metros entre duas coordenadas (haversine). */

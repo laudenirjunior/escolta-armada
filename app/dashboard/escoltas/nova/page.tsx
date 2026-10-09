@@ -14,7 +14,7 @@ import { AiTextButton } from '@/components/ui/ai-text-button'
 import { AtalhosLocais } from '@/components/endereco/atalhos-locais'
 import { ConferenciaCoordenada } from '@/components/endereco/conferencia-coordenada'
 import { SalvarEnderecoLocal } from '@/components/endereco/salvar-endereco-local'
-import { LocalSalvo, carregarLocaisAtivos, escoltaTemUf, PERFIS_CADASTRAM_LOCAL } from '@/lib/locais'
+import { LocalSalvo, carregarLocaisAtivos, mensagemErroLocal, PERFIS_CADASTRAM_LOCAL } from '@/lib/locais'
 import { PODE_PODER_TOTAL, temPermissao } from '@/lib/permissions'
 import { MSG_ATUALIZACAO, ehFuncaoAusente } from '@/lib/gestao'
 import { rotuloStatus } from '@/lib/fluxo-escolta'
@@ -59,7 +59,7 @@ interface DadosBasicos  {
   destino_lat: number
   destino_lng: number
   observacoes: string
-  /** Onda D2: UF preenchida pelo atalho do local salvo; só vai ao banco com a coluna da onda K. */
+  /** Onda D2: UF preenchida pelo atalho do local salvo; fica só no formulário (a escolta grava a UF na onda K). */
   origem_uf: string
   destino_uf: string
 }
@@ -443,9 +443,11 @@ function FormularioEscolta() {
   const [confOrigem, setConfOrigem] = useState(confVazia)
   const [confDestino, setConfDestino] = useState(confVazia)
   const podeSalvarLocal = PERFIS_CADASTRAM_LOCAL.includes((user?.perfil?.codigo ?? '') as string)
-  // Onda D2: a escolta só recebe a UF quando a coluna da onda K existir (o código confere).
-  const [ufNaEscolta, setUfNaEscolta] = useState(false)
-  useEffect(() => { carregarLocaisAtivos(sb).then(setLocais); escoltaTemUf(sb).then(setUfNaEscolta) }, [])
+  useEffect(() => { carregarLocaisAtivos(sb).then(setLocais) }, [])
+  // Onda D2: endereço escolhido por último em cada lado (atalho, sugestão da busca ou o da
+  // escolta em edição). O complemento é desse endereço: escolher outro (atalho ou busca)
+  // troca ou limpa o complemento; o digitado antes da primeira escolha fica.
+  const enderecoEscolhido = useRef({ origem: '', destino: '' })
   // "Salvar este endereço" ao lado do campo (onda D2): endereço, complemento, coordenada e UF
   // do campo; nasce aguardando conferência (a trigger da 205 garante, mesmo pedindo ativo).
   const salvarComoLocal = async (nome: string, endereco: string, complemento: string, lat: number, lng: number, uf: string): Promise<{ ok: boolean; texto: string }> => {
@@ -456,7 +458,7 @@ function FormularioEscolta() {
       situacao: 'aguardando_conferencia',
       fonte_coordenada: temCoord ? 'Formulário de escolta (busca, pino ou atalho); conferir o pino' : 'Formulário de escolta, sem coordenada; pôr o pino na conferência',
     }).select('id')
-    if (error || !data?.length) return { ok: false, texto: `Não foi possível salvar: ${error?.message ?? 'sem permissão'}` }
+    if (error || !data?.length) return { ok: false, texto: mensagemErroLocal(error) }
     return { ok: true, texto: `Local "${nome}" salvo, aguardando conferência por gestor ou administrador em Configurações, Locais salvos.` }
   }
 
@@ -493,8 +495,8 @@ function FormularioEscolta() {
           destino_endereco, destino_lat, destino_lng,
           periodicidade_checkin_min, valor_cobrado, outros_custos, observacao_financeira, escala_fixa,
           veiculos:escolta_veiculos(
-            id, veiculo_id,
-            efetivo:escolta_efetivo(id, vigilante_id, papel_na_escolta, valor_pago_vigilante)
+            id, veiculo_id, criado_em,
+            efetivo:escolta_efetivo(id, vigilante_id, papel_na_escolta, valor_pago_vigilante, criado_em)
           )
         `)
         .eq('id', editandoId)
@@ -534,19 +536,26 @@ function FormularioEscolta() {
         destino_complemento: destComp,
         destino_lat: Number(e.destino_lat ?? 0), destino_lng: Number(e.destino_lng ?? 0),
         observacoes: meta.observacoes ?? '',
-        // A UF gravada (onda K) não é lida aqui: só o atalho escolhido nesta edição a envia.
+        // A UF gravada não é lida nem gravada aqui na D2: é da onda K (docs/14, 15.2 item 4).
         origem_uf: '', destino_uf: '',
       })
+      enderecoEscolhido.current = { origem: tirarSufixo(e.origem_endereco ?? '', origComp), destino: tirarSufixo(e.destino_endereco ?? '', destComp) }
 
+      // Onda D2 (defeito achado na intermitência do g_efetivo): o embutido do PostgREST vem na
+      // ordem física das linhas, que muda depois de um UPDATE; a edição mostrava as viaturas
+      // (e a equipe) fora da ordem do detalhe e do Campo. Mesma ordem das RPCs e da onda H:
+      // criado_em, depois id.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const vts = (e.veiculos ?? []) as any[]
+      const porCriacao = (a: any, b: any) => String(a.criado_em ?? '').localeCompare(String(b.criado_em ?? '')) || String(a.id).localeCompare(String(b.id))
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const vts = ([...(e.veiculos ?? [])] as any[]).sort(porCriacao)
       setViaturas(vts.length
         ? vts.map((v) => ({
             uid: uid(),
             escolta_veiculo_id: v.id,
             veiculo_id: v.veiculo_id ?? '',
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            membros: (v.efetivo ?? []).map((m: any) => ({
+            membros: [...(v.efetivo ?? [])].sort(porCriacao).map((m: any) => ({
               uid: uid(),
               vigilante_id: m.vigilante_id ?? '',
               papel_na_escolta: (m.papel_na_escolta === 'comandante' ? 'comandante' : 'operador') as 'comandante' | 'operador',
@@ -688,9 +697,8 @@ function FormularioEscolta() {
           observacao_financeira: obsFinanceiro.trim() ? obsFinanceiro.trim() : null,
         } : {}),
         ...(podeEscalaFixa ? { escala_fixa: escalaFixa } : {}),
-        // Onda D2: UF do atalho só com a coluna da onda K; vazia não vai (não apaga a gravada).
-        ...(ufNaEscolta && dados.origem_uf ? { origem_uf: dados.origem_uf } : {}),
-        ...(ufNaEscolta && dados.destino_uf ? { destino_uf: dados.destino_uf } : {}),
+        // Onda D2: a UF do atalho fica só no formulário. Gravar origem_uf, destino_uf e
+        // uf_estimada (na criação e na edição, por qualquer caminho) é da onda K.
       }
 
       let escoltaId: string
@@ -1018,14 +1026,24 @@ function FormularioEscolta() {
                 )}
               </div>
               <AtalhosLocais campo="origem" locais={locais} selecionadoId={confOrigem.localId} onEscolher={(l) => {
-                setDados(d => ({ ...d, origem_endereco: l.endereco, origem_complemento: l.complemento ?? '', origem_lat: l.latitude ?? 0, origem_lng: l.longitude ?? 0, origem_uf: l.uf ?? '' }))
+                // Complemento do local; local sem complemento limpa o do endereço anterior,
+                // mas mantém o digitado antes de qualquer escolha.
+                const havia = enderecoEscolhido.current.origem
+                enderecoEscolhido.current.origem = l.endereco
+                setDados(d => ({ ...d, origem_endereco: l.endereco, origem_complemento: l.complemento ?? (havia ? '' : d.origem_complemento), origem_lat: l.latitude ?? 0, origem_lng: l.longitude ?? 0, origem_uf: l.uf ?? '' }))
                 setConfOrigem({ conferida: true, semNumero: false, viaLocal: l.nome, localId: l.id })
               }} />
               <AddressAutocomplete
                 value={dados.origem_endereco}
-                onChange={(addr, lat, lon, meta) => { setConfOrigem({ conferida: false, semNumero: Boolean(meta?.semNumero), viaLocal: null, localId: null }); setDados(d => ({
+                onChange={(addr, lat, lon, meta) => {
+                  // Sugestão escolhida (com coordenada) diferente do endereço anterior: o
+                  // complemento era do anterior e sai, como no atalho.
+                  const limpaComplemento = lat != null && !!enderecoEscolhido.current.origem && addr !== enderecoEscolhido.current.origem
+                  if (lat != null) enderecoEscolhido.current.origem = addr
+                  setConfOrigem({ conferida: false, semNumero: Boolean(meta?.semNumero), viaLocal: null, localId: null }); setDados(d => ({
                   ...d,
                   origem_endereco: addr,
+                  ...(limpaComplemento ? { origem_complemento: '' } : {}),
                   // Digitar depois de escolher invalida a coordenada: sem isto a escolta
                   // nasceria com o endereço de um lugar e a coordenada de outro.
                   origem_lat: lat ?? 0,
@@ -1071,14 +1089,22 @@ function FormularioEscolta() {
                 )}
               </div>
               <AtalhosLocais campo="destino" locais={locais} selecionadoId={confDestino.localId} onEscolher={(l) => {
-                setDados(d => ({ ...d, destino_endereco: l.endereco, destino_complemento: l.complemento ?? '', destino_lat: l.latitude ?? 0, destino_lng: l.longitude ?? 0, destino_uf: l.uf ?? '' }))
+                // Complemento do local; local sem complemento limpa o do endereço anterior,
+                // mas mantém o digitado antes de qualquer escolha.
+                const havia = enderecoEscolhido.current.destino
+                enderecoEscolhido.current.destino = l.endereco
+                setDados(d => ({ ...d, destino_endereco: l.endereco, destino_complemento: l.complemento ?? (havia ? '' : d.destino_complemento), destino_lat: l.latitude ?? 0, destino_lng: l.longitude ?? 0, destino_uf: l.uf ?? '' }))
                 setConfDestino({ conferida: true, semNumero: false, viaLocal: l.nome, localId: l.id })
               }} />
               <AddressAutocomplete
                 value={dados.destino_endereco}
-                onChange={(addr, lat, lon, meta) => { setConfDestino({ conferida: false, semNumero: Boolean(meta?.semNumero), viaLocal: null, localId: null }); setDados(d => ({
+                onChange={(addr, lat, lon, meta) => {
+                  const limpaComplemento = lat != null && !!enderecoEscolhido.current.destino && addr !== enderecoEscolhido.current.destino
+                  if (lat != null) enderecoEscolhido.current.destino = addr
+                  setConfDestino({ conferida: false, semNumero: Boolean(meta?.semNumero), viaLocal: null, localId: null }); setDados(d => ({
                   ...d,
                   destino_endereco: addr,
+                  ...(limpaComplemento ? { destino_complemento: '' } : {}),
                   // Mesma regra da origem: texto editado à mão perde a coordenada antiga.
                   destino_lat: lat ?? 0,
                   destino_lng: lon ?? 0,
