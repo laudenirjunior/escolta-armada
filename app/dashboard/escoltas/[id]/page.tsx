@@ -1228,15 +1228,10 @@ export default function EscoltaDetalhePage() {
       setErro('As observações do checklist de viatura são obrigatórias no Passo 2.')
       return
     }
-    const faltamFotosPartida = erroFotosFaltando(fotosPartida, 'do hodômetro/saída (Passo 3)')
-    if (faltamFotosPartida) { setErro(faltamFotosPartida); return }
-    const semKm = viaturas.filter((v) => !kmPartida[v.id])
-    if (semKm.length > 0) {
-      setErro(viaturas.length === 1
-        ? 'O KM de partida é obrigatório no Passo 3.'
-        : `Informe o KM de partida das viaturas: ${semKm.map(rotuloViatura).join(', ')}.`)
-      return
-    }
+    // Onda H: KM inicial e foto do painel saem do Passo 2, por viatura. A mesma
+    // conferência do avanço do Passo 2 roda aqui de novo, como defesa.
+    const faltaPorViatura = erroPorViaturaPasso2()
+    if (faltaPorViatura) { setErro(faltaPorViatura); return }
     if (!obsPartida.trim()) {
       setErro('As observações de partida são obrigatórias no Passo 3.')
       return
@@ -1617,6 +1612,31 @@ export default function EscoltaDetalhePage() {
       return `É obrigatório registrar ao menos ${FOTOS_POR_PONTO.min} foto ${oQue}.`
     }
     return `Fotos ${oQue} pendentes: ${faltando.map(rotuloViatura).join(', ')}. Cada viatura precisa de ao menos ${FOTOS_POR_PONTO.min} foto.`
+  }
+
+  /**
+   * Onda H (lote 2026-10): conferência do bloco "Por viatura" do Passo 2 do wizard.
+   * Cada viatura precisa de KM inicial (número maior que zero) e da foto do painel com
+   * o hodômetro. Usada no avanço do Passo 2 e de novo no "Confirmar e iniciar escolta".
+   */
+  const erroPorViaturaPasso2 = (): string | null => {
+    const varias = viaturas.length > 1
+    const semKm = viaturas.filter((v) => !(kmPartida[v.id] ?? '').trim())
+    if (semKm.length > 0) {
+      return varias
+        ? `Informe o KM inicial no Passo 2 das viaturas: ${semKm.map(rotuloViatura).join(', ')}.`
+        : 'O KM inicial é obrigatório no Passo 2.'
+    }
+    const kmInvalido = viaturas.filter((v) => {
+      const n = Number(kmPartida[v.id])
+      return !Number.isFinite(n) || n <= 0
+    })
+    if (kmInvalido.length > 0) {
+      return varias
+        ? `KM inicial inválido no Passo 2 (use um número maior que zero): ${kmInvalido.map(rotuloViatura).join(', ')}.`
+        : 'KM inicial inválido no Passo 2: use um número maior que zero.'
+    }
+    return erroFotosFaltando(fotosPartida, 'do painel com o hodômetro (Passo 2)')
   }
 
   /**
@@ -2923,12 +2943,12 @@ export default function EscoltaDetalhePage() {
               <div>
                 <h3 className="font-bold text-xs text-[#53648A] uppercase tracking-wider">Passo 2: Checklist do Veículo (VTR)</h3>
                 <p className="text-[11px] mt-1" style={{ color: '#7A8FA6' }}>
-                  Fotografe a viatura em <strong>5 ângulos obrigatórios</strong> e marque todos os itens do checklist. A viatura só é liberada para saída após a conclusão completa deste passo.
+                  Fotografe a viatura em <strong>5 ângulos obrigatórios</strong>, marque todos os itens do checklist e informe, <strong>para cada viatura</strong>, o KM inicial e a foto do painel com o hodômetro. A viatura só é liberada para saída após a conclusão completa deste passo.
                 </p>
                 {/* Lacuna declarada: o checklist de partida ainda cobre so a primeira viatura. */}
                 {viaturas.length > 1 && (
                   <p className="text-[11px] mt-2 p-2" style={{ color: '#8B6914', backgroundColor: '#FBF3DE', border: '1px solid rgba(139,105,20,0.25)' }}>
-                    Esta escolta tem {viaturas.length} viaturas. Este checklist registra apenas a viatura {rotuloViatura(viaturas[0])}. O ponto de controle de saída e o KM, no Passo 3, são registrados para cada viatura.
+                    Esta escolta tem {viaturas.length} viaturas. As 5 fotos de ângulo e o checklist de condições registram apenas a viatura {rotuloViatura(viaturas[0])}. O KM inicial e a foto do painel, no bloco Por viatura abaixo, são de cada viatura.
                   </p>
                 )}
               </div>
@@ -2997,6 +3017,58 @@ export default function EscoltaDetalhePage() {
                 </div>
               </div>
 
+              {/* Onda H (lote 2026-10): KM inicial e foto do painel, um cartão por viatura. */}
+              <div>
+                <div className="flex items-center gap-2 mb-3 pb-2" style={{ borderBottom: '1px solid #EEF1F7' }}>
+                  <div style={{ width: '3px', height: '14px', backgroundColor: '#1A294A' }} />
+                  <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: '#1A294A' }}>Por viatura: KM inicial e foto do painel</span>
+                </div>
+                <div className="space-y-3">
+                  {viaturas.map((v) => {
+                    const kmOk = Number(kmPartida[v.id]) > 0
+                    const fotoOk = (fotosPartida[v.id]?.length ?? 0) >= FOTOS_POR_PONTO.min
+                    const ok = kmOk && fotoOk
+                    return (
+                      <div key={v.id} data-viatura-passo2={rotuloViatura(v)} style={{ border: `1.5px solid ${ok ? '#1E7C52' : '#D6DAE5'}`, padding: '12px', backgroundColor: ok ? 'rgba(30,124,82,0.04)' : '#F8FAFC' }}>
+                        <div className="flex items-center gap-2 mb-2">
+                          {ok
+                            ? <CheckCircle2 size={13} style={{ color: '#1E7C52', flexShrink: 0 }} />
+                            : <Truck size={13} style={{ color: '#B83832', flexShrink: 0 }} />
+                          }
+                          <span className="text-[11px] font-black uppercase tracking-wide" style={{ color: ok ? '#1E7C52' : '#B83832' }}>
+                            {rotuloViatura(v)}{v.veiculo?.modelo ? ` · ${v.veiculo.modelo}` : ''}
+                          </span>
+                        </div>
+                        <div className="space-y-3">
+                          <KmViaturasInput
+                            viaturas={[v]}
+                            valor={kmPartida}
+                            label="KM inicial *"
+                            placeholder="Ex: 104500"
+                            className="input-light text-xs w-full"
+                            labelClassName="block text-xs font-bold mb-1.5 text-[#5A6A80] uppercase tracking-wide"
+                            onChange={(viaturaId, km) => setKmPartida((prev) => ({ ...prev, [viaturaId]: km }))}
+                          />
+                          <div>
+                            <label className="block text-xs font-bold mb-1.5 text-[#5A6A80] uppercase tracking-wide">
+                              Foto do painel com o hodômetro * (use a câmera){fotoOk ? ': registrada' : ''}
+                            </label>
+                            {/* Uma foto por viatura: vai no ponto de saída daquela viatura, no Passo 3. */}
+                            <FotosViaturasInput
+                              viaturas={[v]}
+                              valor={fotosPartida}
+                              prefixoNome="wizard_partida"
+                              max={1}
+                              onChange={(viaturaId, fs) => setFotosPartida((prev) => ({ ...prev, [viaturaId]: fs }))}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+
               {/* Observações */}
               <div>
                 <label className="block text-xs font-bold mb-1.5 uppercase tracking-wide" style={{ color: '#5A6A80' }}>
@@ -3022,6 +3094,8 @@ export default function EscoltaDetalhePage() {
                     const faltando = FOTOS_VIATURA_DEF.filter(f => !fotosViatura[f.key])
                     if (faltando.length > 0) { setErro(`Fotos obrigatórias: ${faltando.map(f => f.label).join(', ')}.`); return }
                     if (!obsViatura.trim()) { setErro('As observações são obrigatórias.'); return }
+                    const faltaPorViatura = erroPorViaturaPasso2()
+                    if (faltaPorViatura) { setErro(faltaPorViatura); return }
                     setErro(null)
                     setWizardStep(3)
                   }}
@@ -3038,28 +3112,16 @@ export default function EscoltaDetalhePage() {
             <div className="space-y-4">
               <h3 className="font-bold text-xs text-[#53648A] uppercase tracking-wider">Passo 3: Registro de Partida (Saída da Base)</h3>
               
-              <KmViaturasInput
-                viaturas={viaturas}
-                valor={kmPartida}
-                label="Quilometragem Inicial (KM) da Viatura *"
-                placeholder="Ex: 104500"
-                className="input-light text-xs w-full"
-                labelClassName="block text-xs font-bold mb-1.5 text-[#5A6A80] uppercase tracking-wide"
-                onChange={(viaturaId, km) => setKmPartida((prev) => ({ ...prev, [viaturaId]: km }))}
-              />
-
-              <div>
-                <label className="block text-xs font-bold mb-1.5 text-[#5A6A80] uppercase tracking-wide">
-                  Foto do Hodômetro / Painel * (Use a Câmera)
-                </label>
-                {/* Uma foto de hodometro por viatura: cada uma sai da base com o proprio KM. */}
-                <FotosViaturasInput
-                  viaturas={viaturas}
-                  valor={fotosPartida}
-                  prefixoNome="wizard_partida"
-                  max={1}
-                  onChange={(viaturaId, fs) => setFotosPartida((prev) => ({ ...prev, [viaturaId]: fs }))}
-                />
+              {/* Onda H: KM e foto do painel vêm do Passo 2; aqui só a conferência. */}
+              <div data-resumo-km-partida className="p-3" style={{ border: '1px solid #D6DAE5', backgroundColor: '#F8FAFC' }}>
+                <p className="text-[10px] font-black uppercase tracking-widest mb-1.5" style={{ color: '#1A294A' }}>KM inicial informado no Passo 2</p>
+                <ul className="space-y-0.5">
+                  {viaturas.map((v) => (
+                    <li key={v.id} className="text-xs" style={{ color: '#0E1A33' }}>
+                      {rotuloViatura(v)}: <strong>{Number(kmPartida[v.id] || 0).toLocaleString('pt-BR')} km</strong>
+                    </li>
+                  ))}
+                </ul>
               </div>
 
               <div>

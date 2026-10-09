@@ -49,7 +49,7 @@ const ACAO_POR_DESTINO: Record<string, string> = {
 const INSTRUCAO_POR_STATUS: Record<string, string> = {
   [STATUS.RASCUNHO]: 'Esta escolta ainda está em planejamento. Aguarde a liberação.',
   [STATUS.AGENDADA]: 'Com a equipe na base, inicie o pré-início da escolta.',
-  [STATUS.EM_PRE_INICIO]: 'Confira os equipamentos, registre as fotos da viatura e o KM inicial.',
+  [STATUS.EM_PRE_INICIO]: 'Confira os equipamentos e as fotos da viatura; no Passo 2, informe o KM inicial e a foto do painel de cada viatura.',
   [STATUS.EM_ANDAMENTO]: 'Ao chegar na origem, tire a foto e registre a chegada.',
   [STATUS.NA_ORIGEM]: 'Ao sair para o destino, tire a foto e registre a saída.',
   [STATUS.EM_TRANSITO_DESTINO]: 'Ao chegar no destino, tire a foto e registre a chegada.',
