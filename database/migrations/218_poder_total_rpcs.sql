@@ -473,7 +473,7 @@ DECLARE
   v_permitidos text[] := ARRAY['cliente_id', 'data_hora_prevista', 'origem_endereco', 'origem_lat', 'origem_lng',
                                'destino_endereco', 'destino_lat', 'destino_lng', 'metadados', 'periodicidade_checkin_min',
                                'valor_cobrado', 'outros_custos', 'observacao_financeira', 'escala_fixa',
-                               'origem_uf', 'destino_uf', 'uf_estimada'];
+                               'origem_uf', 'destino_uf', 'origem_uf_estimada', 'destino_uf_estimada'];
   v_financeiro text[] := ARRAY['valor_cobrado', 'outros_custos', 'observacao_financeira'];
   v_sets text; v_k text; v_antes jsonb; v_depois jsonb; v_equipe_antes jsonb; v_equipe_depois jsonb;
   vt jsonb; m jsonb; v_ev uuid; v_ev_atual record; v_mudou_estrutura boolean := false; v_ids_mantidos uuid[] := '{}';
@@ -500,7 +500,11 @@ BEGIN
     IF NOT v_k = ANY (v_permitidos) THEN RAISE EXCEPTION 'Campo não editável: %', v_k; END IF;
   END LOOP;
   IF v_perfil = 'central' THEN v_campos := v_campos - v_financeiro; END IF;
-  -- Colunas que ainda não existem (UF da onda K) ficam de fora sem erro.
+  -- Colunas que ainda não existem (UF da onda K) ficam de fora sem erro. UF no servidor (onda K,
+  -- revisão adversarial, médio 2): o UPDATE abaixo leva só as chaves recebidas; se a coordenada
+  -- de um lado muda e as chaves de UF daquele lado não vêm (ou a UF vem nula com coordenada), as
+  -- triggers da 216 em escoltas (tr_escoltas_uf_*) recalculam a UF pela malha e ligam a marca de
+  -- estimada daquele lado. A UF antiga nunca fica por omissão.
   SELECT string_agg(CASE WHEN a.attname = 'metadados'
                            THEN 'metadados = nullif(jsonb_strip_nulls(coalesce(e.metadados, ''{}''::jsonb) || coalesce(r.metadados, ''{}''::jsonb)), ''{}''::jsonb)'
                          ELSE format('%I = r.%I', a.attname, a.attname) END, ', ')

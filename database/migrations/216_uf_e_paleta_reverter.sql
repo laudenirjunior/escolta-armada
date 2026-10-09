@@ -1,12 +1,15 @@
 -- 216_uf_e_paleta_reverter.sql
 -- ORDEM: primeiro o git revert do código da onda K e o deploy; depois este arquivo (antes da
--- 215_reverter). Guarda as UFs em backup_20261008.escoltas_uf (uma linha por escolta com UF;
--- rodar de novo não apaga o que já foi guardado), devolve a cor antiga (backup_20261008.cores_clientes)
--- aos clientes que continuam com a cor da carga (quem trocou de cor depois da 216 fica com a da
--- paleta, que também é válida), devolve o DEFAULT antigo da cor, tira a trigger de cor, a paleta,
--- as RPCs uf_da_coordenada e cores_clientes_das_escoltas, as funções internas, a malha, o índice, as restrições e as colunas
--- (a gerada primeiro) e recria impedir_edicao_por_operador com o corpo da 197.
--- A lista de conferência (backup_20261008.uf_a_conferir) e os backups ficam.
+-- 215_reverter). Guarda UF, marcas de estimada e coordenadas em backup_20261008.escoltas_uf
+-- (uma linha por escolta com UF ou marca; rodar de novo atualiza) e a cor de cada cliente no
+-- momento em backup_20261008.cores_reversao, para a reaplicação da 216 devolver as duas coisas
+-- sem transformar em estimada uma UF que não era e sem mudar cor escolhida (revisão K, menor
+-- 13). Devolve a cor antiga (backup_20261008.cores_clientes) aos clientes que continuam com a
+-- cor da carga (quem trocou de cor depois da 216 fica com a da paleta, que também é válida),
+-- devolve o DEFAULT antigo da cor, tira as triggers de cor e de UF, a paleta, as RPCs
+-- uf_da_coordenada e cores_clientes_das_escoltas, as funções internas, a malha, o índice, as
+-- restrições e as colunas (a gerada primeiro) e recria impedir_edicao_por_operador com o corpo
+-- da 197. A lista de conferência (backup_20261008.uf_a_conferir) e os backups ficam.
 CREATE SCHEMA IF NOT EXISTS backup_20261008;
 REVOKE ALL ON SCHEMA backup_20261008 FROM PUBLIC, anon, authenticated;
 DO $$
@@ -14,23 +17,50 @@ BEGIN
   IF EXISTS (SELECT 1 FROM information_schema.columns
               WHERE table_schema = 'public' AND table_name = 'escoltas' AND column_name = 'origem_uf') THEN
     CREATE TABLE IF NOT EXISTS backup_20261008.escoltas_uf (escolta_id uuid PRIMARY KEY, codigo_escolta text,
-      origem_uf text, destino_uf text, uf_estimada boolean, guardado_em timestamptz NOT NULL DEFAULT now());
+      origem_uf text, destino_uf text, guardado_em timestamptz NOT NULL DEFAULT now());
+    ALTER TABLE backup_20261008.escoltas_uf ADD COLUMN IF NOT EXISTS origem_uf_estimada boolean;
+    ALTER TABLE backup_20261008.escoltas_uf ADD COLUMN IF NOT EXISTS destino_uf_estimada boolean;
+    ALTER TABLE backup_20261008.escoltas_uf ADD COLUMN IF NOT EXISTS origem_lat numeric;
+    ALTER TABLE backup_20261008.escoltas_uf ADD COLUMN IF NOT EXISTS origem_lng numeric;
+    ALTER TABLE backup_20261008.escoltas_uf ADD COLUMN IF NOT EXISTS destino_lat numeric;
+    ALTER TABLE backup_20261008.escoltas_uf ADD COLUMN IF NOT EXISTS destino_lng numeric;
     REVOKE ALL ON backup_20261008.escoltas_uf FROM PUBLIC, anon, authenticated;
     EXECUTE $q$
-      INSERT INTO backup_20261008.escoltas_uf (escolta_id, codigo_escolta, origem_uf, destino_uf, uf_estimada)
-      SELECT id, codigo_escolta, origem_uf, destino_uf, uf_estimada FROM public.escoltas
-       WHERE origem_uf IS NOT NULL OR destino_uf IS NOT NULL
+      INSERT INTO backup_20261008.escoltas_uf (escolta_id, codigo_escolta, origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada,
+                                               origem_lat, origem_lng, destino_lat, destino_lng)
+      SELECT id, codigo_escolta, origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada,
+             origem_lat, origem_lng, destino_lat, destino_lng FROM public.escoltas
+       WHERE origem_uf IS NOT NULL OR destino_uf IS NOT NULL OR origem_uf_estimada OR destino_uf_estimada
       ON CONFLICT (escolta_id) DO UPDATE SET origem_uf = EXCLUDED.origem_uf, destino_uf = EXCLUDED.destino_uf,
-        uf_estimada = EXCLUDED.uf_estimada, guardado_em = now()$q$;
+        origem_uf_estimada = EXCLUDED.origem_uf_estimada, destino_uf_estimada = EXCLUDED.destino_uf_estimada,
+        origem_lat = EXCLUDED.origem_lat, origem_lng = EXCLUDED.origem_lng, destino_lat = EXCLUDED.destino_lat,
+        destino_lng = EXCLUDED.destino_lng, guardado_em = now()$q$;
   END IF;
 END $$;
+
+-- Triggers e funções da UF no servidor.
+DROP TRIGGER IF EXISTS tr_escoltas_uf_2_recalcular ON public.escoltas;
+DROP TRIGGER IF EXISTS tr_escoltas_uf_1_informada_origem ON public.escoltas;
+DROP TRIGGER IF EXISTS tr_escoltas_uf_1_informada_destino ON public.escoltas;
+DROP FUNCTION IF EXISTS lote_interno.recalcular_uf_escolta();
+DROP FUNCTION IF EXISTS lote_interno.anotar_uf_informada();
 
 -- Cor: trigger fora antes de devolver a cor antiga (senão ela voltaria para a paleta).
 DROP TRIGGER IF EXISTS tr_normalizar_cor_cliente ON public.clientes;
 DROP FUNCTION IF EXISTS lote_interno.normalizar_cor_cliente();
 DO $$
 BEGIN
-  IF to_regclass('backup_20261008.cores_clientes') IS NOT NULL THEN
+  IF to_regclass('backup_20261008.cores_clientes') IS NOT NULL AND to_regclass('public.paleta_clientes') IS NOT NULL THEN
+    -- Cor de cada cliente agora (para a reaplicação) e a que a reversão devolve.
+    CREATE TABLE IF NOT EXISTS backup_20261008.cores_reversao (cliente_id uuid PRIMARY KEY, cor_na_reversao text,
+      cor_devolvida text, guardado_em timestamptz NOT NULL DEFAULT now());
+    REVOKE ALL ON backup_20261008.cores_reversao FROM PUBLIC, anon, authenticated;
+    INSERT INTO backup_20261008.cores_reversao (cliente_id, cor_na_reversao, cor_devolvida)
+    SELECT c.id, c.cor_destaque,
+           CASE WHEN b.cliente_id IS NOT NULL AND c.cor_destaque IS NOT DISTINCT FROM b.cor_nova THEN b.cor_antiga ELSE c.cor_destaque END
+      FROM public.clientes c LEFT JOIN backup_20261008.cores_clientes b ON b.cliente_id = c.id
+    ON CONFLICT (cliente_id) DO UPDATE SET cor_na_reversao = EXCLUDED.cor_na_reversao, cor_devolvida = EXCLUDED.cor_devolvida,
+      guardado_em = now();
     UPDATE public.clientes c SET cor_destaque = b.cor_antiga
       FROM backup_20261008.cores_clientes b
      WHERE b.cliente_id = c.id AND c.cor_destaque IS NOT DISTINCT FROM b.cor_nova
@@ -56,7 +86,8 @@ DROP INDEX IF EXISTS public.idx_escoltas_interestadual;
 ALTER TABLE public.escoltas DROP CONSTRAINT IF EXISTS escoltas_origem_uf_formato;
 ALTER TABLE public.escoltas DROP CONSTRAINT IF EXISTS escoltas_destino_uf_formato;
 ALTER TABLE public.escoltas DROP COLUMN IF EXISTS interestadual;
-ALTER TABLE public.escoltas DROP COLUMN IF EXISTS uf_estimada;
+ALTER TABLE public.escoltas DROP COLUMN IF EXISTS destino_uf_estimada;
+ALTER TABLE public.escoltas DROP COLUMN IF EXISTS origem_uf_estimada;
 ALTER TABLE public.escoltas DROP COLUMN IF EXISTS destino_uf;
 ALTER TABLE public.escoltas DROP COLUMN IF EXISTS origem_uf;
 

@@ -66,13 +66,15 @@ DO $$
 DECLARE n int; t text; v_ok boolean;
 BEGIN
   SELECT count(*) INTO n FROM information_schema.columns
-   WHERE table_schema = 'public' AND table_name = 'escoltas' AND column_name IN ('origem_uf', 'destino_uf', 'uf_estimada', 'interestadual');
-  IF n = 4 THEN RAISE NOTICE 'PASSOU: escoltas tem origem_uf, destino_uf, uf_estimada e interestadual';
-  ELSE RAISE NOTICE 'FALHOU: % de 4 colunas novas', n; END IF;
+   WHERE table_schema = 'public' AND table_name = 'escoltas'
+     AND column_name IN ('origem_uf', 'destino_uf', 'origem_uf_estimada', 'destino_uf_estimada', 'interestadual');
+  IF n = 5 AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'escoltas' AND column_name = 'uf_estimada') THEN
+    RAISE NOTICE 'PASSOU: escoltas tem origem_uf, destino_uf, a marca de estimada por lado (origem_uf_estimada, destino_uf_estimada) e interestadual; sem a marca única uf_estimada';
+  ELSE RAISE NOTICE 'FALHOU: % de 5 colunas novas', n; END IF;
   SELECT pg_get_expr(d.adbin, d.adrelid) INTO t FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum
    WHERE d.adrelid = 'public.escoltas'::regclass AND a.attname = 'interestadual' AND a.attgenerated = 's';
-  IF t = '((origem_uf <> ''RJ''::text) OR (destino_uf <> ''RJ''::text))' THEN
-    RAISE NOTICE 'PASSOU: interestadual é coluna gerada (origem ou destino fora do RJ)';
+  IF t LIKE '%origem_uf <> ''RJ''%' AND t LIKE '%destino_uf_estimada%' AND t LIKE '%THEN false%' THEN
+    RAISE NOTICE 'PASSOU: interestadual é coluna gerada (origem ou destino fora do RJ, lado fora do Brasil conta como fora do RJ)';
   ELSE RAISE NOTICE 'FALHOU: expressão de interestadual %', coalesce(t, 'ausente'); END IF;
   SELECT count(*) INTO n FROM pg_constraint WHERE conrelid = 'public.escoltas'::regclass
      AND conname IN ('escoltas_origem_uf_formato', 'escoltas_destino_uf_formato');
@@ -83,11 +85,18 @@ BEGIN
   ELSE RAISE NOTICE 'FALHOU: malha com % UFs', n; END IF;
   SELECT count(*) INTO n FROM pg_proc p WHERE p.pronamespace = 'lote_interno'::regnamespace
      AND p.proname IN ('ponto_no_anel', 'distancia_ao_anel_km', 'uf_mais_proxima', 'uf_do_ponto', 'carregar_uf_escoltas',
-                       'cor_lab', 'cor_da_paleta', 'normalizar_cor_cliente')
+                       'cor_lab', 'cor_da_paleta', 'normalizar_cor_cliente', 'anotar_uf_informada', 'recalcular_uf_escolta')
      AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')
      AND 'search_path=public, pg_temp' = ANY (p.proconfig);
-  IF n = 8 THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: as 8 funções internas da 216 no lote_interno, sem EXECUTE para anon e authenticated, search_path fixo';
-  ELSE RAISE NOTICE 'FALHOU: % de 8 funções internas corretas', n; END IF;
+  IF n = 10 THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: as 10 funções internas da 216 no lote_interno, sem EXECUTE para anon e authenticated, search_path fixo';
+  ELSE RAISE NOTICE 'FALHOU: % de 10 funções internas corretas', n; END IF;
+  SELECT string_agg(tgname || ':' || (pg_get_triggerdef(oid) LIKE '%BEFORE%')::text, ',' ORDER BY tgname) INTO t FROM pg_trigger
+   WHERE tgrelid = 'public.escoltas'::regclass AND tgname LIKE 'tr_escoltas_uf_%';
+  IF t = 'tr_escoltas_uf_1_informada_destino:true,tr_escoltas_uf_1_informada_origem:true,tr_escoltas_uf_2_recalcular:true'
+     AND (SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE tgname = 'tr_escoltas_uf_1_informada_origem') LIKE '%UPDATE OF origem_uf, origem_uf_estimada%'
+     AND (SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE tgname = 'tr_escoltas_uf_2_recalcular') LIKE '%BEFORE INSERT OR UPDATE%' THEN
+    RAISE NOTICE 'PASSOU: triggers da UF no servidor (anotação por lado com UPDATE OF e recálculo em INSERT e UPDATE, na ordem do nome)';
+  ELSE RAISE NOTICE 'FALHOU: triggers da UF %', coalesce(t, 'ausentes'); END IF;
   SELECT p.prosecdef AND p.provolatile = 's' AND 'search_path=public, pg_temp' = ANY (p.proconfig)
          AND has_function_privilege('authenticated', p.oid, 'EXECUTE') AND NOT has_function_privilege('anon', p.oid, 'EXECUTE')
     INTO v_ok FROM pg_proc p WHERE p.oid = 'public.uf_da_coordenada(double precision, double precision)'::regprocedure;
@@ -101,7 +110,7 @@ BEGIN
     RAISE NOTICE 'BLOQUEADO CORRETAMENTE: malha, paleta (RLS ligada) e backups fora do alcance de anon e authenticated';
   ELSE RAISE NOTICE 'FALHOU: privilégios de malha, paleta ou backups'; END IF;
   SELECT pg_get_functiondef('public.impedir_edicao_por_operador()'::regprocedure) INTO t;
-  IF t LIKE '%''origem_uf'',''destino_uf'',''uf_estimada''%' THEN RAISE NOTICE 'PASSOU: impedir_edicao_por_operador recriada com as colunas da UF';
+  IF t LIKE '%''origem_uf'',''destino_uf'',''origem_uf_estimada'',''destino_uf_estimada''%' THEN RAISE NOTICE 'PASSOU: impedir_edicao_por_operador recriada com as colunas da UF e as duas marcas';
   ELSE RAISE NOTICE 'FALHOU: impedir_edicao_por_operador sem as colunas da UF'; END IF;
   SELECT pg_get_triggerdef(oid) INTO t FROM pg_trigger WHERE tgname = 'tr_normalizar_cor_cliente' AND tgrelid = 'public.clientes'::regclass;
   IF t LIKE '%BEFORE INSERT OR UPDATE OF cor_destaque ON public.clientes FOR EACH ROW%' THEN RAISE NOTICE 'PASSOU: trigger de cor em INSERT e UPDATE de cor_destaque';
@@ -159,8 +168,26 @@ BEGIN
   IF v.distancia_divisa_km > 50 THEN RAISE NOTICE 'PASSOU: centro do Rio a % km da divisa (o litoral não conta como divisa)', v.distancia_divisa_km;
   ELSE RAISE NOTICE 'FALHOU: centro do Rio a % km', v.distancia_divisa_km; END IF;
   SELECT * INTO v FROM lote_interno.uf_do_ponto(0, 0);
-  IF v.uf IS NULL THEN RAISE NOTICE 'PASSOU: coordenada 0,0 fica sem UF';
+  IF v.uf IS NULL AND v.fora_da_malha IS NULL THEN RAISE NOTICE 'PASSOU: coordenada 0,0 fica sem UF (coordenada inválida, sem cálculo)';
   ELSE RAISE NOTICE 'FALHOU: 0,0 deu %', v.uf; END IF;
+  -- Revisão K, menor 12: fora do Brasil (fora da malha e a mais de 30 km dela) é UF nula.
+  v_ok := 0;
+  FOR r IN SELECT * FROM (VALUES ('Buenos Aires', -34.6037, -58.3816), ('Assunção', -25.2637, -57.5759), ('Montevidéu', -34.9011, -56.1645),
+                                 ('mar a 600 km de Cabo Frio', -25.0, -38.0), ('(-60, 0)', -60.0, 0.0)) x(nome, lat, lng) LOOP
+    SELECT * INTO v FROM lote_interno.uf_do_ponto(r.lat, r.lng);
+    IF v.uf IS NULL AND v.fora_da_malha AND v.distancia_divisa_km > 30 THEN v_ok := v_ok + 1;
+    ELSE RAISE NOTICE 'FALHOU: % deu % (fora %, % km)', r.nome, coalesce(v.uf, 'nula'), v.fora_da_malha, v.distancia_divisa_km; END IF;
+  END LOOP;
+  IF v_ok = 5 THEN RAISE NOTICE 'PASSOU: fora do Brasil (Buenos Aires, Assunção, Montevidéu, alto-mar, (-60, 0)) fica sem UF, com fora_da_malha';
+  ELSE RAISE NOTICE 'FALHOU: % de 5 pontos fora do Brasil sem UF', v_ok; END IF;
+  v_ok := 0;
+  FOR r IN SELECT * FROM (VALUES ('Galeão', 'RJ', -22.8135, -43.2486), ('Búzios', 'RJ', -22.7469, -41.8817), ('Arraial do Cabo', 'RJ', -22.9661, -42.0278),
+                                 ('Ilha Grande', 'RJ', -23.15, -44.23), ('Ilhabela', 'SP', -23.78, -45.36)) x(nome, esperado, lat, lng) LOOP
+    SELECT * INTO v FROM lote_interno.uf_do_ponto(r.lat, r.lng);
+    IF v.uf = r.esperado THEN v_ok := v_ok + 1; ELSE RAISE NOTICE 'FALHOU: % deu %', r.nome, coalesce(v.uf, 'nula'); END IF;
+  END LOOP;
+  IF v_ok = 5 THEN RAISE NOTICE 'PASSOU: ilhas e litoral da malha mínima continuam com a UF certa (Galeão, Búzios, Arraial, Ilha Grande, Ilhabela)';
+  ELSE RAISE NOTICE 'FALHOU: % de 5 ilhas e litoral', v_ok; END IF;
 END $$;
 ROLLBACK;
 
@@ -177,9 +204,11 @@ BEGIN
     IF n <> 0 THEN RAISE NOTICE 'FALHOU: % recebeu linha para coordenada nula', u; END IF;
     SELECT count(*) INTO n FROM public.uf_da_coordenada(0, 0);
     IF n <> 0 THEN RAISE NOTICE 'FALHOU: % recebeu linha para 0,0', u; END IF;
+    SELECT * INTO v FROM public.uf_da_coordenada(-34.6037, -58.3816);
+    IF v.uf IS NOT NULL OR v.fora_da_malha IS DISTINCT FROM true THEN RAISE NOTICE 'FALHOU: % recebeu % para Buenos Aires', u, v.uf; END IF;
     PERFORM pg_temp.pg();
   END LOOP;
-  IF v_ok = 5 THEN RAISE NOTICE 'PASSOU: uf_da_coordenada responde a administrador, gestor, supervisor, central e operador (SP para São Paulo; nada para nula e 0,0)';
+  IF v_ok = 5 THEN RAISE NOTICE 'PASSOU: uf_da_coordenada responde a administrador, gestor, supervisor, central e operador (SP para São Paulo; nada para nula e 0,0; UF nula com fora_da_malha para Buenos Aires)';
   ELSE RAISE NOTICE 'FALHOU: % de 5 perfis', v_ok; END IF;
   BEGIN
     PERFORM * FROM public.uf_da_coordenada(-22.9, -43.2);
@@ -189,16 +218,17 @@ BEGIN
 END $$;
 ROLLBACK;
 
--- ── 4. Interestadual pela coluna gerada e formato da UF ─────────────────────────────
+-- ── 4. Interestadual pela coluna gerada, formato da UF e UF no servidor ──────────────
 BEGIN;
 SELECT qa.como('qa_gestor');
 DO $$
 DECLARE e uuid; r record;
 BEGIN
   INSERT INTO public.escoltas (cliente_id, data_hora_prevista, origem_endereco, origem_lat, origem_lng, destino_endereco, destino_lat, destino_lng,
-                               data_solicitacao, status, checklist_pendente_no_inicio, criada_por, origem_uf, destino_uf, uf_estimada)
+                               data_solicitacao, status, checklist_pendente_no_inicio, criada_por, origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada)
   VALUES ('00000000-0000-4000-a000-0000000000c1', now() + interval '2 days', 'QA K Rio', -22.9068, -43.1729, 'QA K São Paulo', -23.5505, -46.6333,
-          now(), 'agendada', true, public.get_meu_usuario_id(), 'RJ', 'SP', false) RETURNING id INTO e;
+          now(), 'agendada', true, public.get_meu_usuario_id(), 'RJ', 'SP', false, false) RETURNING id INTO e;
+  PERFORM set_config('t.e4', e::text, true);
   SELECT interestadual INTO r FROM public.escoltas WHERE id = e;
   IF r.interestadual THEN RAISE NOTICE 'PASSOU: Rio para São Paulo gravada pela gestão sai interestadual';
   ELSE RAISE NOTICE 'FALHOU: Rio para São Paulo não interestadual'; END IF;
@@ -206,11 +236,20 @@ BEGIN
   SELECT interestadual INTO r FROM public.escoltas WHERE id = e;
   IF r.interestadual = false THEN RAISE NOTICE 'PASSOU: só RJ não é interestadual';
   ELSE RAISE NOTICE 'FALHOU: só RJ deu %', r.interestadual; END IF;
-  UPDATE public.escoltas SET destino_uf = NULL WHERE id = e;
+  UPDATE public.escoltas SET destino_uf = NULL, destino_uf_estimada = false WHERE id = e;
+  SELECT interestadual, destino_uf INTO r FROM public.escoltas WHERE id = e;
+  IF r.interestadual IS NULL AND r.destino_uf IS NULL THEN RAISE NOTICE 'PASSOU: RJ e UF desconhecida (informada nula, coordenada sem mudança) fica nula (não determinado)';
+  ELSE RAISE NOTICE 'FALHOU: RJ e nula deu % %', r.interestadual, r.destino_uf; END IF;
+  -- Revisão K, menor 12: lado fora do Brasil (UF nula com a marca) conta como fora do RJ.
+  UPDATE public.escoltas SET destino_uf_estimada = true WHERE id = e;
   SELECT interestadual INTO r FROM public.escoltas WHERE id = e;
-  IF r.interestadual IS NULL THEN RAISE NOTICE 'PASSOU: RJ e UF desconhecida fica nula (não determinado)';
-  ELSE RAISE NOTICE 'FALHOU: RJ e nula deu %', r.interestadual; END IF;
-  UPDATE public.escoltas SET origem_uf = 'MG' WHERE id = e;
+  IF r.interestadual THEN RAISE NOTICE 'PASSOU: RJ para fora do Brasil (UF nula com a marca de estimada) é interestadual (regra documentada na 216)';
+  ELSE RAISE NOTICE 'FALHOU: RJ e fora do Brasil deu %', r.interestadual; END IF;
+  UPDATE public.escoltas SET origem_uf = NULL, origem_uf_estimada = false WHERE id = e;
+  SELECT interestadual INTO r FROM public.escoltas WHERE id = e;
+  IF r.interestadual THEN RAISE NOTICE 'PASSOU: desconhecido para fora do Brasil também é interestadual (sai do RJ de qualquer modo)';
+  ELSE RAISE NOTICE 'FALHOU: desconhecido e fora do Brasil deu %', r.interestadual; END IF;
+  UPDATE public.escoltas SET origem_uf = 'MG', destino_uf_estimada = false WHERE id = e;
   SELECT interestadual INTO r FROM public.escoltas WHERE id = e;
   IF r.interestadual THEN RAISE NOTICE 'PASSOU: origem MG e destino desconhecido já é interestadual';
   ELSE RAISE NOTICE 'FALHOU: MG e nula deu %', r.interestadual; END IF;
@@ -219,58 +258,134 @@ BEGIN
     RAISE NOTICE 'FALHOU: UF minúscula aceita';
   EXCEPTION WHEN check_violation THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: UF fora do formato de duas letras maiúsculas';
   END;
-  -- Edição pela RPC da gestão (218): troca a UF e a interestadual acompanha.
-  PERFORM public.editar_escolta(e, '{"origem_uf": "RJ", "destino_uf": "SP", "uf_estimada": true}'::jsonb, NULL, NULL);
-  SELECT origem_uf, destino_uf, uf_estimada, interestadual INTO r FROM public.escoltas WHERE id = e;
-  IF r.origem_uf = 'RJ' AND r.destino_uf = 'SP' AND r.uf_estimada AND r.interestadual THEN
-    RAISE NOTICE 'PASSOU: editar_escolta grava origem_uf, destino_uf e uf_estimada, e interestadual acompanha';
-  ELSE RAISE NOTICE 'FALHOU: editar_escolta deu % % % %', r.origem_uf, r.destino_uf, r.uf_estimada, r.interestadual; END IF;
+  -- Edição pela RPC da gestão (218): troca a UF e as marcas por lado; a interestadual acompanha.
+  PERFORM public.editar_escolta(e, '{"origem_uf": "RJ", "destino_uf": "SP", "origem_uf_estimada": false, "destino_uf_estimada": true}'::jsonb, NULL, NULL);
+  SELECT origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada, interestadual INTO r FROM public.escoltas WHERE id = e;
+  IF r.origem_uf = 'RJ' AND r.destino_uf = 'SP' AND NOT r.origem_uf_estimada AND r.destino_uf_estimada AND r.interestadual THEN
+    RAISE NOTICE 'PASSOU: editar_escolta grava origem_uf, destino_uf e a marca de cada lado, e interestadual acompanha';
+  ELSE RAISE NOTICE 'FALHOU: editar_escolta deu %', r; END IF;
   PERFORM public.editar_escolta(e, jsonb_build_object('data_hora_prevista', now() + interval '3 days'), NULL, NULL);
-  SELECT origem_uf, destino_uf, uf_estimada INTO r FROM public.escoltas WHERE id = e;
-  IF r.origem_uf = 'RJ' AND r.destino_uf = 'SP' AND r.uf_estimada THEN RAISE NOTICE 'PASSOU: editar só a data não mexe na UF';
+  SELECT origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada INTO r FROM public.escoltas WHERE id = e;
+  IF r.origem_uf = 'RJ' AND r.destino_uf = 'SP' AND NOT r.origem_uf_estimada AND r.destino_uf_estimada THEN RAISE NOTICE 'PASSOU: editar só a data não mexe na UF nem nas marcas';
   ELSE RAISE NOTICE 'FALHOU: editar a data mudou a UF'; END IF;
+END $$;
+-- UF no servidor (revisão K, médio 2 e menor 11).
+DO $$
+DECLARE e uuid := current_setting('t.e4')::uuid; r record; e2 uuid;
+BEGIN
+  -- editar_escolta muda a coordenada do destino (SP para Juiz de Fora) sem as chaves de UF.
+  PERFORM public.editar_escolta(e, '{"destino_endereco": "QA K Juiz de Fora", "destino_lat": -21.7642, "destino_lng": -43.3496}'::jsonb, NULL, NULL);
+  SELECT origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada, interestadual INTO r FROM public.escoltas WHERE id = e;
+  IF r.origem_uf = 'RJ' AND NOT r.origem_uf_estimada AND r.destino_uf = 'MG' AND r.destino_uf_estimada AND r.interestadual THEN
+    RAISE NOTICE 'PASSOU: editar_escolta com a coordenada do destino mudada e sem as chaves de UF recalcula a UF do destino pela malha (MG, estimada); a origem fica';
+  ELSE RAISE NOTICE 'FALHOU: editar_escolta sem UF deu %', r; END IF;
+  -- UPDATE direto como a master (endereço e coordenada, sem UF): destino de volta ao Rio.
+  UPDATE public.escoltas SET destino_endereco = 'QA K Niterói', destino_lat = -22.8832, destino_lng = -43.1034 WHERE id = e;
+  SELECT destino_uf, destino_uf_estimada, interestadual INTO r FROM public.escoltas WHERE id = e;
+  IF r.destino_uf = 'RJ' AND r.destino_uf_estimada AND r.interestadual = false THEN
+    RAISE NOTICE 'PASSOU: UPDATE só do endereço e da coordenada (como a master) não mantém a UF antiga: recalcula RJ, estimada, e a escolta deixa de ser interestadual';
+  ELSE RAISE NOTICE 'FALHOU: UPDATE como a master deu %', r; END IF;
+  -- Coordenada mudada com a UF informada (a tela, com a UF do atalho): fica a informada.
+  PERFORM public.editar_escolta(e, '{"destino_lat": -23.5505, "destino_lng": -46.6333, "destino_uf": "SP", "destino_uf_estimada": false}'::jsonb, NULL, NULL);
+  SELECT destino_uf, destino_uf_estimada INTO r FROM public.escoltas WHERE id = e;
+  IF r.destino_uf = 'SP' AND NOT r.destino_uf_estimada THEN RAISE NOTICE 'PASSOU: coordenada mudada com a UF informada (não estimada) grava a informada';
+  ELSE RAISE NOTICE 'FALHOU: UF informada deu %', r; END IF;
+  -- Coordenada mudada com a UF informada igual à antiga (atalho em outro ponto do mesmo estado): não recalcula.
+  PERFORM public.editar_escolta(e, '{"destino_lat": -22.9, "destino_lng": -47.06, "destino_uf": "SP", "destino_uf_estimada": false}'::jsonb, NULL, NULL);
+  SELECT destino_uf, destino_uf_estimada INTO r FROM public.escoltas WHERE id = e;
+  IF r.destino_uf = 'SP' AND NOT r.destino_uf_estimada THEN RAISE NOTICE 'PASSOU: UF informada igual à antiga com a coordenada mudada continua não estimada (a anotação por lado vê o SET)';
+  ELSE RAISE NOTICE 'FALHOU: UF informada igual deu %', r; END IF;
+  -- Salvar com pressa: coordenada nova e UF informada nula. O servidor calcula.
+  PERFORM public.editar_escolta(e, '{"destino_lat": -20.3155, "destino_lng": -40.3128, "destino_uf": null, "destino_uf_estimada": false}'::jsonb, NULL, NULL);
+  SELECT destino_uf, destino_uf_estimada INTO r FROM public.escoltas WHERE id = e;
+  IF r.destino_uf = 'ES' AND r.destino_uf_estimada THEN RAISE NOTICE 'PASSOU: coordenada nova com UF nula (consulta pendente na tela) não grava nula: o servidor calcula ES, estimada';
+  ELSE RAISE NOTICE 'FALHOU: UF nula com pressa deu %', r; END IF;
+  -- Coordenada fora do Brasil: UF nula com a marca, e interestadual.
+  UPDATE public.escoltas SET destino_lat = -34.6037, destino_lng = -58.3816 WHERE id = e;
+  SELECT destino_uf, destino_uf_estimada, interestadual INTO r FROM public.escoltas WHERE id = e;
+  IF r.destino_uf IS NULL AND r.destino_uf_estimada AND r.interestadual THEN RAISE NOTICE 'PASSOU: coordenada mudada para Buenos Aires fica sem UF, com a marca (fora do Brasil), e interestadual';
+  ELSE RAISE NOTICE 'FALHOU: Buenos Aires deu %', r; END IF;
+  -- Coordenada apagada: sem UF e sem marca.
+  UPDATE public.escoltas SET destino_lat = 0, destino_lng = 0 WHERE id = e;
+  SELECT destino_uf, destino_uf_estimada, interestadual INTO r FROM public.escoltas WHERE id = e;
+  IF r.destino_uf IS NULL AND NOT r.destino_uf_estimada AND r.interestadual IS NULL THEN RAISE NOTICE 'PASSOU: coordenada apagada (0,0) deixa o lado sem UF e sem marca (não determinado)';
+  ELSE RAISE NOTICE 'FALHOU: sem coordenada deu %', r; END IF;
+  -- INSERT como a master (sem UF): o servidor preenche pela coordenada.
+  INSERT INTO public.escoltas (cliente_id, data_hora_prevista, origem_endereco, origem_lat, origem_lng, destino_endereco, destino_lat, destino_lng,
+                               data_solicitacao, status, checklist_pendente_no_inicio, criada_por)
+  VALUES ('00000000-0000-4000-a000-0000000000c1', now() + interval '2 days', 'QA K Rio', -22.9068, -43.1729, 'QA K São Paulo', -23.5505, -46.6333,
+          now(), 'agendada', true, public.get_meu_usuario_id()) RETURNING id INTO e2;
+  SELECT origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada, interestadual INTO r FROM public.escoltas WHERE id = e2;
+  IF r.origem_uf = 'RJ' AND r.destino_uf = 'SP' AND r.origem_uf_estimada AND r.destino_uf_estimada AND r.interestadual THEN
+    RAISE NOTICE 'PASSOU: INSERT sem UF (como a master) recebe a UF pela coordenada nos dois lados, estimada, e sai interestadual';
+  ELSE RAISE NOTICE 'FALHOU: INSERT sem UF deu %', r; END IF;
+  -- Coordenada sem mudança: a UF não muda (escolta que já tinha UF e mudou só a hora).
+  UPDATE public.escoltas SET origem_uf = 'ES', origem_uf_estimada = false WHERE id = e2;
+  UPDATE public.escoltas SET data_hora_prevista = now() + interval '4 days', origem_endereco = 'QA K Rio, texto corrigido' WHERE id = e2;
+  SELECT origem_uf, origem_uf_estimada INTO r FROM public.escoltas WHERE id = e2;
+  IF r.origem_uf = 'ES' AND NOT r.origem_uf_estimada THEN RAISE NOTICE 'PASSOU: UPDATE sem mudar a coordenada não recalcula a UF (fica a gravada)';
+  ELSE RAISE NOTICE 'FALHOU: UPDATE sem coordenada mudou a UF para %', r; END IF;
 END $$;
 SELECT pg_temp.pg();
 ROLLBACK;
 
 -- ── 5. Carga: ESC-2026-0001 e 0007 sem mudança, lista de conferência e escoltas já com UF ──
+-- Prova independente do estado da suíte (revisão K, menor 4): dentro da transação desfeita,
+-- ESC-2026-0001 e 0007 são postas no pior caso (sem UF, sem marca, com coordenada de São
+-- Paulo, que a carga preencheria se não as excluísse), sem disparar trigger; a linha inteira é
+-- guardada antes da carga e comparada depois. No banco recriado do zero elas nascem aqui.
 BEGIN;
--- No banco recriado do zero elas não existem: nascem aqui (sem UF, com coordenada de São Paulo, que a
--- carga preencheria se não as excluísse), só dentro desta transação desfeita.
 DO $$
 DECLARE c text; e uuid;
 BEGIN
   FOREACH c IN ARRAY ARRAY['ESC-2026-0001', 'ESC-2026-0007'] LOOP
     IF NOT EXISTS (SELECT 1 FROM public.escoltas WHERE codigo_escolta = c) THEN
       e := qa.nova_escolta(now() - interval '30 days', 'cancelada');
-      UPDATE public.escoltas SET codigo_escolta = c, origem_lat = -23.5505, origem_lng = -46.6333 WHERE id = e;
+      SET LOCAL session_replication_role = replica;
+      UPDATE public.escoltas SET codigo_escolta = c WHERE id = e;
+      SET LOCAL session_replication_role = origin;
     END IF;
   END LOOP;
 END $$;
+SET LOCAL session_replication_role = replica;
+UPDATE public.escoltas SET origem_uf = NULL, destino_uf = NULL, origem_uf_estimada = false, destino_uf_estimada = false,
+       origem_lat = -23.5505, origem_lng = -46.6333, destino_lat = -22.9068, destino_lng = -43.1729
+ WHERE codigo_escolta IN ('ESC-2026-0001', 'ESC-2026-0007');
+SET LOCAL session_replication_role = origin;
 CREATE TEMP TABLE k_antes ON COMMIT DROP AS
   SELECT id, codigo_escolta, to_jsonb(e) AS linha FROM public.escoltas e WHERE codigo_escolta IN ('ESC-2026-0001', 'ESC-2026-0007');
 DO $$
-DECLARE e1 uuid; e2 uuid; e3 uuid; e4 uuid; n int; r record; v_atu timestamptz;
+DECLARE e1 uuid; e2 uuid; e3 uuid; e4 uuid; e5 uuid; n int; r record; v_atu timestamptz;
 BEGIN
-  -- Escolta sem UF de Além Paraíba (perto da divisa) para o Galeão (fora da malha mínima).
   e1 := qa.nova_escolta(now() + interval '1 day');
-  UPDATE public.escoltas SET origem_lat = -21.8856, origem_lng = -42.7044, destino_lat = -22.8135, destino_lng = -43.2486 WHERE id = e1;
-  -- Escolta de São Paulo para o Rio, sem UF.
   e2 := qa.nova_escolta(now() + interval '1 day');
-  UPDATE public.escoltas SET origem_lat = -23.5505, origem_lng = -46.6333 WHERE id = e2;
-  -- Escolta que já tem UF gravada (não pode mudar) e escolta sem coordenada (não pode mudar).
   e3 := qa.nova_escolta(now() + interval '1 day');
-  UPDATE public.escoltas SET origem_uf = 'ES', destino_uf = 'RJ' WHERE id = e3;
   e4 := qa.nova_escolta(now() + interval '1 day');
-  UPDATE public.escoltas SET origem_lat = 0, origem_lng = 0, destino_lat = 0, destino_lng = 0 WHERE id = e4;
+  e5 := qa.nova_escolta(now() + interval '1 day');
+  -- Escoltas "antigas" sem UF (como antes da 216): preparadas sem disparar trigger.
+  SET LOCAL session_replication_role = replica;
+  -- Além Paraíba (perto da divisa) para o Galeão (fora da malha mínima).
+  UPDATE public.escoltas SET origem_lat = -21.8856, origem_lng = -42.7044, destino_lat = -22.8135, destino_lng = -43.2486,
+         origem_uf = NULL, destino_uf = NULL, origem_uf_estimada = false, destino_uf_estimada = false WHERE id = e1;
+  -- São Paulo para o Rio.
+  UPDATE public.escoltas SET origem_lat = -23.5505, origem_lng = -46.6333, origem_uf = NULL, destino_uf = NULL,
+         origem_uf_estimada = false, destino_uf_estimada = false WHERE id = e2;
+  -- Já com UF gravada (não pode mudar) e sem coordenada (não pode mudar).
+  UPDATE public.escoltas SET origem_uf = 'ES', destino_uf = 'RJ', origem_uf_estimada = false, destino_uf_estimada = false WHERE id = e3;
+  UPDATE public.escoltas SET origem_lat = 0, origem_lng = 0, destino_lat = 0, destino_lng = 0, origem_uf = NULL, destino_uf = NULL,
+         origem_uf_estimada = false, destino_uf_estimada = false WHERE id = e4;
+  -- Um lado com UF (local salvo) e o outro sem: só o lado sem UF é preenchido.
+  UPDATE public.escoltas SET origem_uf = 'RJ', origem_uf_estimada = false, destino_uf = NULL, destino_uf_estimada = false,
+         destino_lat = -21.7642, destino_lng = -43.3496 WHERE id = e5;
+  SET LOCAL session_replication_role = origin;
   SELECT atualizado_em INTO v_atu FROM public.escoltas WHERE id = e4;
 
   n := lote_interno.carregar_uf_escoltas();
 
-  SELECT origem_uf, destino_uf, uf_estimada, interestadual INTO r FROM public.escoltas WHERE id = e1;
-  IF r.origem_uf = 'MG' AND r.destino_uf = 'RJ' AND r.uf_estimada AND r.interestadual THEN
-    RAISE NOTICE 'PASSOU: carga dá MG e RJ pela coordenada, com uf_estimada, e a escolta sai interestadual';
-  ELSE RAISE NOTICE 'FALHOU: carga deu % % % %', r.origem_uf, r.destino_uf, r.uf_estimada, r.interestadual; END IF;
+  SELECT origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada, interestadual INTO r FROM public.escoltas WHERE id = e1;
+  IF r.origem_uf = 'MG' AND r.destino_uf = 'RJ' AND r.origem_uf_estimada AND r.destino_uf_estimada AND r.interestadual THEN
+    RAISE NOTICE 'PASSOU: carga dá MG e RJ pela coordenada, com a marca nos dois lados, e a escolta sai interestadual';
+  ELSE RAISE NOTICE 'FALHOU: carga deu %', r; END IF;
   SELECT count(*) INTO n FROM backup_20261008.uf_a_conferir
    WHERE escolta_id = e1 AND ((lado = 'origem' AND distancia_divisa_km < 5 AND NOT fora_da_malha) OR (lado = 'destino' AND fora_da_malha));
   IF n = 2 THEN RAISE NOTICE 'PASSOU: origem a menos de 5 km da divisa e destino fora da malha vão para backup_20261008.uf_a_conferir';
@@ -280,26 +395,40 @@ BEGIN
      AND NOT EXISTS (SELECT 1 FROM backup_20261008.uf_a_conferir WHERE escolta_id = e2 AND lado = 'origem') THEN
     RAISE NOTICE 'PASSOU: São Paulo para o Rio pela carga sai interestadual, longe da divisa fora da lista';
   ELSE RAISE NOTICE 'FALHOU: SP para RJ deu % % %', r.origem_uf, r.destino_uf, r.interestadual; END IF;
-  SELECT origem_uf, destino_uf, uf_estimada INTO r FROM public.escoltas WHERE id = e3;
-  IF r.origem_uf = 'ES' AND r.destino_uf = 'RJ' AND NOT r.uf_estimada THEN RAISE NOTICE 'PASSOU: escolta que já tinha UF não é tocada pela carga';
+  SELECT origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada INTO r FROM public.escoltas WHERE id = e3;
+  IF r.origem_uf = 'ES' AND r.destino_uf = 'RJ' AND NOT r.origem_uf_estimada AND NOT r.destino_uf_estimada THEN RAISE NOTICE 'PASSOU: escolta que já tinha UF não é tocada pela carga';
   ELSE RAISE NOTICE 'FALHOU: escolta com UF mudou para % %', r.origem_uf, r.destino_uf; END IF;
-  SELECT origem_uf, destino_uf, uf_estimada, atualizado_em = v_atu AS igual INTO r FROM public.escoltas WHERE id = e4;
-  IF r.origem_uf IS NULL AND r.destino_uf IS NULL AND NOT r.uf_estimada AND r.igual THEN
+  SELECT origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada, atualizado_em = v_atu AS igual INTO r FROM public.escoltas WHERE id = e4;
+  IF r.origem_uf IS NULL AND r.destino_uf IS NULL AND NOT r.origem_uf_estimada AND NOT r.destino_uf_estimada AND r.igual THEN
     RAISE NOTICE 'PASSOU: escolta sem coordenada (0,0 nos dois lados, como a Nova trata vazio) fica sem UF e nem é atualizada';
   ELSE RAISE NOTICE 'FALHOU: escolta sem coordenada %', r; END IF;
+  SELECT origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada INTO r FROM public.escoltas WHERE id = e5;
+  IF r.origem_uf = 'RJ' AND NOT r.origem_uf_estimada AND r.destino_uf = 'MG' AND r.destino_uf_estimada THEN
+    RAISE NOTICE 'PASSOU: carga por lado: preenche só o lado sem UF (destino MG, estimado) e não marca a origem do local salvo';
+  ELSE RAISE NOTICE 'FALHOU: carga por lado deu %', r; END IF;
 END $$;
 DO $$
 DECLARE n_antes int; n_igual int;
 BEGIN
   SELECT count(*) INTO n_antes FROM k_antes;
   SELECT count(*) INTO n_igual FROM k_antes a JOIN public.escoltas e ON e.id = a.id
-   WHERE to_jsonb(e) = a.linha AND e.origem_uf IS NULL AND e.destino_uf IS NULL AND NOT e.uf_estimada;
+   WHERE to_jsonb(e) = a.linha AND e.origem_uf IS NULL AND e.destino_uf IS NULL AND NOT e.origem_uf_estimada AND NOT e.destino_uf_estimada;
   IF n_antes = 2 AND n_antes = n_igual THEN
-    RAISE NOTICE 'PASSOU: ESC-2026-0001 e ESC-2026-0007 (% no banco) idênticas linha a linha antes e depois da carga, sem UF', n_antes;
+    RAISE NOTICE 'PASSOU: ESC-2026-0001 e ESC-2026-0007 (% no banco, postas sem UF e com coordenada dentro do teste) idênticas linha a linha antes e depois da carga', n_antes;
   ELSE RAISE NOTICE 'FALHOU: % de % escoltas protegidas iguais depois da carga', n_igual, n_antes; END IF;
   IF NOT EXISTS (SELECT 1 FROM backup_20261008.uf_a_conferir WHERE codigo_escolta IN ('ESC-2026-0001', 'ESC-2026-0007')) THEN
     RAISE NOTICE 'PASSOU: ESC-2026-0001 e 0007 fora da lista de conferência';
   ELSE RAISE NOTICE 'FALHOU: escolta protegida na lista de conferência'; END IF;
+END $$;
+-- Edição só da hora de ESC-2026-0007 não lhe dá UF (a coordenada não muda).
+DO $$
+DECLARE e uuid := (SELECT id FROM public.escoltas WHERE codigo_escolta = 'ESC-2026-0007'); r record;
+BEGIN
+  UPDATE public.escoltas SET data_hora_prevista = data_hora_prevista + interval '1 hour' WHERE id = e;
+  SELECT origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada INTO r FROM public.escoltas WHERE id = e;
+  IF r.origem_uf IS NULL AND r.destino_uf IS NULL AND NOT r.origem_uf_estimada AND NOT r.destino_uf_estimada THEN
+    RAISE NOTICE 'PASSOU: UPDATE de ESC-2026-0007 sem mudar a coordenada não lhe dá UF';
+  ELSE RAISE NOTICE 'FALHOU: ESC-2026-0007 ganhou UF %', r; END IF;
 END $$;
 ROLLBACK;
 
@@ -316,6 +445,9 @@ BEGIN
   IF v_ok = 12 AND v_tot = 12 THEN RAISE NOTICE 'PASSOU: as 12 cores da paleta com contraste de texto branco de pelo menos 4,5:1 (menor %)',
     (SELECT min(pg_temp.contraste_branco(cor)) FROM public.paleta_clientes);
   ELSE RAISE NOTICE 'FALHOU: % de % cores com contraste', v_ok, v_tot; END IF;
+  -- Revisão K, menor 9: o cinza neutro do mural do operador (S17) fica fora da paleta.
+  IF NOT EXISTS (SELECT 1 FROM public.paleta_clientes WHERE cor = '#9CA3AF') THEN RAISE NOTICE 'PASSOU: cinza neutro #9CA3AF fora da paleta';
+  ELSE RAISE NOTICE 'FALHOU: cinza neutro na paleta'; END IF;
   SELECT count(*) INTO n FROM public.paleta_clientes p WHERE lote_interno.cor_da_paleta(lower(p.cor)) = p.cor;
   IF n = 12 THEN RAISE NOTICE 'PASSOU: cada cor da paleta (também minúscula) fica como está';
   ELSE RAISE NOTICE 'FALHOU: % de 12 cores da paleta preservadas', n; END IF;
@@ -325,8 +457,8 @@ DO $$
 DECLARE c uuid; v text; r record; v_ok int := 0; v_tot int := 0;
 BEGIN
   -- Como a master grava (cadastros/page.tsx e clientes/page.tsx): INSERT com cor livre do <input type="color">.
-  FOR r IN SELECT * FROM (VALUES ('#ff0000', '#B91C1C'), ('#00FF00', '#4D7C0F'), ('#3b82f6', '#1D4ED8'), ('#4A90A4', '#115E59'),
-                                 ('#53648A', '#475569'), ('#a855f7', '#7C3AED'), ('azul', '#1D4ED8'), ('', '#1D4ED8'), ('#12345', '#1D4ED8'),
+  FOR r IN SELECT * FROM (VALUES ('#ff0000', '#DD1144'), ('#00FF00', '#15803D'), ('#3b82f6', '#1D4ED8'), ('#4A90A4', '#115577'),
+                                 ('#53648A', '#115577'), ('#a855f7', '#9900AA'), ('azul', '#1D4ED8'), ('', '#1D4ED8'), ('#12345', '#1D4ED8'),
                                  (NULL, '#1D4ED8')) x(entrada, esperado) LOOP
     v_tot := v_tot + 1;
     INSERT INTO public.clientes (nome_cliente, contato, telefone, cor_destaque, status) VALUES ('QA K cliente ' || v_tot, 'QA', '2100000000', r.entrada, 'ativo') RETURNING id, cor_destaque INTO c, v;
@@ -338,14 +470,14 @@ BEGIN
   IF v = '#1D4ED8' THEN RAISE NOTICE 'PASSOU: cliente sem cor nasce com a padrão da paleta';
   ELSE RAISE NOTICE 'FALHOU: sem cor nasceu %', v; END IF;
   UPDATE public.clientes SET cor_destaque = '#FFFF00' WHERE id = c RETURNING cor_destaque INTO v;
-  IF v = '#4D7C0F' THEN RAISE NOTICE 'PASSOU: UPDATE da cor pela master (#FFFF00) cai na mais próxima (#4D7C0F)';
+  IF v = '#A16207' THEN RAISE NOTICE 'PASSOU: UPDATE da cor pela master (#FFFF00) cai na mais próxima (#A16207)';
   ELSE RAISE NOTICE 'FALHOU: UPDATE deu %', v; END IF;
   UPDATE public.clientes SET observacoes = 'teste K' WHERE id = c RETURNING cor_destaque INTO v;
-  IF v = '#4D7C0F' THEN RAISE NOTICE 'PASSOU: UPDATE sem a cor não mexe na cor';
+  IF v = '#A16207' THEN RAISE NOTICE 'PASSOU: UPDATE sem a cor não mexe na cor';
   ELSE RAISE NOTICE 'FALHOU: UPDATE sem cor mudou para %', v; END IF;
   -- S6: a mesma cor em dois clientes ativos é aceita.
-  UPDATE public.clientes SET cor_destaque = '#4D7C0F' WHERE nome_cliente = 'QA K sem cor' RETURNING cor_destaque INTO v;
-  IF v = '#4D7C0F' THEN RAISE NOTICE 'PASSOU: cor não exclusiva (S6): dois clientes ativos com a mesma cor';
+  UPDATE public.clientes SET cor_destaque = '#A16207' WHERE nome_cliente = 'QA K sem cor' RETURNING cor_destaque INTO v;
+  IF v = '#A16207' THEN RAISE NOTICE 'PASSOU: cor não exclusiva (S6): dois clientes ativos com a mesma cor';
   ELSE RAISE NOTICE 'FALHOU: cor repetida recusada'; END IF;
 END $$;
 SELECT pg_temp.pg();
@@ -364,7 +496,7 @@ ROLLBACK;
 -- ── 7. Operador não altera a UF; supervisor e central não alteram UF de escolta iniciada ──
 BEGIN;
 SELECT set_config('t.esc', qa.nova_escolta(now() + interval '1 hour', 'agendada', 'qa_um', 1)::text, true);
-UPDATE public.escoltas SET origem_uf = 'RJ', destino_uf = 'SP', uf_estimada = true WHERE id = current_setting('t.esc')::uuid;
+UPDATE public.escoltas SET origem_uf = 'RJ', destino_uf = 'SP', origem_uf_estimada = true, destino_uf_estimada = true WHERE id = current_setting('t.esc')::uuid;
 DO $$
 DECLARE e uuid := current_setting('t.esc')::uuid; f text; v_ok int := 0; v_tot int := 0; n int;
 BEGIN
@@ -373,7 +505,8 @@ BEGIN
       format('UPDATE public.escoltas SET origem_uf = %L WHERE id = %L', 'MG', e),
       format('UPDATE public.escoltas SET destino_uf = %L WHERE id = %L', 'RJ', e),
       format('UPDATE public.escoltas SET destino_uf = NULL WHERE id = %L', e),
-      format('UPDATE public.escoltas SET uf_estimada = false WHERE id = %L', e)] LOOP
+      format('UPDATE public.escoltas SET origem_uf_estimada = false WHERE id = %L', e),
+      format('UPDATE public.escoltas SET destino_uf_estimada = false WHERE id = %L', e)] LOOP
     v_tot := v_tot + 1;
     BEGIN
       EXECUTE f;
@@ -384,7 +517,7 @@ BEGIN
     END;
   END LOOP;
   PERFORM pg_temp.pg();
-  IF v_ok = v_tot THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: operador da escolta não altera origem_uf, destino_uf nem uf_estimada (% tentativas)', v_tot;
+  IF v_ok = v_tot THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: operador da escolta não altera origem_uf, destino_uf nem as marcas origem_uf_estimada e destino_uf_estimada (% tentativas)', v_tot;
   ELSE RAISE NOTICE 'FALHOU: % de % tentativas recusadas', v_ok, v_tot; END IF;
 END $$;
 -- Escolta já iniciada: só gestor e administrador mudam a UF (214, por to_jsonb, sem citar a coluna).
@@ -415,7 +548,7 @@ ROLLBACK;
 -- ── 8. Escolta iniciada com UF avança pelo operador, pelo supervisor e pela central ─────
 BEGIN;
 SELECT set_config('t.esc', qa.nova_escolta(now() + interval '1 hour', 'agendada', 'qa_um', 2)::text, true);
-UPDATE public.escoltas SET origem_uf = 'RJ', destino_uf = 'SP', uf_estimada = true WHERE id = current_setting('t.esc')::uuid;
+UPDATE public.escoltas SET origem_uf = 'RJ', destino_uf = 'SP', origem_uf_estimada = true, destino_uf_estimada = true WHERE id = current_setting('t.esc')::uuid;
 SELECT qa.como('qa_um');
 SELECT pg_temp.jornada(current_setting('t.esc')::uuid, 'em_andamento');
 DO $$
@@ -439,17 +572,17 @@ SELECT pg_temp.pg();
 DO $$
 DECLARE r record;
 BEGIN
-  SELECT status, origem_uf, destino_uf, uf_estimada, interestadual INTO r FROM public.escoltas WHERE id = current_setting('t.esc')::uuid;
-  IF r.status = 'na_base' AND r.origem_uf = 'RJ' AND r.destino_uf = 'SP' AND r.uf_estimada AND r.interestadual THEN
+  SELECT status, origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada, interestadual INTO r FROM public.escoltas WHERE id = current_setting('t.esc')::uuid;
+  IF r.status = 'na_base' AND r.origem_uf = 'RJ' AND r.destino_uf = 'SP' AND r.origem_uf_estimada AND r.destino_uf_estimada AND r.interestadual THEN
     RAISE NOTICE 'PASSOU: escolta iniciada com UF avançada pelo operador (registrar_etapa_escolta e UPDATE direto), pelo supervisor e pela central até na_base, UF intacta';
   ELSE RAISE NOTICE 'FALHOU: escolta parou em % com UF % % %', r.status, r.origem_uf, r.destino_uf, r.interestadual; END IF;
 END $$;
 ROLLBACK;
 
--- ── 9. Cor do cliente no mural do operador (só a cor, só das escoltas que ele enxerga) ──
+-- ── 9. Cor do cliente (S17): gestão vê todas; operador só a das escoltas dele ─────────
 BEGIN;
 DO $$
-DECLARE c2 uuid; e_mural uuid; e_outra uuid; e_minha uuid; n int; v text; v_nome_visivel boolean;
+DECLARE c2 uuid; e_mural uuid; e_outra uuid; e_minha uuid; n int; v text; v_nome_visivel boolean; u text; v_ok int := 0;
 BEGIN
   INSERT INTO public.clientes (nome_cliente, contato, telefone, cor_destaque, status)
   VALUES ('QA K cliente do mural', 'QA', '2100000000', '#BE185D', 'ativo') RETURNING id INTO c2;
@@ -457,22 +590,31 @@ BEGIN
   UPDATE public.escoltas SET cliente_id = c2 WHERE id = e_mural;
   e_outra := qa.nova_escolta(now() + interval '5 hours', 'em_andamento', 'qa_dois');  -- iniciada de outra equipe
   UPDATE public.escoltas SET cliente_id = c2 WHERE id = e_outra;
-  e_minha := qa.nova_escolta(now() + interval '5 hours', 'agendada', 'qa_um');
-  PERFORM set_config('t.c2', c2::text, true);
+  e_minha := qa.nova_escolta(now() + interval '5 hours', 'agendada', 'qa_um');   -- cliente QA (c1)
 
   PERFORM qa.como('qa_um');
   SELECT EXISTS (SELECT 1 FROM public.escoltas e JOIN public.clientes c ON c.id = e.cliente_id WHERE e.id = e_mural) INTO v_nome_visivel;
-  SELECT x.cor_destaque INTO v FROM public.cores_clientes_das_escoltas(ARRAY[e_mural]) x;
-  IF NOT v_nome_visivel AND v = '#BE185D' THEN
-    RAISE NOTICE 'PASSOU: operador não lê o cliente da escolta do mural pela RLS, mas recebe a cor dele (#BE185D) pela RPC';
-  ELSE RAISE NOTICE 'FALHOU: mural visível % cor %', v_nome_visivel, v; END IF;
+  SELECT count(*) INTO n FROM public.cores_clientes_das_escoltas(ARRAY[e_mural]);
+  IF NOT v_nome_visivel AND n = 0 THEN
+    RAISE NOTICE 'BLOQUEADO CORRETAMENTE: operador não lê o cliente da agendada de outra equipe (RLS) e também não recebe a cor dele (S17: a cor identificaria o cliente)';
+  ELSE RAISE NOTICE 'FALHOU: mural visível % com % cor(es)', v_nome_visivel, n; END IF;
   SELECT count(*) INTO n FROM public.cores_clientes_das_escoltas(ARRAY[e_outra]);
   IF n = 0 THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: operador não recebe a cor de escolta iniciada de outra equipe';
   ELSE RAISE NOTICE 'FALHOU: operador recebeu a cor de escolta que não enxerga'; END IF;
-  SELECT count(*) INTO n FROM public.cores_clientes_das_escoltas(ARRAY[e_minha, e_mural]);
-  IF n = 2 THEN RAISE NOTICE 'PASSOU: operador recebe a cor da própria escolta e da do mural numa chamada';
-  ELSE RAISE NOTICE 'FALHOU: % de 2 cores', n; END IF;
+  SELECT string_agg(x.escolta_id::text, ',') INTO v FROM public.cores_clientes_das_escoltas(ARRAY[e_minha, e_mural]) x;
+  SELECT EXISTS (SELECT 1 FROM public.escoltas e JOIN public.clientes c ON c.id = e.cliente_id WHERE e.id = e_minha) INTO v_nome_visivel;
+  IF v = e_minha::text AND v_nome_visivel THEN RAISE NOTICE 'PASSOU: operador recebe só a cor da própria escolta (a mesma cujo cliente a RLS já lhe mostra), não a do mural';
+  ELSE RAISE NOTICE 'FALHOU: cores do operador %', v; END IF;
   PERFORM pg_temp.pg();
+  FOREACH u IN ARRAY ARRAY['qa_administrador', 'qa_gestor', 'qa_supervisor', 'qa_central'] LOOP
+    PERFORM qa.como(u);
+    SELECT count(*) INTO n FROM public.cores_clientes_das_escoltas(ARRAY[e_mural, e_outra, e_minha]) x
+     WHERE x.cor_destaque = (SELECT c.cor_destaque FROM public.escoltas e JOIN public.clientes c ON c.id = e.cliente_id WHERE e.id = x.escolta_id);
+    IF n = 3 THEN v_ok := v_ok + 1; ELSE RAISE NOTICE 'FALHOU: % recebeu % de 3 cores', u, n; END IF;
+    PERFORM pg_temp.pg();
+  END LOOP;
+  IF v_ok = 4 THEN RAISE NOTICE 'PASSOU: administrador, gestor, supervisor e central recebem a cor das três escoltas (mural, outra equipe e equipe do qa_um)';
+  ELSE RAISE NOTICE 'FALHOU: % de 4 perfis da gestão com as cores', v_ok; END IF;
   IF (SELECT array_agg(parameter_name::text ORDER BY ordinal_position) FROM information_schema.parameters p
            JOIN information_schema.routines r ON r.specific_name = p.specific_name
           WHERE r.routine_name = 'cores_clientes_das_escoltas' AND p.parameter_mode = 'OUT') = ARRAY['escolta_id', 'cor_destaque'] THEN
