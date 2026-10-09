@@ -110,7 +110,8 @@ export default function DashboardPage() {
         escoltas_mes_atual: mesAtualQ.count ?? 0,
         escoltas_mes_anterior: mesAnteriorQ.count ?? 0,
       })
-      // Onda K: cor do cliente que a RLS esconde do operador (agendadas de outra equipe).
+      // Onda K: cor das linhas sem o cliente no embed (a RPC não devolve ao operador a das escoltas
+      // de outra equipe, decisão S17: essas saem no cinza neutro).
       setRecentes(await completarCoresClientes(sb, (recentesQ.data ?? []) as EscoltaRecente[]))
       setLoading(false)
     }
@@ -349,7 +350,10 @@ export default function DashboardPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-4">
               {recentes.map((e) => (
                 <a key={e.id} href={`/dashboard/escoltas/${e.id}`} style={{ textDecoration: 'none' }}>
-                  <CartaoEscolta variante="cartao" escolta={e} perfil={user?.perfil?.codigo} />
+                  {/* Decisão S17: para o operador, escolta em que ele não está (sem efetivo visível
+                      pela RLS) sai no cinza neutro, como no mural. */}
+                  <CartaoEscolta variante="cartao" perfil={user?.perfil?.codigo}
+                    escolta={user?.perfil?.codigo === 'operador' && !(e.efetivo ?? []).length ? { ...e, cor_sigilosa: true } : e} />
                 </a>
               ))}
             </div>

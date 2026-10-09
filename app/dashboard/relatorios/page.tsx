@@ -1083,7 +1083,7 @@ export default function RelatoriosPage() {
                             onClick={() => window.open(`/dashboard/escoltas/${e.id}`, '_blank')}
                           >
                             <td>
-                              <span style={{ fontFamily: 'monospace', fontSize: '12px', fontWeight: 700, color: P.text }}>{e.codigo_escolta ?? '—'}</span>
+                              <span style={{ fontFamily: 'monospace', fontSize: '12px', fontWeight: 700, color: P.text }}>{e.codigo_escolta ?? '-'}</span>
                               {e.interestadual === true && <span className="badge-warning ml-2 text-[10px]" data-teste="etiqueta-interestadual">{textoInterestadual(e)}</span>}
                             </td>
                             <td>
@@ -1119,7 +1119,7 @@ export default function RelatoriosPage() {
                         style={{ borderColor: P.border, backgroundColor: '#fff' }}>
                         <div className="flex items-center justify-between mb-1.5">
                           <span style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: 700, color: P.text }}>
-                            {e.codigo_escolta ?? '—'}
+                            {e.codigo_escolta ?? '-'}
                             {e.interestadual === true && <span className="badge-warning ml-2 text-[10px]" data-teste="etiqueta-interestadual">{textoInterestadual(e)}</span>}
                           </span>
                           <span className={STATUS_BADGE[e.status] ?? 'badge-neutral'}>{STATUS_LABEL[e.status] ?? e.status}{comPendencias(e) ? ' · com pendências' : ''}</span>
