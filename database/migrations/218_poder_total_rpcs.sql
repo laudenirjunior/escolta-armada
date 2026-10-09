@@ -448,6 +448,7 @@ DECLARE
   v_sets text; v_k text; v_antes jsonb; v_depois jsonb; v_equipe_antes jsonb; v_equipe_depois jsonb;
   vt jsonb; m jsonb; v_ev uuid; v_ev_atual record; v_mudou_estrutura boolean := false; v_ids_mantidos uuid[] := '{}';
   v_vigs uuid[] := '{}'; v_veics uuid[] := '{}'; r record; v_n int; v_alterados text[] := '{}';
+  v_trocadas jsonb := '{}'::jsonb;
 BEGIN
   v_perfil := public.get_meu_perfil();
   IF v_perfil IS NULL OR v_perfil NOT IN ('administrador', 'gestor', 'supervisor', 'central') THEN
@@ -536,9 +537,32 @@ BEGIN
     GET DIAGNOSTICS v_n = ROW_COUNT;
     IF v_n > 0 THEN v_mudou_estrutura := true; END IF;
 
+    -- Troca de placa (só em viatura sem registro, S9): a linha sai e entra de novo com a
+    -- placa nova, guardando o combustível. Assim duas viaturas podem trocar de placa entre
+    -- si sem esbarrar no índice único (escolta, veículo) da 210; a equipe é regravada abaixo.
+    FOR vt IN SELECT * FROM jsonb_array_elements(p_viaturas) LOOP
+      CONTINUE WHEN (vt ->> 'escolta_veiculo_id') IS NULL;
+      SELECT ev.id, ev.veiculo_id, ev.abastecimento_litros, ev.abastecimento_valor, coalesce(ve.placa, 'sem placa') AS placa INTO v_ev_atual
+        FROM public.escolta_veiculos ev LEFT JOIN public.veiculos ve ON ve.id = ev.veiculo_id WHERE ev.id = (vt ->> 'escolta_veiculo_id')::uuid;
+      CONTINUE WHEN v_ev_atual.veiculo_id IS NOT DISTINCT FROM (vt ->> 'veiculo_id')::uuid;
+      IF lote_interno.viatura_tem_registro(v_ev_atual.id) THEN
+        RAISE EXCEPTION 'A viatura % já tem registro de campo: a placa não pode ser trocada (a foto mostra a placa original).', v_ev_atual.placa;
+      END IF;
+      v_trocadas := v_trocadas || jsonb_build_object(v_ev_atual.id::text,
+        jsonb_build_object('litros', v_ev_atual.abastecimento_litros, 'valor', v_ev_atual.abastecimento_valor));
+      DELETE FROM public.escolta_veiculos WHERE id = v_ev_atual.id;
+      v_mudou_estrutura := true;
+    END LOOP;
+
     BEGIN
       FOR vt IN SELECT * FROM jsonb_array_elements(p_viaturas) LOOP
-        IF (vt ->> 'escolta_veiculo_id') IS NOT NULL THEN
+        IF (vt ->> 'escolta_veiculo_id') IS NOT NULL AND v_trocadas ? (vt ->> 'escolta_veiculo_id') THEN
+          INSERT INTO public.escolta_veiculos (escolta_id, veiculo_id, criado_por, abastecimento_litros, abastecimento_valor)
+          VALUES (p_escolta_id, (vt ->> 'veiculo_id')::uuid, v_eu,
+                  (v_trocadas -> (vt ->> 'escolta_veiculo_id') ->> 'litros')::numeric,
+                  (v_trocadas -> (vt ->> 'escolta_veiculo_id') ->> 'valor')::numeric)
+          RETURNING id INTO v_ev;
+        ELSIF (vt ->> 'escolta_veiculo_id') IS NOT NULL THEN
           v_ev := (vt ->> 'escolta_veiculo_id')::uuid;
           SELECT ev.veiculo_id, coalesce(ve.placa, 'sem placa') AS placa INTO v_ev_atual
             FROM public.escolta_veiculos ev LEFT JOIN public.veiculos ve ON ve.id = ev.veiculo_id WHERE ev.id = v_ev;

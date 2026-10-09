@@ -495,6 +495,28 @@ BEGIN
 END $$;
 ROLLBACK;
 
+-- ── Edição em agendada: duas viaturas trocam de placa entre si (índice único da 210) ──
+BEGIN;
+SELECT set_config('t.esc', qa.nova_escolta(now() + interval '1 day', 'agendada', 'qa_um', 2)::text, true);
+UPDATE public.escolta_veiculos SET abastecimento_litros = 30 WHERE id = pg_temp.ev(current_setting('t.esc')::uuid, 1);
+DO $$
+DECLARE e uuid := current_setting('t.esc')::uuid; ev1 uuid := pg_temp.ev(current_setting('t.esc')::uuid, 1); ev2 uuid := pg_temp.ev(current_setting('t.esc')::uuid, 2);
+BEGIN
+  PERFORM qa.como('qa_gestor');
+  PERFORM public.editar_escolta(e, '{}'::jsonb, jsonb_build_array(
+    jsonb_build_object('escolta_veiculo_id', ev1, 'veiculo_id', '00000000-0000-4000-a000-0000000000f2',
+      'membros', jsonb_build_array(jsonb_build_object('vigilante_id', qa.vigilante('qa_um'), 'papel_na_escolta', 'comandante'))),
+    jsonb_build_object('escolta_veiculo_id', ev2, 'veiculo_id', '00000000-0000-4000-a000-0000000000f1', 'membros', '[]'::jsonb)), NULL);
+  PERFORM pg_temp.pg();
+  IF (SELECT ev.veiculo_id FROM public.escolta_efetivo ee JOIN public.escolta_veiculos ev ON ev.id = ee.escolta_veiculo_id
+       WHERE ee.escolta_id = e AND ee.vigilante_id = qa.vigilante('qa_um')) = '00000000-0000-4000-a000-0000000000f2'
+     AND (SELECT abastecimento_litros FROM public.escolta_veiculos WHERE escolta_id = e AND veiculo_id = '00000000-0000-4000-a000-0000000000f2') = 30
+     AND (SELECT count(*) FROM public.escolta_veiculos WHERE escolta_id = e) = 2 THEN
+    RAISE NOTICE 'PASSOU: duas viaturas sem registro trocam de placa entre si; a equipe acompanha a viatura e o combustível vai junto';
+  ELSE RAISE NOTICE 'FALHOU: troca de placas entre viaturas'; END IF;
+END $$;
+ROLLBACK;
+
 -- ── Arquivar e recuperar ───────────────────────────────────────────────────────────
 BEGIN;
 SELECT set_config('t.esc', qa.nova_escolta(now() + interval '20 min', 'agendada', NULL, 1)::text, true);
