@@ -24,7 +24,7 @@ import { AiTextButton } from '@/components/ui/ai-text-button'
 import { ehGestao, viaturaSugerida, type VinculoEscolta } from '@/lib/acesso-escolta'
 import { PODE_PODER_TOTAL, temPermissao } from '@/lib/permissions'
 import {
-  STATUS_COM_CHECKIN, inicioOperacaoEm, minutosAteCheckin, registrarCheckin, ultimoCheckinEm,
+  STATUS_COM_CHECKIN, inicioOperacaoEm, linhaCheckin, minutosAteCheckin, registrarCheckin, ultimoCheckinEm,
 } from '@/lib/checkin'
 import { CONFIRMACAO_POR_DESTINO, proximaAcao, type AcaoDetalhe } from '@/lib/proximo-passo-operador'
 import { SELECT_CARTAO, type CartaoEscolta as CartaoDados } from '@/lib/cartao-escolta'
@@ -32,6 +32,16 @@ import { corDoCliente } from '@/lib/paleta-clientes'
 import { PainelGuiado, type Confirmacao, type PainelAberto, type Pendencia } from '@/components/campo-guiado/painel-guiado'
 import { urlAssinada } from '@/lib/fotos-url'
 import { enderecoPorExtenso } from '@/lib/geocodificacao'
+// Lote 2026-10 (onda L): gravação pelo envelope (guarda no aparelho e envia) e leitura sem rede.
+import { novoId, salvarSnapshot, lerSnapshot, filaDisponivel } from '@/lib/offline/fila'
+import { prepararFoto, MENSAGEM_GUARDADO, type FotoPreparada, type ResultadoRegistroCampo } from '@/lib/offline/registro-campo'
+import { aplicarPendentes, lerPendentes } from '@/lib/offline/pendentes'
+import { salvarEscoltasOffline } from '@/lib/offline/sessao'
+import {
+  aparelhoSemRede, conferirEspacoParaFoto, envelopeLigado, erroDeRede, gravarPeloEnvelope, textoConflito,
+  textoErroGravacao, textoRecusado,
+} from '@/lib/offline/tela'
+import { EmergenciaSemConexao } from '@/components/offline/emergencia-sem-conexao'
 
 const supabase = createClient()
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -90,6 +100,8 @@ interface EscoltaAtiva {
   destino_endereco: string
   data_hora_prevista: string
   periodicidade_checkin_min?: number | null
+  // Onda L: versão da gestão vista pela tela (o envelope manda junto; mudou, vira conflito).
+  versao_gestao?: number | null
   cliente: { nome_cliente: string; cor_destaque: string | null } | null
   escolta_veiculo_id?: string
   veiculo_placa?: string
@@ -175,6 +187,16 @@ interface FotoCaptura {
 }
 
 interface TipoOcorrencia { id: string; nome: string }
+
+/** Onda L: o que o Campo leu com internet, guardado no aparelho para abrir sem rede. */
+interface CopiaCampo {
+  vinculos: VinculoEscolta[]
+  ativas: EscoltaAtiva[]
+  agendadas: EscoltaAtiva[]
+  semVinculo: boolean
+  tipos: TipoOcorrencia[]
+  modelos: ModeloChecklist[]
+}
 
 // ─── Status flow ──────────────────────────────────────────────────────────────
 // Derivado de lib/fluxo-escolta.ts. Antes esta tela tinha o proprio mapa, que
@@ -376,7 +398,7 @@ function FotoMiniatura({
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 export default function CampoPage() {
-  const { user } = useAuth()
+  const { user, authUserId } = useAuth()
 
   const [escoltaAtiva, setEscoltaAtiva] = useState<EscoltaAtiva | null>(null)
   const [todasEscoltas, setTodasEscoltas] = useState<EscoltaAtiva[]>([])
@@ -415,6 +437,10 @@ export default function CampoPage() {
 
   // Emergência
   const [emergConfirm, setEmergConfirm] = useState(false)
+  // Onda L (16.3.8): emergência guardada sem conexão (ninguém foi avisado): tela vermelha.
+  const [emergenciaSemConexao, setEmergenciaSemConexao] = useState<{ telefone: string | null } | null>(null)
+  // Ids das escoltas cujo detalhe o SW já foi pedido para guardar (evita pedir a cada minuto).
+  const precarregadasRef = useRef<string>('')
 
   // ── Modo Guiado ───────────────────────────────────────────────────────────
   const { ligado: modoGuiado, podeDesligar, definir: definirModoGuiado } = useModoGuiado()
@@ -520,7 +546,7 @@ export default function CampoPage() {
     // escolta avancava de etapa e nao sobrava prova nenhuma.
     // Onda K: as colunas do cartão padrão (SELECT_CARTAO) entram junto, para o Modo Guiado
     // mostrar o mesmo cartão da lista, do mural e do mapa.
-    const SELECT_ESCOLTA = `${SELECT_CARTAO}, periodicidade_checkin_min, escolta_veiculos(id, criado_em, veiculo:veiculos(placa, modelo))`
+    const SELECT_ESCOLTA = `${SELECT_CARTAO}, periodicidade_checkin_min, versao_gestao, escolta_veiculos(id, criado_em, veiculo:veiculos(placa, modelo))`
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const normalizar = (e: any, minhaViaturaId?: string | null): EscoltaAtiva => {
@@ -550,42 +576,138 @@ export default function CampoPage() {
       } as EscoltaAtiva
     }
 
-    // 1. Vinculo primeiro, para QUALQUER perfil (decisao de 2026-09-29). Antes o ramo
-    // era escolhido pelo perfil: um supervisor escalado na escolta caia na visao de
-    // gestao e nunca era tratado como membro da equipe.
-    const { data: vig } = await sb
-      .from('vigilantes')
-      .select('id')
-      .eq('usuario_id', user.id)
-      .maybeSingle()
+    // Onda L (16.3.11): cada leitura confere o erro. Erro de rede numa delas leva à cópia
+    // guardada no aparelho no último carregar com internet; antes a tela se esvaziava.
+    let semRedeNaLeitura = false
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const lido = (r: { data: any; error: any }) => { if (erroDeRede(r.error)) semRedeNaLeitura = true; return r.data }
 
-    const meusVinculos: VinculoEscolta[] = []
-    const minhasAtivas: EscoltaAtiva[] = []
-    const minhasAgendadas: EscoltaAtiva[] = []
-    if (vig) {
-      const { data: efetivo } = await sb
-        .from('escolta_efetivo')
-        .select(`escolta_id, escolta_veiculo_id, papel_na_escolta, escolta:escoltas(${SELECT_ESCOLTA})`)
-        .eq('vigilante_id', vig.id)
-      const vistos = new Set<string>()
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      for (const linha of (efetivo ?? []) as any[]) {
-        const e = linha.escolta
-        // Onda I: escolta arquivada sai do Campo e do Modo Guiado (a RLS já a esconde de quem não é administrador).
-        if (!e || e.arquivada_em) continue
-        meusVinculos.push({
-          escolta_id: e.id,
-          escolta_veiculo_id: linha.escolta_veiculo_id ?? null,
-          papel_na_escolta: linha.papel_na_escolta ?? null,
-        })
-        if (vistos.has(e.id)) continue
-        vistos.add(e.id)
-        const norm = { ...normalizar(e, linha.escolta_veiculo_id), papel: linha.papel_na_escolta }
-        if (ATIVOS.includes(e.status)) minhasAtivas.push(norm)
-        else if (e.status === STATUS.AGENDADA) minhasAgendadas.push(norm)
+    const lerDoServidor = async (): Promise<CopiaCampo | null> => {
+      // 1. Vinculo primeiro, para QUALQUER perfil (decisao de 2026-09-29). Antes o ramo
+      // era escolhido pelo perfil: um supervisor escalado na escolta caia na visao de
+      // gestao e nunca era tratado como membro da equipe.
+      const vig = lido(await sb
+        .from('vigilantes')
+        .select('id')
+        .eq('usuario_id', user.id)
+        .maybeSingle())
+      if (semRedeNaLeitura) return null
+
+      const meusVinculos: VinculoEscolta[] = []
+      const minhasAtivas: EscoltaAtiva[] = []
+      const minhasAgendadas: EscoltaAtiva[] = []
+      if (vig) {
+        const efetivo = lido(await sb
+          .from('escolta_efetivo')
+          .select(`escolta_id, escolta_veiculo_id, papel_na_escolta, escolta:escoltas(${SELECT_ESCOLTA})`)
+          .eq('vigilante_id', vig.id))
+        if (semRedeNaLeitura) return null
+        const vistos = new Set<string>()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const linha of (efetivo ?? []) as any[]) {
+          const e = linha.escolta
+          // Onda I: escolta arquivada sai do Campo e do Modo Guiado (a RLS já a esconde de quem não é administrador).
+          if (!e || e.arquivada_em) continue
+          meusVinculos.push({
+            escolta_id: e.id,
+            escolta_veiculo_id: linha.escolta_veiculo_id ?? null,
+            papel_na_escolta: linha.papel_na_escolta ?? null,
+          })
+          if (vistos.has(e.id)) continue
+          vistos.add(e.id)
+          const norm = { ...normalizar(e, linha.escolta_veiculo_id), papel: linha.papel_na_escolta }
+          if (ATIVOS.includes(e.status)) minhasAtivas.push(norm)
+          else if (e.status === STATUS.AGENDADA) minhasAgendadas.push(norm)
+        }
+      }
+
+      let lista = minhasAtivas
+      if (isAdmin) {
+        const esc = lido(await sb
+          .from('escoltas')
+          .select(SELECT_ESCOLTA)
+          .in('status', ATIVOS)
+          .is('arquivada_em', null)
+          .order('data_hora_prevista'))
+        if (semRedeNaLeitura) return null
+        const minhas = new Set(minhasAtivas.map(e => e.id))
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        lista = [...minhasAtivas, ...((esc ?? []) as any[]).filter(e => !minhas.has(e.id)).map(e => normalizar(e))]
+      }
+      // Onda I (12.5.7): gestor e administrador veem também as agendadas de qualquer equipe,
+      // para iniciar o pré-início pelo Campo sem estar escalados.
+      if (temPermissao(user?.perfil?.codigo, PODE_PODER_TOTAL)) {
+        const ags = lido(await sb
+          .from('escoltas')
+          .select(SELECT_ESCOLTA)
+          .eq('status', STATUS.AGENDADA)
+          .is('arquivada_em', null)
+          .order('data_hora_prevista'))
+        if (semRedeNaLeitura) return null
+        const jaListadas = new Set(minhasAgendadas.map(e => e.id))
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const e of (ags ?? []) as any[]) if (!jaListadas.has(e.id)) minhasAgendadas.push(normalizar(e))
+      }
+
+      // Carrega os modelos com os itens embutidos. Quem escolhe qual modelo vale e o
+      // efeito abaixo, pelo tipo que a etapa atual pede.
+      const [rTipos, rModelos] = await Promise.all([
+        sb.from('dom_tipos_ocorrencia').select('id, nome').eq('ativo', true).order('nome'),
+        sb.from('checklist_modelos')
+          .select('id, tipo, nome, versao, checklist_modelo_itens(id, descricao_item, exige_foto, ordem, ativo)')
+          .eq('ativo', true),
+      ])
+      const tipos = lido(rTipos)
+      const ckModelos = lido(rModelos)
+      if (semRedeNaLeitura) return null
+
+      return {
+        vinculos: meusVinculos,
+        ativas: lista,
+        agendadas: minhasAgendadas,
+        semVinculo: !vig && !isAdmin,
+        tipos: tipos ?? [],
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        modelos: ((ckModelos ?? []) as any[]).map(m => ({
+          id: m.id,
+          tipo: m.tipo,
+          nome: m.nome,
+          versao: m.versao ?? 1,
+          itens: (m.checklist_modelo_itens ?? []).filter((i: any) => i.ativo),
+        })),
       }
     }
-    setSemVinculoCadastro(!vig && !isAdmin)
+
+    let dados = await lerDoServidor()
+    if (dados && authUserId && filaDisponivel()) {
+      // Com internet: guarda a cópia para abrir sem rede e pede ao SW o detalhe de cada escolta.
+      void salvarSnapshot(authUserId, 'campo', dados).catch(() => {})
+      const ids = [...dados.ativas, ...dados.agendadas].map(e => e.id).sort().join(',')
+      if (ids !== precarregadasRef.current) {
+        precarregadasRef.current = ids
+        void salvarEscoltasOffline(authUserId, [...dados.ativas, ...dados.agendadas])
+      }
+    }
+    if (!dados) {
+      const copia = authUserId ? await lerSnapshot<CopiaCampo>(authUserId, 'campo').catch(() => null) : null
+      if (!copia) {
+        // Sem rede e sem cópia (primeira abertura neste aparelho): mantém o que está na tela.
+        if (!silencioso) showToast('erro', 'Sem conexão e sem dados guardados neste aparelho. Procure sinal para carregar as escoltas.')
+        setLoading(false)
+        return
+      }
+      dados = copia.dados
+    }
+
+    // Onda L (16.3.4): registros guardados no aparelho por cima do que foi lido (status
+    // otimista), para a Próxima Ação não pedir de novo o que já foi registrado sem sinal.
+    const pendentes = authUserId ? await lerPendentes(authUserId) : []
+    const todas = [...dados.ativas, ...dados.agendadas]
+    const { escoltas: sobrepostas } = aplicarPendentes(todas, [], pendentes, {
+      viaturasPorEscolta: Object.fromEntries(todas.map(e => [e.id, (e.viaturas ?? []).map(v => v.id)])),
+    })
+    const lista = sobrepostas.filter(e => ATIVOS.includes(e.status))
+    const minhasAgendadas = sobrepostas.filter(e => e.status === STATUS.AGENDADA)
 
     // Com mais de uma escolta ativa, a que esta na rua vem primeiro. Antes era a
     // primeira que o banco devolvesse, e uma escolta parada em na_base esperando a
@@ -594,37 +716,14 @@ export default function CampoPage() {
       st === STATUS.EM_PRE_INICIO ? 1 : st === STATUS.NA_BASE ? 2 : 0
     const porPrevista = (a: EscoltaAtiva, b: EscoltaAtiva) =>
       new Date(a.data_hora_prevista).getTime() - new Date(b.data_hora_prevista).getTime()
-    minhasAtivas.sort((a, b) => prioridade(a.status) - prioridade(b.status) || porPrevista(a, b))
+    // Só a parte do próprio efetivo é ordenada (a gestão segue a ordem da consulta, como antes).
+    const doEfetivo = new Set(dados.vinculos.map(v => v.escolta_id))
+    lista.sort((a, b) => (doEfetivo.has(a.id) === doEfetivo.has(b.id) ? 0 : doEfetivo.has(a.id) ? -1 : 1)
+      || (doEfetivo.has(a.id) ? prioridade(a.status) - prioridade(b.status) || porPrevista(a, b) : 0))
     minhasAgendadas.sort(porPrevista)
 
-    let lista = minhasAtivas
-    if (isAdmin) {
-      const { data: esc } = await sb
-        .from('escoltas')
-        .select(SELECT_ESCOLTA)
-        .in('status', ATIVOS)
-        .is('arquivada_em', null)
-        .order('data_hora_prevista')
-      const minhas = new Set(minhasAtivas.map(e => e.id))
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      lista = [...minhasAtivas, ...((esc ?? []) as any[]).filter(e => !minhas.has(e.id)).map(e => normalizar(e))]
-    }
-    // Onda I (12.5.7): gestor e administrador veem também as agendadas de qualquer equipe,
-    // para iniciar o pré-início pelo Campo sem estar escalados.
-    if (temPermissao(user?.perfil?.codigo, PODE_PODER_TOTAL)) {
-      const { data: ags } = await sb
-        .from('escoltas')
-        .select(SELECT_ESCOLTA)
-        .eq('status', STATUS.AGENDADA)
-        .is('arquivada_em', null)
-        .order('data_hora_prevista')
-      const jaListadas = new Set(minhasAgendadas.map(e => e.id))
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      for (const e of (ags ?? []) as any[]) if (!jaListadas.has(e.id)) minhasAgendadas.push(normalizar(e))
-      minhasAgendadas.sort(porPrevista)
-    }
-
-    setVinculos(meusVinculos)
+    setSemVinculoCadastro(dados.semVinculo)
+    setVinculos(dados.vinculos)
     setAgendadas(minhasAgendadas)
     setTodasEscoltas(lista)
     // Troca o objeto pela versao nova do banco, mantendo a escolta que estava aberta.
@@ -637,28 +736,12 @@ export default function CampoPage() {
       return lista.find(e => e.id === alvo) ?? lista[0] ?? null
     })
 
-    // Carrega os modelos com os itens embutidos. Quem escolhe qual modelo vale e o
-    // efeito abaixo, pelo tipo que a etapa atual pede.
-    const [{ data: tipos }, { data: ckModelos }] = await Promise.all([
-      sb.from('dom_tipos_ocorrencia').select('id, nome').eq('ativo', true).order('nome'),
-      sb.from('checklist_modelos')
-        .select('id, tipo, nome, versao, checklist_modelo_itens(id, descricao_item, exige_foto, ordem, ativo)')
-        .eq('ativo', true),
-    ])
-
-    setTiposOcorrencia(tipos ?? [])
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    setModelosChecklist(((ckModelos ?? []) as any[]).map(m => ({
-      id: m.id,
-      tipo: m.tipo,
-      nome: m.nome,
-      versao: m.versao ?? 1,
-      itens: (m.checklist_modelo_itens ?? []).filter((i: any) => i.ativo),
-    })))
+    setTiposOcorrencia(dados.tipos)
+    setModelosChecklist(dados.modelos)
     setLoading(false)
     setVersaoDados(v => v + 1)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user])
+  }, [user, authUserId])
 
   useEffect(() => { carregar() }, [carregar])
 
@@ -707,6 +790,7 @@ export default function CampoPage() {
   useEffect(() => {
     const ids = idsViaturas ? idsViaturas.split(',') : []
     if (ids.length === 0) { setPontosEscolta([]); return }
+    const escoltaDosPontos = escoltaAtiva?.id ?? null
     let ativo = true
     // Onda I: só pontos válidos. Com o anulado na conta, depois de a gestão voltar uma
     // etapa o Campo acharia que todas as viaturas já registraram e avançaria sem foto nova.
@@ -714,9 +798,23 @@ export default function CampoPage() {
       .select('data_hora, observacoes, escolta_veiculo_id, tipo_ponto_id')
       .in('escolta_veiculo_id', ids)
       .is('anulado_em', null)
-      .then(({ data }: { data: PontoResumo[] | null }) => { if (ativo) setPontosEscolta(data ?? []) })
+      .then(async ({ data, error }: { data: PontoResumo[] | null; error: { message?: string; code?: string } | null }) => {
+        // Onda L: sem rede, mantém os pontos já lidos (não zera o check-in nem as pendências)
+        // e soma os guardados no aparelho, como no servidor.
+        const pendentes = authUserId ? await lerPendentes(authUserId) : []
+        if (!ativo) return
+        const base = error && erroDeRede(error) ? null : (data ?? [])
+        setPontosEscolta(atual => {
+          const lidos = (base ?? atual.filter(p => !(p as PontoResumo & { pendente?: boolean }).pendente))
+            .filter(p => ids.includes(p.escolta_veiculo_id))
+          const { pontos } = aplicarPendentes(escoltaDosPontos ? [{ id: escoltaDosPontos, status: '' }] : [],
+            lidos as unknown as Array<Record<string, unknown>>, pendentes)
+          return (pontos as unknown as PontoResumo[]).filter(p => ids.includes(p.escolta_veiculo_id))
+        })
+      })
     return () => { ativo = false }
-  }, [idsViaturas, versaoDados])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idsViaturas, versaoDados, authUserId])
 
   // ── Atualizacao sem recarregar a pagina ──────────────────────────────────
   // Antes a tela so carregava ao abrir. Se o supervisor concluia o wizard ou a outra
@@ -842,6 +940,68 @@ export default function CampoPage() {
     return fotoRow?.id ?? null
   }
 
+  // ── Onda L: peças do envelope (gravação guardada no aparelho e enviada) ─────
+  /** A mesma linha de `fotos` de uploadFoto, com id e caminho do aparelho; o blob sobe pela fila. */
+  const prepararFotoCampo = (captura: FotoCaptura, tipoFotoId: string): FotoPreparada =>
+    prepararFoto(escoltaAtiva?.id ?? '', {
+      blob: captura.file,
+      tipoFotoId,
+      dataHoraCaptura: captura.timestamp,
+      gps: captura.gps,
+      carimbado: captura.carimbado,
+      criadoPor: user?.id ?? null,
+    })
+
+  /**
+   * Resultado do envelope que não é "aplicado": guardado no aparelho (sem sinal), conflito
+   * (o servidor guardou e avisou a supervisão) ou recusado. Mostra o aviso e devolve true.
+   */
+  const fechouSemAplicar = (r: ResultadoRegistroCampo, avisos: string[] = []): boolean => {
+    if (r.modo === 'guardado') {
+      concluir('ok', MENSAGEM_GUARDADO, { titulo: 'Guardado no aparelho', detalhe: MENSAGEM_GUARDADO, avisos })
+      return true
+    }
+    if (r.modo === 'recusado') { showToast('erro', textoRecusado(r.erro)); return true }
+    if (r.resultado === 'conflito') { showToast('erro', textoConflito(r.motivo)); return true }
+    return false
+  }
+
+  /** Efetivo da escolta para o Telegram (a mesma leitura de antes); sem rede, sem nomes. */
+  const efetivosParaTelegram = async (escoltaId: string): Promise<string[]> => {
+    const { data: viatRows } = await sb
+      .from('escolta_veiculos')
+      .select('id')
+      .eq('escolta_id', escoltaId)
+    const viatIds = (viatRows ?? []).map((v: any) => v.id)
+    const { data: efetivosData } = viatIds.length > 0
+      ? await sb
+          .from('escolta_efetivo')
+          .select('papel_na_escolta, vigilante:vigilantes(nome_completo)')
+          .in('escolta_veiculo_id', viatIds)
+      : { data: [] }
+    return (efetivosData ?? []).map((e: any) =>
+      `${e.vigilante?.nome_completo ?? '—'}${e.papel_na_escolta ? ` (${e.papel_na_escolta})` : ''}`
+    )
+  }
+
+  // Com internet, a leitura do efetivo passa pelo service worker e fica guardada: sem rede,
+  // o Telegram de um registro guardado sai com os mesmos nomes.
+  useEffect(() => {
+    if (escoltaAtiva?.id && !aparelhoSemRede()) void efetivosParaTelegram(escoltaAtiva.id).catch(() => [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [escoltaAtiva?.id])
+
+  /** S12: sem espaço no aparelho, a captura é bloqueada com aviso. */
+  const espacoParaFotos = async (arquivos: File[]): Promise<boolean> => {
+    try {
+      await conferirEspacoParaFoto(arquivos.reduce((t, f) => t + f.size, 0))
+      return true
+    } catch (e) {
+      showToast('erro', textoErroGravacao(e, 'O espaço do aparelho acabou.'))
+      return false
+    }
+  }
+
   // ── Handlers de captura de foto ───────────────────────────────────────────
   const handleFotoCheckpoint = async (e: React.ChangeEvent<HTMLInputElement>) => {
     await adicionarFotosCheckpoint(Array.from(e.target.files ?? []))
@@ -858,6 +1018,10 @@ export default function CampoPage() {
     }
     if (arquivos.length > espaco) {
       showToast('erro', `Só cabem mais ${espaco} foto(s) neste ponto. As demais foram descartadas.`)
+    }
+    if (!(await espacoParaFotos(arquivos.slice(0, espaco)))) {
+      if (fotoCheckpointRef.current) fotoCheckpointRef.current.value = ''
+      return
     }
 
     setCapturandoFoto(true)
@@ -887,6 +1051,7 @@ export default function CampoPage() {
   }
 
   const definirFotoOcorrencia = async (f: File) => {
+    if (!(await espacoParaFotos([f]))) return
     setCapturandoFoto(true)
     try {
       const captura = await capturarFoto(f)
@@ -903,6 +1068,7 @@ export default function CampoPage() {
   const adicionarFotosCheckin = async (arquivos: File[]) => {
     const espaco = FOTOS_POR_PONTO.max - fotosCheckin.length
     if (arquivos.length === 0 || espaco <= 0) return
+    if (!(await espacoParaFotos(arquivos.slice(0, espaco)))) return
     setCapturandoFoto(true)
     try {
       const capturas = await Promise.all(arquivos.slice(0, espaco).map(capturarFoto))
@@ -927,6 +1093,7 @@ export default function CampoPage() {
   const handleFotoChecklist = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
     if (!f || checklistFotoIdx === null) return
+    if (!(await espacoParaFotos([f]))) return
     const captura = await capturarFoto(f)
     setChecklistItems(its => its.map((item, idx) =>
       idx === checklistFotoIdx ? { ...item, captura } : item
@@ -1025,6 +1192,13 @@ export default function CampoPage() {
 
     setExecutando(true)
     try {
+      // Onda L: com a chave offline_ligado, as mesmas linhas vão pelo envelope (guardadas no
+      // aparelho e enviadas; com sinal a tela espera a resposta, como antes). Desligada, o
+      // caminho direto de sempre.
+      const env = await envelopeLigado()
+      const quando = new Date().toISOString()
+      const semRede = env.usar && aparelhoSemRede()
+
       // GPS. Decisao de Pecanha: sem sinal nao bloqueia o avanco, mas tambem nao
       // inventa coordenada. Grava latitude e longitude nulas com sem_sinal_gps
       // verdadeiro, e a tela avisa. A coordenada sentinela 0,0 esta proibida:
@@ -1041,10 +1215,18 @@ export default function CampoPage() {
       // que e escalar; as demais ficam nos foto_ids serializados em observacoes.
       // So sobe foto onde existe ponto para referencia-la: sem ponto, cada avanco
       // deixaria arquivo no bucket e linha orfa em `fotos`.
+      // Pelo envelope, as fotos ganham id e caminho do aparelho e sobem pela fila.
       const fotoIds: string[] = []
       let fotoId: string | null = null
+      const fotosEnvelope: FotoPreparada[] = []
       if (exigePonto && !pontoJaCompleto) {
         for (const captura of fotosCheckpoint) {
+          if (env.usar) {
+            const f = prepararFotoCampo(captura, TIPO_FOTO.PONTO_CONTROLE)
+            fotosEnvelope.push(f)
+            fotoIds.push(f.id)
+            continue
+          }
           const id = await uploadFoto(captura, TIPO_FOTO.PONTO_CONTROLE)
           if (id) fotoIds.push(id)
         }
@@ -1069,20 +1251,23 @@ export default function CampoPage() {
       //
       // Isto reduz a janela de segundos para milissegundos, nao a elimina. Fechar de vez
       // exige gravar ponto, status e historico numa unica transacao no banco, por RPC.
-      const { data: statusConferido, error: confErr } = await sb
-        .from('escoltas')
-        .select('status')
-        .eq('id', escoltaAtiva.id)
-        .maybeSingle()
-      if (confErr) {
-        showToast('erro', confErr.message ?? 'Não foi possível conferir a etapa atual.')
-        setExecutando(false)
-        return
-      }
-      if (!statusConferido || statusConferido.status !== statusAtual) {
-        showToast('erro', 'A etapa já foi avançada em outra tela. Recarregue a página antes de continuar.')
-        setExecutando(false)
-        return
+      // Onda L: sem rede, a conferência fica no servidor (registro em conflito, nunca descartado).
+      if (!semRede) {
+        const { data: statusConferido, error: confErr } = await sb
+          .from('escoltas')
+          .select('status')
+          .eq('id', escoltaAtiva.id)
+          .maybeSingle()
+        if (confErr && !(env.usar && erroDeRede(confErr))) {
+          showToast('erro', confErr.message ?? 'Não foi possível conferir a etapa atual.')
+          setExecutando(false)
+          return
+        }
+        if (!confErr && (!statusConferido || statusConferido.status !== statusAtual)) {
+          showToast('erro', 'A etapa já foi avançada em outra tela. Recarregue a página antes de continuar.')
+          setExecutando(false)
+          return
+        }
       }
 
       // Lote 2026-10 (onda F): ponto, conferência do comboio, status e histórico numa só
@@ -1091,9 +1276,10 @@ export default function CampoPage() {
       // O status só avança quando TODAS as viaturas da escolta tiverem ponto nesta etapa;
       // a conferência agora é feita no banco, junto da gravação.
       const pontosEtapa = (exigePonto && tipoPontoId && !pontoJaCompleto) ? [{
+        ...(env.usar ? { id: novoId() } : {}),
         escolta_veiculo_id: escoltaVeiculoIdAlvo,
         tipo_ponto_id: tipoPontoId,
-        data_hora: fotosCheckpoint[0]?.timestamp ?? new Date().toISOString(),
+        data_hora: fotosCheckpoint[0]?.timestamp ?? quando,
         latitude: gps?.lat ?? null,
         longitude: gps?.lng ?? null,
         precisao_metros: gps?.precisao ?? null,
@@ -1102,9 +1288,10 @@ export default function CampoPage() {
         observacoes: serializarObservacao({ observacao: obsAvanco, fotoIds }),
         lancado_por: user.id,
         sincronizado: true,
-        criado_offline: false,
+        // Onda L: ponto registrado sem conexão.
+        criado_offline: semRede,
       }] : []
-      const { data: etapa, error: etapaErr } = await sb.rpc('registrar_etapa_escolta', {
+      const argsEtapa = {
         p_escolta_id: escoltaAtiva.id,
         p_pontos: pontosEtapa,
         p_status_atual: statusAtual,
@@ -1113,32 +1300,6 @@ export default function CampoPage() {
         p_latitude: gps?.lat ?? null,
         p_longitude: gps?.lng ?? null,
         p_tipo_ponto_todas: (exigePonto && tipoPontoId && viaturasDaEscolta.length > 1) ? tipoPontoId : null,
-      })
-      if (etapaErr) {
-        showToast('erro', etapaErr.message === 'ERRO_SEM_TRANSICAO'
-          ? 'A etapa foi avançada em outra tela enquanto este registro era enviado. Nada foi gravado desta vez. Recarregue a página e confira a etapa antes de registrar de novo.'
-          : (etapaErr.message ?? 'Não foi possível registrar a etapa.'))
-        setExecutando(false)
-        return
-      }
-      if (!etapa?.avancou) {
-        const placas = ((etapa?.faltando ?? []) as string[]).join(', ')
-        concluir(
-          'ok',
-          `Ponto registrado. A etapa avança quando as demais viaturas registrarem: ${placas}.`,
-          {
-            titulo: placaAlvo ? `Registro da viatura ${placaAlvo} salvo` : 'Registro da viatura salvo',
-            detalhe: `A etapa avança quando as demais viaturas registrarem: ${placas}.`,
-            avisos,
-          }
-        )
-        limparFotosCheckpoint()
-        setObsAvanco('')
-        setViaturaAlvoId(viaturaDoUsuario)
-        setPainelAberto(null)
-        setExecutando(false)
-        await carregar(true)
-        return
       }
 
       // Notificar Telegram — sempre dispara após qualquer avanço de status.
@@ -1167,58 +1328,107 @@ export default function CampoPage() {
         na_base:             'Na Base',
         finalizada:          'Finalizada',
       }
+      const corpoTelegram = async (): Promise<Record<string, unknown>> => ({
+        tipo: 'ponto_controle',
+        titulo: STATUS_TG_TITULO[proximo] ?? rotuloStatus(proximo),
+        // O banco guarda a observacao inteira; a mensagem so destaca o que fugiu da
+        // rotina. Sem isto, toda etapa mandaria "sem alterações" e viraria ruído.
+        descricao: ehTextoPadrao(obsAvanco, TEXTO_PADRAO_ETAPA[proximo])
+          ? undefined
+          : obsAvanco.trim() || undefined,
+        escolta_id: escoltaAtiva.id,
+        escolta_codigo: escoltaAtiva.codigo_escolta,
+        cliente: escoltaAtiva.cliente?.nome_cliente,
+        status_atual: STATUS_TG_LABEL[proximo] ?? rotuloStatus(proximo),
+        // Todos os efetivos da escolta (via escolta_veiculos para garantir filtro correto)
+        efetivos: await efetivosParaTelegram(escoltaAtiva.id),
+        // A placa da mensagem e a da viatura que recebeu o ponto, nao a primeira da
+        // lista: com duas viaturas, avisar a placa errada e desmentir o proprio registro.
+        veiculo: placaAlvo ?? undefined,
+        data_hora: new Date(quando).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+      })
 
-      // Foto pública
-      let fotoTgUrl: string | null = null
-      if (fotoId) {
-        const { data: fotoData } = await sb.from('fotos').select('caminho_arquivo').eq('id', fotoId).maybeSingle()
-        if (fotoData?.caminho_arquivo) {
-          // Lote 2026-10: URL assinada; o Telegram baixa a foto na hora do envio.
-          fotoTgUrl = await urlAssinada(sb, fotoData.caminho_arquivo)
+      let etapa: { avancou?: boolean; faltando?: string[] } | null = null
+      if (env.usar) {
+        const r = await gravarPeloEnvelope({ authUserId, usuarioId: user.id }, {
+          tipo: 'etapa',
+          escoltaId: escoltaAtiva.id,
+          escoltaVeiculoId: escoltaVeiculoIdAlvo,
+          versaoGestao: escoltaAtiva.versao_gestao ?? null,
+          statusEsperado: statusAtual,
+          fotos: fotosEnvelope,
+          dataHoraAcao: quando,
+          gps: gps ? { lat: gps.lat, lng: gps.lng, precisao: gps.precisao } : null,
+          etapa: {
+            pontos: pontosEtapa,
+            status_atual: argsEtapa.p_status_atual,
+            status_novo: argsEtapa.p_status_novo,
+            observacao: argsEtapa.p_observacao,
+            latitude: argsEtapa.p_latitude,
+            longitude: argsEtapa.p_longitude,
+            tipo_ponto_todas: argsEtapa.p_tipo_ponto_todas,
+          },
+          // Telegram de hoje, mandado uma vez depois de aplicado e só se a etapa avançou.
+          aviso: { corpo: await corpoTelegram(), fotoCaminho: fotosEnvelope[0]?.caminho ?? null, soSeAvancou: true },
+        })
+        if (fechouSemAplicar(r, avisos)) {
+          limparFotosCheckpoint()
+          setObsAvanco('')
+          setViaturaAlvoId(viaturaDoUsuario)
+          setPainelAberto(null)
+          setExecutando(false)
+          await carregar(true)
+          return
         }
+        etapa = (r.modo === 'enviado' ? (r.resposta?.resposta as typeof etapa) : null) ?? null
+      } else {
+        const { data, error: etapaErr } = await sb.rpc('registrar_etapa_escolta', argsEtapa)
+        if (etapaErr) {
+          showToast('erro', etapaErr.message === 'ERRO_SEM_TRANSICAO'
+            ? 'A etapa foi avançada em outra tela enquanto este registro era enviado. Nada foi gravado desta vez. Recarregue a página e confira a etapa antes de registrar de novo.'
+            : (etapaErr.message ?? 'Não foi possível registrar a etapa.'))
+          setExecutando(false)
+          return
+        }
+        etapa = data
+      }
+      if (!etapa?.avancou) {
+        const placas = ((etapa?.faltando ?? []) as string[]).join(', ')
+        concluir(
+          'ok',
+          `Ponto registrado. A etapa avança quando as demais viaturas registrarem: ${placas}.`,
+          {
+            titulo: placaAlvo ? `Registro da viatura ${placaAlvo} salvo` : 'Registro da viatura salvo',
+            detalhe: `A etapa avança quando as demais viaturas registrarem: ${placas}.`,
+            avisos,
+          }
+        )
+        limparFotosCheckpoint()
+        setObsAvanco('')
+        setViaturaAlvoId(viaturaDoUsuario)
+        setPainelAberto(null)
+        setExecutando(false)
+        await carregar(true)
+        return
       }
 
-      // Todos os efetivos da escolta (via escolta_veiculos para garantir filtro correto)
-      const { data: viatRows } = await sb
-        .from('escolta_veiculos')
-        .select('id')
-        .eq('escolta_id', escoltaAtiva.id)
-      const viatIds = (viatRows ?? []).map((v: any) => v.id)
-      const { data: efetivosData } = viatIds.length > 0
-        ? await sb
-            .from('escolta_efetivo')
-            .select('papel_na_escolta, vigilante:vigilantes(nome_completo)')
-            .in('escolta_veiculo_id', viatIds)
-        : { data: [] }
-      const efetivos: string[] = (efetivosData ?? []).map((e: any) =>
-        `${e.vigilante?.nome_completo ?? '—'}${e.papel_na_escolta ? ` (${e.papel_na_escolta})` : ''}`
-      )
-
-      const dataHoraFmt = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
-
-      fetch('/api/telegram', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tipo: 'ponto_controle',
-          titulo: STATUS_TG_TITULO[proximo] ?? rotuloStatus(proximo),
-          // O banco guarda a observacao inteira; a mensagem so destaca o que fugiu da
-          // rotina. Sem isto, toda etapa mandaria "sem alterações" e viraria ruído.
-          descricao: ehTextoPadrao(obsAvanco, TEXTO_PADRAO_ETAPA[proximo])
-            ? undefined
-            : obsAvanco.trim() || undefined,
-          escolta_id: escoltaAtiva.id,
-          escolta_codigo: escoltaAtiva.codigo_escolta,
-          cliente: escoltaAtiva.cliente?.nome_cliente,
-          status_atual: STATUS_TG_LABEL[proximo] ?? rotuloStatus(proximo),
-          efetivos,
-          // A placa da mensagem e a da viatura que recebeu o ponto, nao a primeira da
-          // lista: com duas viaturas, avisar a placa errada e desmentir o proprio registro.
-          veiculo: placaAlvo ?? undefined,
-          foto_url: fotoTgUrl,
-          data_hora: dataHoraFmt,
-        }),
-      }).catch(() => {})
+      // Pelo envelope, o Telegram sai pela fila (reserva campo:<client_id>, uma vez só).
+      if (!env.usar) {
+        // Foto pública
+        let fotoTgUrl: string | null = null
+        if (fotoId) {
+          const { data: fotoData } = await sb.from('fotos').select('caminho_arquivo').eq('id', fotoId).maybeSingle()
+          if (fotoData?.caminho_arquivo) {
+            // Lote 2026-10: URL assinada; o Telegram baixa a foto na hora do envio.
+            fotoTgUrl = await urlAssinada(sb, fotoData.caminho_arquivo)
+          }
+        }
+        fetch('/api/telegram', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...(await corpoTelegram()), foto_url: fotoTgUrl }),
+        }).catch(() => {})
+      }
 
       setEscoltaAtiva({ ...escoltaAtiva, status: proximo })
       if (isAdmin) setTodasEscoltas(ts => ts.map(t => t.id === escoltaAtiva.id ? { ...t, status: proximo } : t))
@@ -1252,7 +1462,7 @@ export default function CampoPage() {
       // Traz a etapa e os pontos novos do banco: a Proxima Acao depende deles.
       carregar(true)
     } catch (err) {
-      showToast('erro', err instanceof Error ? err.message : 'Erro ao registrar checkpoint.')
+      showToast('erro', textoErroGravacao(err, 'Erro ao registrar checkpoint.'))
     } finally {
       setExecutando(false)
     }
@@ -1281,7 +1491,7 @@ export default function CampoPage() {
       // `modelo_id` era gravado como null em todo insert, aqui e no wizard. O efeito
       // pratico apareceu na limpeza de 10/09: nao havia como saber qual modelo cada
       // checklist tinha usado, porque as 11 execucoes existentes apontavam para nada.
-      const { data: cl } = await sb.from('checklists').insert({
+      const linhaChecklist = {
         escolta_veiculo_id: escoltaAtiva?.escolta_veiculo_id ?? null,
         modelo_id: modeloChecklistAtual?.id ?? null,
         tipo: tipoChecklist,
@@ -1289,7 +1499,45 @@ export default function CampoPage() {
         data_conclusao: new Date().toISOString(),
         responsavel_id: user?.id,
         sincronizado: true,
-      }).select('id').single()
+      }
+
+      // Onda L: pelo envelope, checklist, respostas e fotos vão num registro só.
+      const env = await envelopeLigado()
+      if (env.usar && escoltaAtiva) {
+        const clId = novoId()
+        const fotos: FotoPreparada[] = []
+        const respostas = checklistItems.map(item => {
+          const foto = item.captura ? prepararFotoCampo(item.captura, tipoFotoChecklist) : null
+          if (foto) fotos.push(foto)
+          return {
+            id: novoId(),
+            checklist_id: clId,
+            descricao_item: item.descricao_item,
+            conforme: item.resposta,
+            observacao: item.observacao.trim() || null,
+            foto_id: foto?.id ?? null,
+          }
+        })
+        const r = await gravarPeloEnvelope({ authUserId, usuarioId: user?.id ?? null }, {
+          tipo: 'linhas',
+          escoltaId: escoltaAtiva.id,
+          escoltaVeiculoId: linhaChecklist.escolta_veiculo_id,
+          versaoGestao: escoltaAtiva.versao_gestao ?? null,
+          fotos,
+          dataHoraAcao: linhaChecklist.data_conclusao,
+          linhas: { checklists: [{ id: clId, ...linhaChecklist }], checklist_respostas: respostas },
+        })
+        setPainelAberto(null)
+        setChecklistItems(its => its.map(i => ({ ...i, resposta: null, observacao: '', captura: null })))
+        if (r.modo === 'guardado') showToast('ok', MENSAGEM_GUARDADO)
+        else if (!fechouSemAplicar(r)) showToast('ok', 'Checklist concluído e salvo com sucesso!')
+        return
+      }
+
+      // Onda L (16.3.11): o erro do checklist e de cada resposta passa a ser lido; antes a
+      // tela dizia "salvo com sucesso" com o insert recusado.
+      const { data: cl, error: clErr } = await sb.from('checklists').insert(linhaChecklist).select('id').single()
+      if (clErr) throw new Error(`Não foi possível salvar o checklist: ${clErr.message}`)
 
       if (cl) {
         for (const item of checklistItems) {
@@ -1298,13 +1546,14 @@ export default function CampoPage() {
           // Usa a captura como veio, com o GPS e o horario do momento da foto.
           if (item.captura) fotoId = await uploadFoto(item.captura, tipoFotoChecklist)
 
-          await sb.from('checklist_respostas').insert({
+          const { error: respErr } = await sb.from('checklist_respostas').insert({
             checklist_id: cl.id,
             descricao_item: item.descricao_item,
             conforme: item.resposta,
             observacao: item.observacao.trim() || null,
             foto_id: fotoId,
           })
+          if (respErr) throw new Error(`Não foi possível salvar a resposta "${item.descricao_item}": ${respErr.message}`)
         }
       }
 
@@ -1314,7 +1563,7 @@ export default function CampoPage() {
       // Reset checklist
       setChecklistItems(its => its.map(i => ({ ...i, resposta: null, observacao: '', captura: null })))
     } catch (err) {
-      showToast('erro', err instanceof Error ? err.message : 'Erro ao salvar checklist.')
+      showToast('erro', textoErroGravacao(err, 'Erro ao salvar checklist.'))
     } finally {
       setExecutando(false)
     }
@@ -1329,6 +1578,7 @@ export default function CampoPage() {
 
     setExecutando(true)
     try {
+      const quando = new Date().toISOString()
       // Ocorrencia nao bloqueia por GPS: o relato vale por si, e as colunas de
       // coordenada da tabela aceitam nulo. O que muda e que a ausencia deixa de
       // passar despercebida, e aparece no aviso ao operador.
@@ -1337,70 +1587,92 @@ export default function CampoPage() {
         try { gps = await obterGPS() } catch { gps = null }
       }
 
-      // Upload foto da ocorrência
-      let fotoId: string | null = null
-      if (fotoOcorrencia) {
-        fotoId = await uploadFoto(fotoOcorrencia, TIPO_FOTO.OCORRENCIA)
-      }
-
-      await sb.from('ocorrencias').insert({
+      const tipoOcLabel = tiposOcorrencia.find(t => t.id === tipoOcId)?.nome ?? 'Ocorrência'
+      const linhaOcorrencia = {
         escolta_id: escoltaAtiva?.id,
         escolta_veiculo_id: escoltaAtiva?.escolta_veiculo_id ?? null,
         tipo_ocorrencia_id: tipoOcId,
         descricao: descOcorrencia.trim(),
-        data_hora: fotoOcorrencia?.timestamp ?? new Date().toISOString(),
+        data_hora: fotoOcorrencia?.timestamp ?? quando,
         latitude: gps?.lat ?? null,
         longitude: gps?.lng ?? null,
-        foto_id: fotoId,
         registrado_por: user?.id,
         sincronizado: true,
+      }
+      const corpoTelegram = async (): Promise<Record<string, unknown>> => ({
+        tipo: 'ocorrencia',
+        titulo: `Ocorrência: ${tipoOcLabel}`,
+        descricao: descOcorrencia.trim(),
+        escolta_id: escoltaAtiva!.id,
+        escolta_codigo: escoltaAtiva!.codigo_escolta,
+        cliente: escoltaAtiva!.cliente?.nome_cliente,
+        status_atual: escoltaAtiva!.status,
+        efetivos: await efetivosParaTelegram(escoltaAtiva!.id),
+        veiculo: escoltaAtiva!.veiculo_placa,
+        data_hora: new Date(quando).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
       })
 
-      // Telegram
-      const tipoOcLabel = tiposOcorrencia.find(t => t.id === tipoOcId)?.nome ?? 'Ocorrência'
-      let fotoTgUrl: string | null = null
-      if (fotoId) {
-        const { data: fRow } = await sb.from('fotos').select('caminho_arquivo').eq('id', fotoId).maybeSingle()
-        if (fRow?.caminho_arquivo) {
-          fotoTgUrl = await urlAssinada(sb, fRow.caminho_arquivo)
+      // Onda L: pelo envelope (guardada sem sinal; o Telegram sai uma vez depois de aplicada).
+      const env = await envelopeLigado()
+      let guardada = false
+      if (env.usar && escoltaAtiva) {
+        const foto = fotoOcorrencia ? prepararFotoCampo(fotoOcorrencia, TIPO_FOTO.OCORRENCIA) : null
+        const r = await gravarPeloEnvelope({ authUserId, usuarioId: user?.id ?? null }, {
+          tipo: 'linhas',
+          escoltaId: escoltaAtiva.id,
+          escoltaVeiculoId: linhaOcorrencia.escolta_veiculo_id,
+          versaoGestao: escoltaAtiva.versao_gestao ?? null,
+          fotos: foto ? [foto] : [],
+          dataHoraAcao: quando,
+          gps: gps ? { lat: gps.lat, lng: gps.lng, precisao: gps.precisao } : null,
+          linhas: { ocorrencias: [{ id: novoId(), ...linhaOcorrencia, foto_id: foto?.id ?? null }] },
+          aviso: { corpo: await corpoTelegram(), fotoCaminho: foto?.caminho ?? null },
+        })
+        if (r.modo !== 'guardado' && fechouSemAplicar(r)) {
+          setTipoOcId('')
+          setDescOcorrencia('')
+          limparFotoOcorrencia()
+          setPainelAberto(null)
+          return
         }
+        guardada = r.modo === 'guardado'
+      } else {
+        // Upload foto da ocorrência
+        let fotoId: string | null = null
+        if (fotoOcorrencia) {
+          fotoId = await uploadFoto(fotoOcorrencia, TIPO_FOTO.OCORRENCIA)
+        }
+
+        // Onda L (16.3.11): o erro do insert passa a ser lido. Antes a tela dizia "A central
+        // foi avisada" com a ocorrência recusada.
+        const { error: ocErr } = await sb.from('ocorrencias').insert({ ...linhaOcorrencia, foto_id: fotoId })
+        if (ocErr) throw new Error(`Não foi possível registrar a ocorrência: ${ocErr.message}`)
+
+        // Telegram
+        let fotoTgUrl: string | null = null
+        if (fotoId) {
+          const { data: fRow } = await sb.from('fotos').select('caminho_arquivo').eq('id', fotoId).maybeSingle()
+          if (fRow?.caminho_arquivo) {
+            fotoTgUrl = await urlAssinada(sb, fRow.caminho_arquivo)
+          }
+        }
+        fetch('/api/telegram', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...(await corpoTelegram()), foto_url: fotoTgUrl }),
+        }).catch(() => {})
       }
-      const { data: viatRowsOc } = await sb
-        .from('escolta_veiculos')
-        .select('id')
-        .eq('escolta_id', escoltaAtiva!.id)
-      const viatIdsOc = (viatRowsOc ?? []).map((v: any) => v.id)
-      const { data: efData } = viatIdsOc.length > 0
-        ? await sb
-            .from('escolta_efetivo')
-            .select('papel_na_escolta, vigilante:vigilantes(nome_completo)')
-            .in('escolta_veiculo_id', viatIdsOc)
-        : { data: [] }
-      const efetivos: string[] = (efData ?? []).map((e: any) =>
-        `${e.vigilante?.nome_completo ?? '—'}${e.papel_na_escolta ? ` (${e.papel_na_escolta})` : ''}`
-      )
-      fetch('/api/telegram', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tipo: 'ocorrencia',
-          titulo: `Ocorrência: ${tipoOcLabel}`,
-          descricao: descOcorrencia.trim(),
-          escolta_id: escoltaAtiva!.id,
-          escolta_codigo: escoltaAtiva!.codigo_escolta,
-          cliente: escoltaAtiva!.cliente?.nome_cliente,
-          status_atual: escoltaAtiva!.status,
-          efetivos,
-          veiculo: escoltaAtiva!.veiculo_placa,
-          foto_url: fotoTgUrl,
-          data_hora: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
-        }),
-      }).catch(() => {})
 
       setTipoOcId('')
       setDescOcorrencia('')
       limparFotoOcorrencia()
       setPainelAberto(null)
+      const semGps = gps ? [] : ['Posição não capturada: sem sinal de GPS.']
+      if (guardada) {
+        // Sem sinal ninguém foi avisado ainda: nunca "a central foi avisada".
+        concluir('ok', MENSAGEM_GUARDADO, { titulo: 'Ocorrência guardada no aparelho', detalhe: MENSAGEM_GUARDADO, avisos: semGps })
+        return
+      }
       concluir(
         gps ? 'ok' : 'erro',
         gps
@@ -1409,11 +1681,11 @@ export default function CampoPage() {
         {
           titulo: 'Ocorrência registrada',
           detalhe: 'A central foi avisada.',
-          avisos: gps ? [] : ['Posição não capturada: sem sinal de GPS.'],
+          avisos: semGps,
         }
       )
     } catch (err) {
-      showToast('erro', err instanceof Error ? err.message : 'Erro ao registrar ocorrência.')
+      showToast('erro', textoErroGravacao(err, 'Erro ao registrar ocorrência.'))
     } finally {
       setExecutando(false)
     }
@@ -1444,6 +1716,8 @@ export default function CampoPage() {
 
     setExecutando(true)
     try {
+      // Onda L (16.3.11): hora da ação é o toque de confirmar, não a hora do envio.
+      const quando = new Date().toISOString()
       // O check-in existe para dizer onde a equipe esta: sem GPS ele nao sai, como
       // sempre foi na tela de detalhe. E a unica gravacao desta tela que bloqueia.
       let gps = fotosCheckin.find(f => f.gps)?.gps ?? null
@@ -1452,6 +1726,57 @@ export default function CampoPage() {
       }
       if (!gps) {
         showToast('erro', 'Sem localização. O check-in precisa do GPS: vá para um local aberto e tente de novo.')
+        return
+      }
+
+      const corpoTelegram: Record<string, unknown> = {
+        tipo: 'ponto_controle',
+        titulo: 'Check-in Periódico',
+        descricao: ehTextoPadrao(obsCheckin, TEXTO_PADRAO_PONTO.checkin) ? undefined : obsCheckin.trim() || undefined,
+        escolta_id: escoltaAtiva.id,
+        escolta_codigo: escoltaAtiva.codigo_escolta,
+        cliente: escoltaAtiva.cliente?.nome_cliente,
+        status_atual: rotuloStatus(escoltaAtiva.status),
+        veiculo: placaAlvo ?? undefined,
+        data_hora: new Date(quando).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+      }
+
+      // Onda L: pelo envelope, a mesma linha de lib/checkin.ts com o id do aparelho. Sem rede,
+      // o endereço por extenso (Mapbox) fica de fora e o servidor não o preenche depois.
+      const env = await envelopeLigado()
+      if (env.usar) {
+        const fotos = fotosCheckin.map(c => prepararFotoCampo(c, TIPO_FOTO.PONTO_CONTROLE))
+        const r = await gravarPeloEnvelope({ authUserId, usuarioId: user.id }, {
+          tipo: 'linhas',
+          escoltaId: escoltaAtiva.id,
+          escoltaVeiculoId: escoltaVeiculoIdAlvo,
+          versaoGestao: escoltaAtiva.versao_gestao ?? null,
+          fotos,
+          dataHoraAcao: quando,
+          gps: { lat: gps.lat, lng: gps.lng, precisao: gps.precisao },
+          linhas: {
+            pontos_controle: [{
+              id: novoId(),
+              ...linhaCheckin({
+                escoltaVeiculoId: escoltaVeiculoIdAlvo,
+                fotoIds: fotos.map(f => f.id),
+                gps,
+                observacao: obsCheckin,
+                userId: user.id,
+                endereco: aparelhoSemRede() ? null : await enderecoPorExtenso(gps.lat, gps.lng),
+                dataHora: quando,
+              }),
+              criado_offline: aparelhoSemRede(),
+            }],
+          },
+          aviso: { corpo: corpoTelegram, fotoCaminho: fotos[0]?.caminho ?? null },
+        })
+        setFotosCheckin(fs => { fs.forEach(f => URL.revokeObjectURL(f.preview)); return [] })
+        setObsCheckin(TEXTO_PADRAO_PONTO.checkin)
+        setViaturaAlvoId(viaturaDoUsuario)
+        setPainelAberto(null)
+        if (!fechouSemAplicar(r)) concluir('ok', 'Check-in registrado.', { titulo: 'Check-in registrado', avisos: [] })
+        carregar(true)
         return
       }
 
@@ -1470,6 +1795,7 @@ export default function CampoPage() {
         userId: user.id,
         // Lote 2026-10 (onda F): endereço por extenso, como na tela de detalhe.
         endereco: await enderecoPorExtenso(gps.lat, gps.lng),
+        dataHora: quando,
       })
 
       // Telegram depois da gravacao, sem esperar: o check-in ja esta salvo.
@@ -1481,18 +1807,7 @@ export default function CampoPage() {
       fetch('/api/telegram', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tipo: 'ponto_controle',
-          titulo: 'Check-in Periódico',
-          descricao: ehTextoPadrao(obsCheckin, TEXTO_PADRAO_PONTO.checkin) ? undefined : obsCheckin.trim() || undefined,
-          escolta_id: escoltaAtiva.id,
-          escolta_codigo: escoltaAtiva.codigo_escolta,
-          cliente: escoltaAtiva.cliente?.nome_cliente,
-          status_atual: rotuloStatus(escoltaAtiva.status),
-          veiculo: placaAlvo ?? undefined,
-          foto_url: fotoTgUrl,
-          data_hora: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
-        }),
+        body: JSON.stringify({ ...corpoTelegram, foto_url: fotoTgUrl }),
       }).catch(() => {})
 
       setFotosCheckin(fs => { fs.forEach(f => URL.revokeObjectURL(f.preview)); return [] })
@@ -1502,7 +1817,7 @@ export default function CampoPage() {
       concluir('ok', 'Check-in registrado.', { titulo: 'Check-in registrado', avisos: [] })
       carregar(true)
     } catch (err) {
-      showToast('erro', err instanceof Error ? err.message : 'Erro ao registrar o check-in.')
+      showToast('erro', textoErroGravacao(err, 'Erro ao registrar o check-in.'))
     } finally {
       setExecutando(false)
     }
@@ -1516,6 +1831,7 @@ export default function CampoPage() {
       // bloqueada por GPS. Falta de sinal aciona assim mesmo, grava coordenada nula
       // e a ausência aparece no aviso. Emergência é um toque, e qualquer atraso aqui
       // pode custar caro.
+      const quando = new Date().toISOString()
       let gps: { lat: number; lng: number; precisao: number } | null = null
       try { gps = await obterGPS() } catch { gps = null }
 
@@ -1525,47 +1841,83 @@ export default function CampoPage() {
         return
       }
 
-      // O retorno PRECISA ser lido. O supabase-js nunca lança: ele devolve
-      // { data, error }, então o try/catch em volta não vê falha nenhuma. Sem esta
-      // checagem a tela anunciava "EMERGÊNCIA ACIONADA" com o insert recusado pelo
-      // banco e nada gravado, exatamente no cenário em que o botão mais importa.
-      const { error: emergErr } = await sb.from('emergencias').insert({
+      const linhaEmergencia = {
         escolta_id: escoltaAtiva.id,
         escolta_veiculo_id: escoltaAtiva.escolta_veiculo_id ?? null,
         acionado_por: user.id,
-        data_hora: new Date().toISOString(),
+        data_hora: quando,
         latitude: gps?.lat ?? null,
         longitude: gps?.lng ?? null,
         sem_sinal_gps: !gps,
         status: 'aberta',
-      })
-      if (emergErr) {
-        showToast('erro', `FALHA AO ACIONAR A EMERGÊNCIA: ${emergErr.message}. LIGUE PARA A CENTRAL AGORA.`)
-        setExecutando(false)
-        return
+      }
+      const corpoTelegram: Record<string, unknown> = {
+        tipo: 'emergencia',
+        titulo: 'EMERGÊNCIA ACIONADA',
+        descricao: gps
+          ? `Posição: ${gps.lat.toFixed(6)}, ${gps.lng.toFixed(6)} (precisão ${Math.round(gps.precisao)} m)`
+          : 'SEM SINAL DE GPS. Posição não capturada no acionamento.',
+        escolta_id: escoltaAtiva.id,
+        escolta_codigo: escoltaAtiva.codigo_escolta,
+        cliente: escoltaAtiva.cliente?.nome_cliente,
+        status_atual: escoltaAtiva.status,
+        veiculo: escoltaAtiva.veiculo_placa,
+        data_hora: new Date(quando).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
       }
 
-      // A mensagem dizia "Central notificada" e nada era enviado a ninguém: não há
-      // trigger nem webhook em emergencias, só o contador da tela de indicadores.
-      // O envio é disparado sem await de propósito: o acionamento já está gravado, e
-      // esperar a rede aqui atrasaria a confirmação para quem está em emergência.
-      fetch('/api/telegram', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tipo: 'emergencia',
-          titulo: 'EMERGÊNCIA ACIONADA',
-          descricao: gps
-            ? `Posição: ${gps.lat.toFixed(6)}, ${gps.lng.toFixed(6)} (precisão ${Math.round(gps.precisao)} m)`
-            : 'SEM SINAL DE GPS. Posição não capturada no acionamento.',
-          escolta_id: escoltaAtiva.id,
-          escolta_codigo: escoltaAtiva.codigo_escolta,
-          cliente: escoltaAtiva.cliente?.nome_cliente,
-          status_atual: escoltaAtiva.status,
-          veiculo: escoltaAtiva.veiculo_placa,
-          data_hora: new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
-        }),
-      }).catch(() => {})
+      // Onda L (16.3.8): pelo envelope, tipo emergencia (sobe primeiro). Guardada sem conexão,
+      // a tela vermelha diz que ninguém foi avisado e oferece a ligação para a central.
+      const env = await envelopeLigado()
+      if (env.usar) {
+        let r: ResultadoRegistroCampo
+        try {
+          r = await gravarPeloEnvelope({ authUserId, usuarioId: user.id }, {
+            tipo: 'emergencia',
+            escoltaId: escoltaAtiva.id,
+            escoltaVeiculoId: linhaEmergencia.escolta_veiculo_id,
+            versaoGestao: escoltaAtiva.versao_gestao ?? null,
+            dataHoraAcao: quando,
+            gps,
+            linhas: { emergencias: [{ id: novoId(), ...linhaEmergencia }] },
+            aviso: { corpo: corpoTelegram },
+          })
+        } catch (e) {
+          setEmergConfirm(false)
+          setEmergenciaSemConexao({ telefone: env.telefoneCentral })
+          showToast('erro', `FALHA AO GUARDAR A EMERGÊNCIA: ${textoErroGravacao(e, 'erro no aparelho')}. LIGUE PARA A CENTRAL AGORA.`)
+          return
+        }
+        setEmergConfirm(false)
+        if (r.modo === 'guardado') {
+          setEmergenciaSemConexao({ telefone: env.telefoneCentral })
+          return
+        }
+        if (r.modo === 'recusado' || r.resultado === 'conflito') {
+          showToast('erro', 'A EMERGÊNCIA NÃO FOI ACEITA PELO SISTEMA. A supervisão foi avisada pelo registro. LIGUE PARA A CENTRAL AGORA.')
+          return
+        }
+      } else {
+        // O retorno PRECISA ser lido. O supabase-js nunca lança: ele devolve
+        // { data, error }, então o try/catch em volta não vê falha nenhuma. Sem esta
+        // checagem a tela anunciava "EMERGÊNCIA ACIONADA" com o insert recusado pelo
+        // banco e nada gravado, exatamente no cenário em que o botão mais importa.
+        const { error: emergErr } = await sb.from('emergencias').insert(linhaEmergencia)
+        if (emergErr) {
+          showToast('erro', `FALHA AO ACIONAR A EMERGÊNCIA: ${emergErr.message}. LIGUE PARA A CENTRAL AGORA.`)
+          setExecutando(false)
+          return
+        }
+
+        // A mensagem dizia "Central notificada" e nada era enviado a ninguém: não há
+        // trigger nem webhook em emergencias, só o contador da tela de indicadores.
+        // O envio é disparado sem await de propósito: o acionamento já está gravado, e
+        // esperar a rede aqui atrasaria a confirmação para quem está em emergência.
+        fetch('/api/telegram', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(corpoTelegram),
+        }).catch(() => {})
+      }
 
       setEmergConfirm(false)
       concluir(
@@ -1679,6 +2031,9 @@ export default function CampoPage() {
       <div className="pb-4 px-1 md:px-0">
         {/* No Modo Guiado o aviso de sucesso e a tela de confirmacao; erro continua no toast. */}
         <Toast msg={toast?.tipo === 'erro' ? toast : null} />
+        {emergenciaSemConexao && (
+          <EmergenciaSemConexao telefone={emergenciaSemConexao.telefone} onFechar={() => setEmergenciaSemConexao(null)} />
+        )}
         <PainelGuiado
           escolta={escoltaAtiva ? {
             id: escoltaAtiva.id,
@@ -1756,6 +2111,9 @@ export default function CampoPage() {
   return (
     <div className="max-w-xl mx-auto space-y-4 pb-12 px-4 md:px-0">
       <Toast msg={toast} />
+      {emergenciaSemConexao && (
+        <EmergenciaSemConexao telefone={emergenciaSemConexao.telefone} onFechar={() => setEmergenciaSemConexao(null)} />
+      )}
 
       {/* ── Header ── */}
       <div>
