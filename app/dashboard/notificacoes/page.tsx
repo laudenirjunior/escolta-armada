@@ -223,12 +223,15 @@ export default function NotificacoesPage() {
           id, data_hora, observacoes,
           tipo:dom_tipos_ponto(codigo, nome_exibicao),
           lancado_por:usuarios!lancado_por(nome_completo),
-          escolta_veiculo:escolta_veiculos(
+          escolta_veiculo:escolta_veiculos!inner(
             veiculo:veiculos(placa),
-            escolta:escoltas(id, codigo_escolta, status, cliente:clientes(nome_cliente))
+            escolta:escoltas!inner(id, codigo_escolta, status, arquivada_em, cliente:clientes(nome_cliente))
           ),
           foto:fotos!foto_id(caminho_arquivo)
         `)
+        // Onda I: registro anulado e escolta arquivada fora do feed.
+        .is('anulado_em', null)
+        .is('escolta_veiculo.escolta.arquivada_em', null)
         .order('data_hora', { ascending: false })
         .limit(100)
 
@@ -255,9 +258,11 @@ export default function NotificacoesPage() {
           id, descricao, data_hora,
           tipo:dom_tipos_ocorrencia(nome),
           autor:usuarios!registrado_por(nome_completo),
-          escolta:escoltas!escolta_id(id, codigo_escolta, status, cliente:clientes(nome_cliente)),
+          escolta:escoltas!escolta_id!inner(id, codigo_escolta, status, arquivada_em, cliente:clientes(nome_cliente)),
           foto:fotos!foto_id(caminho_arquivo)
         `)
+        .is('anulado_em', null)
+        .is('escolta.arquivada_em', null)
         .order('data_hora', { ascending: false })
         .limit(50)
 
@@ -283,8 +288,10 @@ export default function NotificacoesPage() {
         .select(`
           id, data_hora, status_novo, status_anterior,
           autor:usuarios!alterado_por(nome_completo),
-          escolta:escoltas!escolta_id(id, codigo_escolta, status, cliente:clientes(nome_cliente))
+          escolta:escoltas!escolta_id!inner(id, codigo_escolta, status, arquivada_em, cliente:clientes(nome_cliente))
         `)
+        .is('anulado_em', null)
+        .is('escolta.arquivada_em', null)
         .not('status_novo', 'in', '(na_origem,em_transito_destino,no_destino,retornando,na_base)')
         .order('data_hora', { ascending: false })
         .limit(50)
@@ -311,9 +318,11 @@ export default function NotificacoesPage() {
         .select(`
           id, data_hora,
           vigilante:vigilantes!vigilante_id(nome_completo),
-          escolta:escoltas!escolta_id(id, codigo_escolta, status, cliente:clientes(nome_cliente)),
+          escolta:escoltas!escolta_id!inner(id, codigo_escolta, status, arquivada_em, cliente:clientes(nome_cliente)),
           foto:fotos!foto_id(caminho_arquivo)
         `)
+        .is('anulado_em', null)
+        .is('escolta.arquivada_em', null)
         .order('data_hora', { ascending: false })
         .limit(50)
 

@@ -44,6 +44,13 @@ const ACAO_LABEL: Record<string, string> = {
   DELETE: 'Exclusão',
   LOGIN: 'Login',
   LOGOUT: 'Logout',
+  // Lote 2026-10, onda I: ações da gestão (RPCs da migration 218).
+  EDITAR_ESCOLTA: 'Edição da escolta pela gestão',
+  VOLTAR_ETAPA: 'Etapa desfeita (voltar uma etapa)',
+  ZERAR_ESCOLTA: 'Escolta zerada para agendada',
+  CONCLUSAO_ANTECIPADA: 'Conclusão antecipada',
+  ARQUIVAR_ESCOLTA: 'Escolta arquivada',
+  RECUPERAR_ESCOLTA: 'Escolta recuperada do arquivo',
 }
 
 function badgeAcao(acao: string): string {

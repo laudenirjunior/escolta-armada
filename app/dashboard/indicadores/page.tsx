@@ -250,6 +250,7 @@ export default function IndicadoresPage() {
 
     sb.from('escoltas')
       .select('data_hora_prevista, status')
+      .is('arquivada_em', null)   // onda I: arquivada fora dos indicadores
       .gte('data_hora_prevista', dozeAtras.toISOString())
       .not('status', 'in', '(rascunho,cancelada)')
       .then(({ data }) => {
@@ -337,14 +338,16 @@ export default function IndicadoresPage() {
     `)
     .gte('data_hora_prevista', from)
     .lte('data_hora_prevista', to)
+    .is('arquivada_em', null)
     .order('data_hora_prevista', { ascending: false })
 
     if (clienteFiltroId) {
       q = (q as any).eq('cliente_id', clienteFiltroId)
     }
 
-    const ocQ = sb.from('ocorrencias').select('id', { count: 'exact', head: true })
-      .gte('data_hora', from).lte('data_hora', to)
+    // Onda I: filha lida por data só conta com escolta não arquivada e registro válido.
+    const ocQ = sb.from('ocorrencias').select('id, escolta:escoltas!inner(arquivada_em)', { count: 'exact', head: true })
+      .gte('data_hora', from).lte('data_hora', to).is('anulado_em', null).is('escolta.arquivada_em', null)
 
     const [{ data: escData }, { count: ocCount }] = await Promise.all([q, ocQ])
 
@@ -429,14 +432,15 @@ export default function IndicadoresPage() {
       // Segunda bateria de queries (operacional/qualidade/pessoas)
       const [{ data: pontosData }, { data: emergData }, { data: presData }, { data: clkData }, { data: ocorrTipoData }] = await Promise.all([
         escoltaVeiculoIds.length > 0
-          ? sb.from('pontos_controle').select('id, criado_offline, precisao_metros, escolta_veiculo_id, observacoes').in('escolta_veiculo_id', escoltaVeiculoIds)
+          ? sb.from('pontos_controle').select('id, criado_offline, precisao_metros, escolta_veiculo_id, observacoes').in('escolta_veiculo_id', escoltaVeiculoIds).is('anulado_em', null)
           : Promise.resolve({ data: [] as any[] }),
-        sb.from('emergencias').select('id, status, data_hora, atualizado_em').in('escolta_id', rowIds),
-        sb.from('presencas').select('vigilante_id, escolta_id').in('escolta_id', rowIds),
+        sb.from('emergencias').select('id, status, data_hora, atualizado_em').in('escolta_id', rowIds).is('anulado_em', null),
+        sb.from('presencas').select('vigilante_id, escolta_id').in('escolta_id', rowIds).is('anulado_em', null),
         escoltaVeiculoIds.length > 0
-          ? sb.from('checklists').select('id, concluido, data_inicio, data_conclusao, tipo, checklist_respostas(conforme, descricao_item)').in('escolta_veiculo_id', escoltaVeiculoIds)
+          ? sb.from('checklists').select('id, concluido, data_inicio, data_conclusao, tipo, checklist_respostas(conforme, descricao_item)').in('escolta_veiculo_id', escoltaVeiculoIds).is('anulado_em', null)
           : Promise.resolve({ data: [] as any[] }),
-        sb.from('ocorrencias').select('id, tipo:dom_tipos_ocorrencia(nome)').gte('data_hora', from).lte('data_hora', to),
+        sb.from('ocorrencias').select('id, tipo:dom_tipos_ocorrencia(nome), escolta:escoltas!inner(arquivada_em)').gte('data_hora', from).lte('data_hora', to)
+          .is('anulado_em', null).is('escolta.arquivada_em', null),
       ])
 
       // Check-ins stats
@@ -533,6 +537,9 @@ export default function IndicadoresPage() {
           .select('escolta_id, status_novo, data_hora')
           .in('escolta_id', escoltasFinalizadasIds)
           .in('status_novo', ['em_andamento', 'finalizada'])
+          // Onda I: histórico anulado (voltar etapa, zerar) fora do tempo médio; a escolta
+          // zerada e refeita mede da entrada válida em andamento.
+          .is('anulado_em', null)
 
         if (histStatus && histStatus.length > 0) {
           const porEscolta: Record<string, { inicio?: number; fim?: number }> = {}

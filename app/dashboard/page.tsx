@@ -90,23 +90,27 @@ export default function DashboardPage() {
         mesAtualQ, mesAnteriorQ,
         recentesQ,
       ] = await Promise.all([
-        sb.from('escoltas').select('id', { count: 'exact', head: true }).in('status', STATUS_ATIVOS),
-        sb.from('escoltas').select('id', { count: 'exact', head: true })
+        // Onda I: escolta arquivada e registro anulado fora dos números do painel.
+        sb.from('escoltas').select('id', { count: 'exact', head: true }).in('status', STATUS_ATIVOS).is('arquivada_em', null),
+        sb.from('escoltas').select('id', { count: 'exact', head: true }).is('arquivada_em', null)
           .gte('data_hora_prevista', hoje.toISOString())
           .lt('data_hora_prevista', amanha.toISOString()),
-        sb.from('emergencias').select('id', { count: 'exact', head: true }).eq('status', 'aberta'),
-        sb.from('checklists').select('id', { count: 'exact', head: true }).eq('concluido', false),
+        sb.from('emergencias').select('id, escolta:escoltas!inner(arquivada_em)', { count: 'exact', head: true })
+          .eq('status', 'aberta').is('anulado_em', null).is('escolta.arquivada_em', null),
+        sb.from('checklists').select('id, ev:escolta_veiculos!inner(escolta:escoltas!inner(arquivada_em))', { count: 'exact', head: true })
+          .eq('concluido', false).is('anulado_em', null).is('ev.escolta.arquivada_em', null),
         sb.from('vigilantes').select('id', { count: 'exact', head: true }).eq('status', 'ativo'),
         sb.from('veiculos').select('id', { count: 'exact', head: true }).eq('status', 'ativo'),
         sb.from('armamentos').select('id', { count: 'exact', head: true }).eq('status', 'ativo'),
-        sb.from('escoltas').select('id', { count: 'exact', head: true })
+        sb.from('escoltas').select('id', { count: 'exact', head: true }).is('arquivada_em', null)
           .gte('criado_em', inicioMes.toISOString()),
-        sb.from('escoltas').select('id', { count: 'exact', head: true })
+        sb.from('escoltas').select('id', { count: 'exact', head: true }).is('arquivada_em', null)
           .gte('criado_em', inicioMesAnterior.toISOString())
           .lte('criado_em', fimMesAnterior.toISOString()),
         sb.from('escoltas')
           .select('id, codigo_escolta, status, data_hora_prevista, origem_endereco, destino_endereco, cliente:clientes(nome_cliente, cor_destaque)')
           .not('status', 'in', '("finalizada","cancelada")')
+          .is('arquivada_em', null)
           .order('data_hora_prevista', { ascending: true })
           .limit(8),
       ])

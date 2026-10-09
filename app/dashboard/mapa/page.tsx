@@ -249,6 +249,7 @@ export default function MapaPage() {
           veiculos:escolta_veiculos(id)
         `)
         .in('status', STATUS_ATIVOS)
+        .is('arquivada_em', null)   // onda I
         .order('status')
 
       if (!raw?.length) {
@@ -268,6 +269,7 @@ export default function MapaPage() {
           .from('pontos_controle')
           .select('escolta_veiculo_id, latitude, longitude, data_hora, observacoes, tipo_ponto:dom_tipos_ponto(nome_exibicao)')
           .in('escolta_veiculo_id', viaturaIds)
+          .is('anulado_em', null)   // onda I: ponto anulado não é a última posição
           .not('latitude', 'is', null)
           .not('longitude', 'is', null)
           .order('data_hora', { ascending: false })
@@ -329,6 +331,7 @@ export default function MapaPage() {
       .from('pontos_controle')
       .select('latitude, longitude, data_hora')
       .eq('escolta_veiculo_id', e.viatura_id)
+      .is('anulado_em', null)
       .not('latitude', 'is', null)
       .not('longitude', 'is', null)
       .order('data_hora', { ascending: true })

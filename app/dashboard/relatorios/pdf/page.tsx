@@ -24,6 +24,8 @@ interface EscoltaPDF {
   cliente: { id: string; nome_cliente: string; cor_destaque: string | null } | null
   veiculos: { quilometragem_saida: number; quilometragem_retorno: number | null; abastecimento_valor: number | null; abastecimento_litros: number | null }[]
   efetivo: { valor_pago_vigilante: number | null; papel_na_escolta: string | null; confirmado: boolean; vigilante: { nome_completo: string } | null }[]
+  // Onda I: conclusão antecipada válida (etiqueta "com pendências" na lista).
+  conclusao?: { id: string; anulado_em: string | null }[] | null
 }
 interface OcorrenciaPDF {
   id: string; descricao: string; data_hora: string
@@ -202,7 +204,7 @@ function SecaoEscoltas({ escoltas }: { escoltas: EscoltaPDF[] }) {
                   {(e.origem_endereco ?? '—').split(',')[0]} → {(e.destino_endereco ?? '—').split(',')[0]}
                 </span>
               </td>
-              <td><span className={`status-badge status-${e.status}`}>{STATUS_LABEL[e.status] ?? e.status}</span></td>
+              <td><span className={`status-badge status-${e.status}`}>{STATUS_LABEL[e.status] ?? e.status}{(e.conclusao ?? []).some(c => !c.anulado_em) ? ' (com pendências)' : ''}</span></td>
               <td style={{ fontVariantNumeric: 'tabular-nums', fontSize: '10px' }}>{fmt(e.data_hora_prevista)}</td>
               <td style={{ fontVariantNumeric: 'tabular-nums', fontSize: '10px' }}>{e.data_finalizacao ? fmt(e.data_finalizacao) : '—'}</td>
               <td style={{ fontVariantNumeric: 'tabular-nums' }}>{fmtDur(calcDurMin(e))}</td>
@@ -581,8 +583,11 @@ function RelatoriosPDFConteudo() {
         efetivo:escolta_efetivo(
           valor_pago_vigilante, papel_na_escolta, confirmado,
           vigilante:vigilantes(nome_completo)
-        )
+        ),
+        conclusao:escolta_conclusoes_antecipadas(id, anulado_em)
       `)
+      // Onda I: arquivada fora do relatório.
+      escoltasQ = escoltasQ.is('arquivada_em', null)
 
       if (from) escoltasQ = escoltasQ.gte('data_hora_prevista', from)
       if (to)   escoltasQ = escoltasQ.lte('data_hora_prevista', to)
@@ -594,7 +599,9 @@ function RelatoriosPDFConteudo() {
       else promises.push(Promise.resolve({ data: [] }))
 
       if (needsOcorr) {
-        let oQ = sb.from('ocorrencias').select(`id, descricao, data_hora, tipo:dom_tipos_ocorrencia(nome), autor:usuarios!registrado_por(nome_completo), escolta:escoltas(codigo_escolta)`)
+        // Onda I: só ocorrência válida, de escolta não arquivada (filha lida por data).
+        let oQ = sb.from('ocorrencias').select(`id, descricao, data_hora, tipo:dom_tipos_ocorrencia(nome), autor:usuarios!registrado_por(nome_completo), escolta:escoltas!inner(codigo_escolta, arquivada_em)`)
+          .is('anulado_em', null).is('escolta.arquivada_em', null)
         if (from) oQ = oQ.gte('data_hora', from)
         if (to)   oQ = oQ.lte('data_hora', to)
         oQ = oQ.order('data_hora', { ascending: false })
@@ -613,7 +620,7 @@ function RelatoriosPDFConteudo() {
         // Defeito 4: faltava o alias, e SecaoChecklists le c.respostas.
         const cQ = sb.from('checklists').select(`id, tipo, concluido, data_inicio, data_conclusao, respostas:checklist_respostas(conforme, descricao_item)`)
         if (escVeicIds.length > 0) {
-          promises.push(cQ.in('escolta_veiculo_id', escVeicIds))
+          promises.push(cQ.in('escolta_veiculo_id', escVeicIds).is('anulado_em', null))
         } else {
           // checklists nao tem escolta_id. Sem viatura nao ha checklist a mostrar,
           // e filtrar por escolta_id daria erro 400 e esvaziaria o relatorio inteiro.

@@ -78,7 +78,10 @@ interface EscoltaRelatorio {
   destino_endereco: string | null
   cliente: { id: string; nome_cliente: string; cor_destaque: string | null } | null
   veiculos: { quilometragem_saida: number; quilometragem_retorno: number | null }[]
+  // Onda I: conclusão antecipada válida vira etiqueta "Concluída com pendências".
+  conclusao?: { id: string; anulado_em: string | null }[] | null
 }
+const comPendencias = (e: EscoltaRelatorio) => (e.conclusao ?? []).some(c => !c.anulado_em)
 interface OcorrenciaRelatorio {
   id: string
   descricao: string
@@ -378,10 +381,12 @@ export default function RelatoriosPage() {
       id, codigo_escolta, status, data_hora_prevista, data_finalizacao, criado_em,
       origem_endereco, destino_endereco,
       cliente:clientes(id, nome_cliente, cor_destaque),
-      veiculos:escolta_veiculos(quilometragem_saida, quilometragem_retorno)
+      veiculos:escolta_veiculos(quilometragem_saida, quilometragem_retorno),
+      conclusao:escolta_conclusoes_antecipadas(id, anulado_em)
     `)
     .gte('data_hora_prevista', from)
     .lte('data_hora_prevista', to)
+    .is('arquivada_em', null)   // onda I: arquivada fora dos relatórios
     .order('data_hora_prevista', { ascending: false })
 
     if (clienteFiltroId) q = q.eq('cliente_id', clienteFiltroId)
@@ -423,10 +428,12 @@ export default function RelatoriosPage() {
       id, descricao, data_hora,
       tipo:dom_tipos_ocorrencia(nome),
       autor:usuarios!registrado_por(nome_completo),
-      escolta:escoltas(codigo_escolta)
+      escolta:escoltas!inner(codigo_escolta, arquivada_em)
     `)
     .gte('data_hora', from)
     .lte('data_hora', to)
+    .is('anulado_em', null)               // onda I: ocorrência anulada não é válida
+    .is('escolta.arquivada_em', null)
     .order('data_hora', { ascending: false })
 
     const { data } = await q
@@ -1057,7 +1064,7 @@ export default function RelatoriosPage() {
                                 <span style={{ fontSize: '12px', color: P.text, maxWidth: '130px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.cliente?.nome_cliente ?? '—'}</span>
                               </div>
                             </td>
-                            <td><span className={STATUS_BADGE[e.status] ?? 'badge-neutral'}>{STATUS_LABEL[e.status] ?? e.status}</span></td>
+                            <td><span className={STATUS_BADGE[e.status] ?? 'badge-neutral'}>{STATUS_LABEL[e.status] ?? e.status}</span>{comPendencias(e) && <span className="badge-warning ml-1">Com pendências</span>}</td>
                             <td><span style={{ fontSize: '11px', color: P.textSub, maxWidth: '140px', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.origem_endereco ? e.origem_endereco.split(',').slice(0,2).join(',') : '—'}</span></td>
                             <td><span style={{ fontSize: '11px', color: P.textSub, maxWidth: '140px', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.destino_endereco ? e.destino_endereco.split(',').slice(0,2).join(',') : '—'}</span></td>
                             <td><span style={{ fontSize: '11px', color: P.textSub, whiteSpace: 'nowrap' }}>{new Date(e.data_hora_prevista).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' })}</span></td>
@@ -1084,7 +1091,7 @@ export default function RelatoriosPage() {
                         style={{ borderColor: P.border, backgroundColor: '#fff' }}>
                         <div className="flex items-center justify-between mb-1.5">
                           <span style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: 700, color: P.text }}>{e.codigo_escolta ?? '—'}</span>
-                          <span className={STATUS_BADGE[e.status] ?? 'badge-neutral'}>{STATUS_LABEL[e.status] ?? e.status}</span>
+                          <span className={STATUS_BADGE[e.status] ?? 'badge-neutral'}>{STATUS_LABEL[e.status] ?? e.status}{comPendencias(e) ? ' · com pendências' : ''}</span>
                         </div>
                         <div className="flex items-center gap-1.5 mb-1">
                           {e.cliente?.cor_destaque && <div style={{ width: '6px', height: '6px', borderRadius: '2px', backgroundColor: e.cliente.cor_destaque, flexShrink: 0 }} />}

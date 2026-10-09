@@ -34,10 +34,12 @@ export const STATUS_COM_CHECKIN: string[] = [
 interface PontoLido {
   data_hora: string
   observacoes: string | null
+  /** Onda I: ponto anulado pela gestão (voltar etapa, zerar) não conta. */
+  anulado_em?: string | null
 }
 
 export function ehPontoCheckin(p: PontoLido): boolean {
-  return lerObservacao(p.observacoes).tipo === TIPO_CHECKIN
+  return !p.anulado_em && lerObservacao(p.observacoes).tipo === TIPO_CHECKIN
 }
 
 /** Horario do check-in mais recente entre os pontos informados, ou null. */
@@ -47,8 +49,8 @@ export function ultimoCheckinEm(pontos: PontoLido[]): string | null {
 }
 
 /** Horario do primeiro ponto de controle da escolta, que marca a saida para a rua. */
-export function inicioOperacaoEm(pontos: { data_hora: string }[]): string | null {
-  const datas = pontos.map((p) => p.data_hora).sort()
+export function inicioOperacaoEm(pontos: { data_hora: string; anulado_em?: string | null }[]): string | null {
+  const datas = pontos.filter((p) => !p.anulado_em).map((p) => p.data_hora).sort()
   return datas.length ? datas[0] : null
 }
 

@@ -18,8 +18,9 @@ export function SubstituicoesPorOperador({ desde, ate }: { desde: string; ate: s
     let vivo = true
     ;(async () => {
       const { data, error } = await sb.from('mural_pedidos')
-        .select('status, solicitante:vigilantes!solicitante_vigilante_id(nome_completo)')
+        .select('status, solicitante:vigilantes!solicitante_vigilante_id(nome_completo), escolta:escoltas!inner(arquivada_em)')
         .gte('criado_em', desde).lte('criado_em', ate)
+        .is('escolta.arquivada_em', null)   // onda I: escolta arquivada fora dos indicadores
       if (!vivo || error) return
       const mapa = new Map<string, Linha>()
       for (const p of (data ?? []) as Array<{ status: string; solicitante: { nome_completo: string } | null }>) {

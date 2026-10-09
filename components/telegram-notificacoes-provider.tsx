@@ -28,11 +28,14 @@ export function TelegramNotificacoesProvider() {
           .select(`
             foto:fotos!foto_id(caminho_arquivo),
             vigilante:vigilantes!vigilante_id(nome_completo),
-            escolta:escoltas!escolta_id(
-              id, codigo_escolta, status, cliente:clientes(nome_cliente)
+            escolta:escoltas!escolta_id!inner(
+              id, codigo_escolta, status, arquivada_em, cliente:clientes(nome_cliente)
             )
           `)
           .eq('id', row.id)
+          // Onda I: presença anulada ou de escolta arquivada não vai ao Telegram.
+          .is('anulado_em', null)
+          .is('escolta.arquivada_em', null)
           .maybeSingle()
 
         if (!data) return

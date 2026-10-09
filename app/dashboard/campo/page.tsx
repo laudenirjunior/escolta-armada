@@ -22,6 +22,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useModoGuiado } from '@/hooks/useModoGuiado'
 import { AiTextButton } from '@/components/ui/ai-text-button'
 import { ehGestao, viaturaSugerida, type VinculoEscolta } from '@/lib/acesso-escolta'
+import { PODE_PODER_TOTAL, temPermissao } from '@/lib/permissions'
 import {
   STATUS_COM_CHECKIN, inicioOperacaoEm, minutosAteCheckin, registrarCheckin, ultimoCheckinEm,
 } from '@/lib/checkin'
@@ -515,7 +516,7 @@ export default function CampoPage() {
     // A viatura entra na consulta porque sem `escolta_veiculo_id` o ponto de controle
     // era descartado em silencio para administrador, gestor, supervisor e central: a
     // escolta avancava de etapa e nao sobrava prova nenhuma.
-    const SELECT_ESCOLTA = 'id, codigo_escolta, status, origem_endereco, destino_endereco, data_hora_prevista, periodicidade_checkin_min, cliente:clientes(nome_cliente, cor_destaque), escolta_veiculos(id, veiculo:veiculos(placa, modelo))'
+    const SELECT_ESCOLTA = 'id, codigo_escolta, status, origem_endereco, destino_endereco, data_hora_prevista, periodicidade_checkin_min, arquivada_em, cliente:clientes(nome_cliente, cor_destaque), escolta_veiculos(id, veiculo:veiculos(placa, modelo))'
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const normalizar = (e: any, minhaViaturaId?: string | null): EscoltaAtiva => {
@@ -563,7 +564,8 @@ export default function CampoPage() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       for (const linha of (efetivo ?? []) as any[]) {
         const e = linha.escolta
-        if (!e) continue
+        // Onda I: escolta arquivada sai do Campo e do Modo Guiado (a RLS já a esconde de quem não é administrador).
+        if (!e || e.arquivada_em) continue
         meusVinculos.push({
           escolta_id: e.id,
           escolta_veiculo_id: linha.escolta_veiculo_id ?? null,
@@ -594,10 +596,25 @@ export default function CampoPage() {
         .from('escoltas')
         .select(SELECT_ESCOLTA)
         .in('status', ATIVOS)
+        .is('arquivada_em', null)
         .order('data_hora_prevista')
       const minhas = new Set(minhasAtivas.map(e => e.id))
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       lista = [...minhasAtivas, ...((esc ?? []) as any[]).filter(e => !minhas.has(e.id)).map(e => normalizar(e))]
+    }
+    // Onda I (12.5.7): gestor e administrador veem também as agendadas de qualquer equipe,
+    // para iniciar o pré-início pelo Campo sem estar escalados.
+    if (temPermissao(user?.perfil?.codigo, PODE_PODER_TOTAL)) {
+      const { data: ags } = await sb
+        .from('escoltas')
+        .select(SELECT_ESCOLTA)
+        .eq('status', STATUS.AGENDADA)
+        .is('arquivada_em', null)
+        .order('data_hora_prevista')
+      const jaListadas = new Set(minhasAgendadas.map(e => e.id))
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const e of (ags ?? []) as any[]) if (!jaListadas.has(e.id)) minhasAgendadas.push(normalizar(e))
+      minhasAgendadas.sort(porPrevista)
     }
 
     setVinculos(meusVinculos)
@@ -684,9 +701,12 @@ export default function CampoPage() {
     const ids = idsViaturas ? idsViaturas.split(',') : []
     if (ids.length === 0) { setPontosEscolta([]); return }
     let ativo = true
+    // Onda I: só pontos válidos. Com o anulado na conta, depois de a gestão voltar uma
+    // etapa o Campo acharia que todas as viaturas já registraram e avançaria sem foto nova.
     sb.from('pontos_controle')
       .select('data_hora, observacoes, escolta_veiculo_id, tipo_ponto_id')
       .in('escolta_veiculo_id', ids)
+      .is('anulado_em', null)
       .then(({ data }: { data: PontoResumo[] | null }) => { if (ativo) setPontosEscolta(data ?? []) })
     return () => { ativo = false }
   }, [idsViaturas, versaoDados])

@@ -8,6 +8,7 @@ import { STATUS, LABELS_STATUS, TIPO_PONTO_POR_STATUS } from '@/lib/fluxo-escolt
 import { urlsAssinadas, urlDoMapa, VALIDADE_IMPRESSAO_S } from '@/lib/fotos-url'
 import { carregarLocaisAtivos } from '@/lib/locais'
 import { rotuloDoPonto } from '@/lib/rotulo-ponto'
+import { COLUNAS_ANULACAO, textoAnulado, horaBR, type ConclusaoAntecipada } from '@/lib/gestao'
 
 const sb = createClient() as any
 
@@ -63,6 +64,10 @@ interface PrintData {
   }>
   ocorrencias: Array<{ tipo: string; descricao: string; data_hora: string; autor: string; fotoUrl: string | null }>
   checklists: Array<{ tipo: string; data_conclusao: string; autor: string; conformes: number; total: number }>
+  /** Onda I: registros anulados pela gestão, em seção separada (nunca como válidos). */
+  anulados: Array<{ tipo: string; data_hora: string; texto: string }>
+  /** Onda I: conclusão antecipada válida, com as pendências por etapa e viatura. */
+  conclusao: ConclusaoAntecipada | null
 }
 
 // Rotulo do cabecalho e do badge. Parte de LABELS_STATUS para que um status novo do
@@ -192,11 +197,14 @@ export default function EscoltaPrintPage() {
         // Histórico de status
         const { data: hist } = await sb
           .from('escolta_status_historico')
-          .select('status_novo, data_hora, observacao, autor:usuarios!alterado_por(nome_completo)')
+          .select(`status_anterior, status_novo, data_hora, observacao, autor:usuarios!alterado_por(nome_completo), ${COLUNAS_ANULACAO}`)
           .eq('escolta_id', id)
           .order('data_hora', { ascending: true })
 
-        const historico = (hist ?? []).map((h: any) => ({
+        // Onda I: anulados vão para a seção própria; daqui para baixo só os válidos.
+        const anulados: PrintData['anulados'] = []
+        for (const h of (hist ?? []) as any[]) if (h.anulado_em) anulados.push({ tipo: `Histórico: ${LABELS_STATUS[h.status_anterior] ?? h.status_anterior} para ${LABELS_STATUS[h.status_novo] ?? h.status_novo}`, data_hora: h.data_hora, texto: textoAnulado(h) ?? '' })
+        const historico = (hist ?? []).filter((h: any) => !h.anulado_em).map((h: any) => ({
           status_novo: h.status_novo,
           data_hora: h.data_hora,
           observacao: h.observacao ?? null,
@@ -204,12 +212,14 @@ export default function EscoltaPrintPage() {
         }))
 
         // Pontos de controle
-        const { data: pts } = viatIds.length > 0
+        const { data: ptsTodos } = viatIds.length > 0
           ? await sb.from('pontos_controle')
-              .select('data_hora, foto_id, observacoes, latitude, longitude, precisao_metros, sem_sinal_gps, tipo:dom_tipos_ponto(codigo, nome_exibicao), autor:usuarios!lancado_por(nome_completo)')
+              .select(`data_hora, foto_id, observacoes, latitude, longitude, precisao_metros, sem_sinal_gps, tipo:dom_tipos_ponto(codigo, nome_exibicao), autor:usuarios!lancado_por(nome_completo), ${COLUNAS_ANULACAO}`)
               .in('escolta_veiculo_id', viatIds)
               .order('data_hora', { ascending: true })
           : { data: [] }
+        for (const p of (ptsTodos ?? []) as any[]) if (p.anulado_em) anulados.push({ tipo: `Ponto: ${lerObservacao(p.observacoes).tipoLabel ?? p.tipo?.nome_exibicao ?? 'Ponto de Controle'}`, data_hora: p.data_hora, texto: textoAnulado(p) ?? '' })
+        const pts = (ptsTodos ?? []).filter((p: any) => !p.anulado_em)
 
         // `pontos_controle.foto_id` e escalar e so aponta a primeira foto. As demais
         // vivem em `observacoes.foto_ids`, entao a busca precisa ser em lote, por id.
@@ -252,11 +262,13 @@ export default function EscoltaPrintPage() {
         })
 
         // Ocorrências
-        const { data: ocorrs } = await sb
+        const { data: ocorrsTodas } = await sb
           .from('ocorrencias')
-          .select('descricao, data_hora, tipo:dom_tipos_ocorrencia(nome), autor:usuarios!registrado_por(nome_completo), foto:fotos!foto_id(caminho_arquivo)')
+          .select(`descricao, data_hora, tipo:dom_tipos_ocorrencia(nome), autor:usuarios!registrado_por(nome_completo), foto:fotos!foto_id(caminho_arquivo), ${COLUNAS_ANULACAO}`)
           .eq('escolta_id', id)
           .order('data_hora', { ascending: true })
+        for (const o of (ocorrsTodas ?? []) as any[]) if (o.anulado_em) anulados.push({ tipo: `Ocorrência: ${o.tipo?.nome ?? 'Geral'}`, data_hora: o.data_hora, texto: textoAnulado(o) ?? '' })
+        const ocorrs = (ocorrsTodas ?? []).filter((o: any) => !o.anulado_em)
 
         const assinadasOcorr = await urlsAssinadas(
           sb, (ocorrs ?? []).map((o: any) => o.foto?.caminho_arquivo as string | undefined), VALIDADE_IMPRESSAO_S)
@@ -274,12 +286,19 @@ export default function EscoltaPrintPage() {
         // Checklists
         const { data: chks } = viatIds.length > 0
           ? await sb.from('checklists')
-              .select('tipo, data_conclusao, autor:usuarios!responsavel_id(nome_completo), respostas:checklist_respostas(conforme)')
+              .select(`tipo, data_conclusao, autor:usuarios!responsavel_id(nome_completo), respostas:checklist_respostas(conforme), ${COLUNAS_ANULACAO}`)
               .in('escolta_veiculo_id', viatIds)
               .not('data_conclusao', 'is', null)
           : { data: [] }
+        for (const c of (chks ?? []) as any[]) if (c.anulado_em) anulados.push({ tipo: c.tipo === 'viatura' ? 'Checklist de Viatura' : 'Checklist de Material', data_hora: c.data_conclusao, texto: textoAnulado(c) ?? '' })
+        anulados.sort((a, b) => a.data_hora.localeCompare(b.data_hora))
 
-        const checklists = (chks ?? []).map((c: any) => {
+        // Onda I: pendências de conclusão (só supervisor ou acima e o efetivo leem; RLS).
+        const { data: conc } = await sb.from('escolta_conclusoes_antecipadas')
+          .select('id, status_no_momento, motivo, concluida_em, pendencias, autor:usuarios!concluida_por(nome_completo)')
+          .eq('escolta_id', id).is('anulado_em', null).maybeSingle()
+
+        const checklists = (chks ?? []).filter((c: any) => !c.anulado_em).map((c: any) => {
           const total = (c.respostas ?? []).length
           const conformes = (c.respostas ?? []).filter((r: any) => r.conforme).length
           return {
@@ -291,7 +310,7 @@ export default function EscoltaPrintPage() {
           }
         })
 
-        setDados({ escolta: esc, viaturas, historico, pontos, ocorrencias, checklists })
+        setDados({ escolta: esc, viaturas, historico, pontos, ocorrencias, checklists, anulados, conclusao: (conc ?? null) as ConclusaoAntecipada | null })
       } catch (e: any) {
         setErro(e.message ?? 'Erro ao carregar dados.')
       } finally {
@@ -866,6 +885,39 @@ export default function EscoltaPrintPage() {
                 )}
               </div>
             ))}
+          </>
+        )}
+
+        {/* ── Onda I: pendências de conclusão (conclusão antecipada pela gestão) ── */}
+        {dados.conclusao && (
+          <>
+            <div style={sectionTitle('pend')}>Pendências de Conclusão</div>
+            <div className="section-block" data-teste="print-pendencias" style={{ padding: '10px 12px', background: '#FFF7E6', border: '1px solid #E9C46A', borderLeft: '3px solid #B7791F', borderRadius: '3px', fontSize: '11px', color: '#1A2535' }}>
+              <div style={{ marginBottom: '6px' }}>
+                Concluída pela gestão em {horaBR(dados.conclusao.concluida_em)} (Brasília){dados.conclusao.autor?.nome_completo ? ` por ${dados.conclusao.autor.nome_completo}` : ''}, quando estava em {LABELS_STATUS[dados.conclusao.status_no_momento] ?? dados.conclusao.status_no_momento}. Observação: {dados.conclusao.motivo}
+              </div>
+              {dados.conclusao.pendencias.map(et => (
+                <div key={et.etapa} style={{ marginTop: '4px' }}>
+                  <strong>{et.rotulo}:</strong>{' '}
+                  {et.viaturas.map(v => `${v.placa} (${v.faltando.join(', ')})`).join('; ')}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {/* ── Onda I: registros anulados, separados (nunca como válidos) ── */}
+        {dados.anulados.length > 0 && (
+          <>
+            <div style={sectionTitle('anul')}>Registros Anulados</div>
+            <div className="section-block" data-teste="print-anulados" style={{ fontSize: '10px', color: '#6B7E8A' }}>
+              {dados.anulados.map((a, i) => (
+                <div key={i} style={{ padding: '4px 0', borderBottom: '1px solid #EEF1F5' }}>
+                  <span style={{ textDecoration: 'line-through' }}>{a.tipo} · {horaBR(a.data_hora)}</span>{' '}
+                  <span style={{ color: '#B83832', fontWeight: 700 }}>{a.texto}</span>
+                </div>
+              ))}
+            </div>
           </>
         )}
 
