@@ -27,6 +27,8 @@ import {
   STATUS_COM_CHECKIN, inicioOperacaoEm, minutosAteCheckin, registrarCheckin, ultimoCheckinEm,
 } from '@/lib/checkin'
 import { CONFIRMACAO_POR_DESTINO, proximaAcao, type AcaoDetalhe } from '@/lib/proximo-passo-operador'
+import { SELECT_CARTAO, type CartaoEscolta as CartaoDados } from '@/lib/cartao-escolta'
+import { corDoCliente } from '@/lib/paleta-clientes'
 import { PainelGuiado, type Confirmacao, type PainelAberto, type Pendencia } from '@/components/campo-guiado/painel-guiado'
 import { urlAssinada } from '@/lib/fotos-url'
 import { enderecoPorExtenso } from '@/lib/geocodificacao'
@@ -516,7 +518,9 @@ export default function CampoPage() {
     // A viatura entra na consulta porque sem `escolta_veiculo_id` o ponto de controle
     // era descartado em silencio para administrador, gestor, supervisor e central: a
     // escolta avancava de etapa e nao sobrava prova nenhuma.
-    const SELECT_ESCOLTA = 'id, codigo_escolta, status, origem_endereco, destino_endereco, data_hora_prevista, periodicidade_checkin_min, arquivada_em, cliente:clientes(nome_cliente, cor_destaque), escolta_veiculos(id, criado_em, veiculo:veiculos(placa, modelo))'
+    // Onda K: as colunas do cartão padrão (SELECT_CARTAO) entram junto, para o Modo Guiado
+    // mostrar o mesmo cartão da lista, do mural e do mapa.
+    const SELECT_ESCOLTA = `${SELECT_CARTAO}, periodicidade_checkin_min, escolta_veiculos(id, criado_em, veiculo:veiculos(placa, modelo))`
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const normalizar = (e: any, minhaViaturaId?: string | null): EscoltaAtiva => {
@@ -1680,18 +1684,20 @@ export default function CampoPage() {
             id: escoltaAtiva.id,
             codigo: escoltaAtiva.codigo_escolta,
             cliente: escoltaAtiva.cliente?.nome_cliente ?? null,
-            cor: escoltaAtiva.cliente?.cor_destaque ?? null,
+            cor: corDoCliente(escoltaAtiva.cliente?.cor_destaque),
             status,
             origem: escoltaAtiva.origem_endereco,
             destino: escoltaAtiva.destino_endereco,
             prevista: escoltaAtiva.data_hora_prevista,
+            cartao: { ...(escoltaAtiva as unknown as CartaoDados), status },
           } : null}
+          perfil={user?.perfil?.codigo ?? null}
           escoltasParaEscolher={todasEscoltas.map(e => ({ id: e.id, codigo: e.codigo_escolta, cliente: e.cliente?.nome_cliente ?? null }))}
           onSelecionarEscolta={(id) => {
             const e = todasEscoltas.find(t => t.id === id)
             if (e) { setEscoltaAtiva(e); setPainelAberto(null) }
           }}
-          agendadas={agendadas.map(a => ({ id: a.id, codigo: a.codigo_escolta, cliente: a.cliente?.nome_cliente ?? null, prevista: a.data_hora_prevista }))}
+          agendadas={agendadas.map(a => ({ id: a.id, codigo: a.codigo_escolta, cliente: a.cliente?.nome_cliente ?? null, prevista: a.data_hora_prevista, cartao: a as unknown as CartaoDados }))}
           semVinculoCadastro={semVinculoCadastro}
           proxima={proxima}
           acaoEtapa={escoltaAtiva
@@ -1807,7 +1813,7 @@ export default function CampoPage() {
         <>
           {/* ── Card da escolta ── */}
           <div className="card-light overflow-hidden">
-            <div className="h-1.5 w-full" style={{ backgroundColor: escoltaAtiva.cliente?.cor_destaque ?? '#4A90A4' }} />
+            <div className="h-1.5 w-full" style={{ backgroundColor: corDoCliente(escoltaAtiva.cliente?.cor_destaque) }} />
             <div className="p-4 space-y-3">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
@@ -1827,7 +1833,7 @@ export default function CampoPage() {
                 </div>
                 <div className="flex items-center gap-1.5">
                   <Clock size={12} style={{ color: '#A8B8C2' }} />
-                  <span>Previsto: {new Date(escoltaAtiva.data_hora_prevista).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                  <span>Previsto: {new Date(escoltaAtiva.data_hora_prevista).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })}</span>
                 </div>
                 {/* Com mais de uma viatura, o card mostra todas. Mostrar so a primeira
                     dava a entender que a escolta tinha uma viatura, e quem registrasse o

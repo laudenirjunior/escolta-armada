@@ -13,14 +13,16 @@ import { useAuth } from '@/hooks/useAuth'
 import { PODE_VER_ARQUIVADAS, temPermissao } from '@/lib/permissions'
 import { rotuloStatus } from '@/lib/fluxo-escolta'
 import { MSG_ATUALIZACAO, ehFuncaoAusente, horaBR } from '@/lib/gestao'
+import { CartaoEscolta } from '@/components/escolta/cartao-escolta'
+import { SELECT_CARTAO, type CartaoEscolta as CartaoDados } from '@/lib/cartao-escolta'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const sb = createClient() as any
 
-interface Arquivada {
-  id: string; codigo_escolta: string | null; status: string; data_hora_prevista: string
+// Onda K: o cartão padrão (com a etiqueta Arquivada, só do administrador) mais motivo e autor.
+interface Arquivada extends CartaoDados {
   arquivada_em: string; motivo_arquivamento: string | null
-  arquivador: { nome_completo: string } | null; cliente: { nome_cliente: string } | null
+  arquivador: { nome_completo: string } | null
 }
 
 export default function ArquivadasPage() {
@@ -37,7 +39,7 @@ export default function ArquivadasPage() {
   const carregar = useCallback(async () => {
     setCarregando(true)
     const { data, error } = await sb.from('escoltas')
-      .select('id, codigo_escolta, status, data_hora_prevista, arquivada_em, motivo_arquivamento, arquivador:usuarios!arquivada_por(nome_completo), cliente:clientes(nome_cliente)')
+      .select(`${SELECT_CARTAO}, motivo_arquivamento, arquivador:usuarios!arquivada_por(nome_completo)`)
       .not('arquivada_em', 'is', null)
       .order('arquivada_em', { ascending: false })
     if (error) setMsg({ ok: false, texto: error.message })
@@ -77,10 +79,7 @@ export default function ArquivadasPage() {
           <div className="space-y-2">
             {lista.map(e => (
               <div key={e.id} className="p-4 bg-white" style={{ border: '1px solid #D4D9E6', borderRadius: '4px' }} data-teste="arquivada">
-                <div className="flex flex-wrap items-baseline justify-between gap-2">
-                  <p className="text-sm font-black" style={{ color: '#1E2D35' }}>{e.codigo_escolta ?? 'Sem código'} · {e.cliente?.nome_cliente ?? '-'} · <span className="font-semibold">{rotuloStatus(e.status)}</span></p>
-                  <p className="text-xs" style={{ color: '#5A6A80' }}>Prevista {horaBR(e.data_hora_prevista)}</p>
-                </div>
+                <CartaoEscolta variante="cartao" escolta={e} perfil={user?.perfil?.codigo} />
                 <p className="text-sm mt-1" style={{ color: '#5A6A80' }}>Arquivada em {horaBR(e.arquivada_em)} (Brasília){e.arquivador?.nome_completo ? ` por ${e.arquivador.nome_completo}` : ''}.</p>
                 <p className="text-sm mt-1"><strong>Motivo:</strong> {e.motivo_arquivamento ?? '-'}</p>
                 <div className="mt-3 flex gap-2">

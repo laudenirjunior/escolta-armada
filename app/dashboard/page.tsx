@@ -5,12 +5,14 @@ import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import {
   Shield, AlertTriangle, CheckCircle, Clock,
-  ArrowUpRight, ArrowRight, MapPin, Users, Car, Crosshair,
+  ArrowUpRight, ArrowRight, Users, Car, Crosshair,
   TrendingUp, TrendingDown,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
 import { PODE_CRIAR_ESCOLTA, type CodigoPerfil } from '@/lib/permissions'
+import { CartaoEscolta } from '@/components/escolta/cartao-escolta'
+import { SELECT_CARTAO, type CartaoEscolta as CartaoDados, completarCoresClientes } from '@/lib/cartao-escolta'
 
 interface Resumo {
   escoltas_ativas: number
@@ -27,29 +29,9 @@ interface StatsExtra {
   escoltas_mes_anterior: number
 }
 
-interface EscoltaRecente {
-  id: string
-  codigo_escolta: string | null
-  status: string
-  data_hora_prevista: string
-  cliente: { nome_cliente: string; cor_destaque: string } | null
-  origem_endereco: string
-  destino_endereco: string
-}
-
-const STATUS_MAP: Record<string, { label: string; cls: string }> = {
-  rascunho:      { label: 'Rascunho',     cls: 'badge-neutral' },
-  agendada:      { label: 'Agendada',     cls: 'badge-info' },
-  em_pre_inicio: { label: 'Pré-Início',   cls: 'badge-warning' },
-  em_andamento:  { label: 'Em Andamento', cls: 'badge-info' },
-  na_origem:     { label: 'Na Origem',    cls: 'badge-info' },
-  em_transito_destino: { label: 'Trânsito p/ Destino', cls: 'badge-info' },
-  no_destino:    { label: 'No Destino',   cls: 'badge-success' },
-  retornando:    { label: 'Retornando',   cls: 'badge-warning' },
-  na_base:       { label: 'Na Base',      cls: 'badge-success' },
-  finalizada:    { label: 'Finalizada',   cls: 'badge-success' },
-  cancelada:     { label: 'Cancelada',    cls: 'badge-danger' },
-}
+// Onda K: o painel usa o cartão padrão (lib/cartao-escolta.ts); status e rótulos vêm de
+// lib/fluxo-escolta.ts (acabou o STATUS_MAP duplicado, que não tinha em_transito_retorno).
+type EscoltaRecente = CartaoDados
 
 const STATUS_ATIVOS = ['em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando', 'na_base']
 
@@ -108,7 +90,7 @@ export default function DashboardPage() {
           .gte('criado_em', inicioMesAnterior.toISOString())
           .lte('criado_em', fimMesAnterior.toISOString()),
         sb.from('escoltas')
-          .select('id, codigo_escolta, status, data_hora_prevista, origem_endereco, destino_endereco, cliente:clientes(nome_cliente, cor_destaque)')
+          .select(SELECT_CARTAO)
           .not('status', 'in', '("finalizada","cancelada")')
           .is('arquivada_em', null)
           .order('data_hora_prevista', { ascending: true })
@@ -128,7 +110,8 @@ export default function DashboardPage() {
         escoltas_mes_atual: mesAtualQ.count ?? 0,
         escoltas_mes_anterior: mesAnteriorQ.count ?? 0,
       })
-      setRecentes((recentesQ.data ?? []) as EscoltaRecente[])
+      // Onda K: cor do cliente que a RLS esconde do operador (agendadas de outra equipe).
+      setRecentes(await completarCoresClientes(sb, (recentesQ.data ?? []) as EscoltaRecente[]))
       setLoading(false)
     }
     carregar()
@@ -362,95 +345,13 @@ export default function DashboardPage() {
           </div>
         ) : (
           <>
-            {/* Tabela — visível apenas md+ */}
-            <div className="hidden md:block" style={{ borderTop: 'none' }}>
-              {recentes.map((e) => {
-                const s = STATUS_MAP[e.status] ?? { label: e.status, cls: 'badge-neutral' }
-                const cor = e.cliente?.cor_destaque ?? '#53648A'
-                return (
-                  <a
-                    key={e.id}
-                    href={`/dashboard/escoltas/${e.id}`}
-                    className="flex items-center gap-4 px-5 py-3.5 transition-colors group"
-                    style={{ borderBottom: '1px solid #E2E8EC', textDecoration: 'none' }}
-                    onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.backgroundColor = '#F8FAFC'}
-                    onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.backgroundColor = ''}
-                  >
-                    <div className="w-1 h-10 rounded-full shrink-0" style={{ backgroundColor: cor }} />
-                    <div className="w-32 shrink-0">
-                      <p className="text-[11px] font-black uppercase tracking-wider" style={{ color: '#5A6A80' }}>
-                        {e.codigo_escolta ?? 'Pendente'}
-                      </p>
-                      <span className={`${s.cls} mt-1`}>{s.label}</span>
-                    </div>
-                    {e.cliente && (
-                      <div className="w-44 shrink-0 hidden lg:block">
-                        <p className="text-xs font-semibold truncate" style={{ color: '#0E1A33' }}>
-                          {e.cliente.nome_cliente}
-                        </p>
-                      </div>
-                    )}
-                    <div className="flex-1 flex items-center gap-2 min-w-0">
-                      <MapPin size={12} className="shrink-0" style={{ color: '#C8D5DC' }} />
-                      <p className="text-xs truncate" style={{ color: '#5A6A80' }}>{e.origem_endereco}</p>
-                      <ArrowRight size={12} className="shrink-0" style={{ color: '#C8D5DC' }} />
-                      <p className="text-xs truncate" style={{ color: '#5A6A80' }}>{e.destino_endereco}</p>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <p className="text-xs font-medium" style={{ color: '#5A6A80' }}>
-                        {new Date(e.data_hora_prevista).toLocaleDateString('pt-BR')}
-                      </p>
-                      <p className="text-[11px]" style={{ color: '#A8B8C2' }}>
-                        {new Date(e.data_hora_prevista).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                      </p>
-                    </div>
-                    <ArrowRight size={14} className="shrink-0 transition-colors" style={{ color: '#E2E8EC' }} />
-                  </a>
-                )
-              })}
-            </div>
-
-            {/* Cards mobile — visível apenas abaixo de md */}
-            <div className="md:hidden divide-y" style={{ borderColor: '#E2E8EC' }}>
-              {recentes.map((e) => {
-                const s = STATUS_MAP[e.status] ?? { label: e.status, cls: 'badge-neutral' }
-                const cor = e.cliente?.cor_destaque ?? '#53648A'
-                return (
-                  <a
-                    key={e.id}
-                    href={`/dashboard/escoltas/${e.id}`}
-                    className="flex items-start gap-3 px-4 py-4 transition-colors active:bg-[#F8FAFC]"
-                    style={{ textDecoration: 'none', borderBottom: '1px solid #E2E8EC' }}
-                  >
-                    <div className="w-1 rounded-full shrink-0 self-stretch min-h-[44px]" style={{ backgroundColor: cor }} />
-                    <div className="flex-1 min-w-0 space-y-1.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-[11px] font-black uppercase tracking-wider" style={{ color: '#5A6A80' }}>
-                          {e.codigo_escolta ?? 'Pendente'}
-                        </p>
-                        <span className={s.cls}>{s.label}</span>
-                      </div>
-                      {e.cliente && (
-                        <p className="text-sm font-semibold truncate" style={{ color: '#0E1A33' }}>
-                          {e.cliente.nome_cliente}
-                        </p>
-                      )}
-                      <div className="flex items-start gap-1 text-xs" style={{ color: '#5A6A80' }}>
-                        <MapPin size={11} className="shrink-0 mt-0.5" style={{ color: '#C8D5DC' }} />
-                        <span className="truncate">{e.origem_endereco}</span>
-                      </div>
-                      <div className="flex items-start gap-1 text-xs" style={{ color: '#5A6A80' }}>
-                        <ArrowRight size={11} className="shrink-0 mt-0.5" style={{ color: '#C8D5DC' }} />
-                        <span className="truncate">{e.destino_endereco}</span>
-                      </div>
-                      <p className="text-[11px]" style={{ color: '#A8B8C2' }}>
-                        {new Date(e.data_hora_prevista).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                      </p>
-                    </div>
-                    <ArrowRight size={14} className="shrink-0 mt-1" style={{ color: '#E2E8EC' }} />
-                  </a>
-                )
-              })}
+            {/* Onda K: o mesmo cartão da lista, do mural, do Modo Guiado e do mapa. */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-4">
+              {recentes.map((e) => (
+                <a key={e.id} href={`/dashboard/escoltas/${e.id}`} style={{ textDecoration: 'none' }}>
+                  <CartaoEscolta variante="cartao" escolta={e} perfil={user?.perfil?.codigo} />
+                </a>
+              ))}
             </div>
           </>
         )}

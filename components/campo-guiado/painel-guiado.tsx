@@ -24,6 +24,8 @@ import { FOTOS_POR_PONTO } from '@/lib/fluxo-escolta'
 import { TOTAL_ETAPAS, type AcaoDetalhe, type ProximaAcao } from '@/lib/proximo-passo-operador'
 import { EstouNaBase } from './estou-na-base'
 import { AvisosMural } from '@/components/escolta/avisos-mural'
+import { CartaoEscolta } from '@/components/escolta/cartao-escolta'
+import type { CartaoEscolta as CartaoDados } from '@/lib/cartao-escolta'
 
 // ─── Paleta Navy (app/globals.css), sem migrar paleta ─────────────────────────
 const COR = {
@@ -58,6 +60,8 @@ export interface EscoltaGuiada {
   origem: string
   destino: string
   prevista: string
+  /** Onda K: dados do cartão padrão (mesmo cartão da lista, do mural e do mapa). */
+  cartao?: CartaoDados | null
 }
 
 export interface Pendencia { texto: string; nivel: 'alerta' | 'atencao' }
@@ -75,7 +79,9 @@ export interface PainelGuiadoProps {
   escolta: EscoltaGuiada | null
   escoltasParaEscolher: { id: string; codigo: string | null; cliente: string | null }[]
   onSelecionarEscolta: (id: string) => void
-  agendadas: { id: string; codigo: string | null; cliente: string | null; prevista: string }[]
+  agendadas: { id: string; codigo: string | null; cliente: string | null; prevista: string; cartao?: CartaoDados | null }[]
+  /** Perfil de quem usa (etiquetas e equipe do cartão). */
+  perfil?: string | null
   semVinculoCadastro: boolean
   proxima: ProximaAcao | null
   /**
@@ -416,12 +422,18 @@ export function PainelGuiado(p: PainelGuiadoProps) {
           p.agendadas.map((a) => (
             <Cartao key={a.id}>
               <Rotulo>Escolta Agendada</Rotulo>
-              <p className="font-black" style={{ fontSize: '20px', color: COR.texto }}>{a.cliente ?? 'Cliente'}</p>
-              <p className="flex items-center gap-2" style={{ fontSize: '16px', color: COR.apoio }}>
-                <Clock size={16} />
-                {new Date(a.prevista).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                {a.codigo ? ` · ${a.codigo}` : ''}
-              </p>
+              {a.cartao ? (
+                <CartaoEscolta variante="cartao" escolta={a.cartao} perfil={p.perfil} />
+              ) : (
+                <>
+                  <p className="font-black" style={{ fontSize: '20px', color: COR.texto }}>{a.cliente ?? 'Cliente'}</p>
+                  <p className="flex items-center gap-2" style={{ fontSize: '16px', color: COR.apoio }}>
+                    <Clock size={16} />
+                    {new Date(a.prevista).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })}
+                    {a.codigo ? ` · ${a.codigo}` : ''}
+                  </p>
+                </>
+              )}
               <p style={{ fontSize: '16px', color: COR.texto }}>Com a equipe na base, inicie o pré-início da escolta.</p>
               <EstouNaBase escoltaId={a.id} />
               <BotaoPrincipal onClick={() => p.onAbrirDetalhe('pre_inicio', a.id)} icone={<ChevronRight size={22} />}>
@@ -583,10 +595,18 @@ export function PainelGuiado(p: PainelGuiadoProps) {
 
       {/* Escolta e etapa */}
       <div style={{ backgroundColor: COR.fundo, border: `1.5px solid ${COR.borda}`, borderRadius: '4px', overflow: 'hidden' }}>
-        <div style={{ height: '6px', backgroundColor: escolta.cor ?? COR.navy }} />
-        <div className="p-4 space-y-2">
-          <p className="font-black leading-tight" style={{ fontSize: '22px', color: COR.texto }}>{escolta.cliente ?? 'Escolta'}</p>
-          <p style={{ fontSize: '14px', color: COR.apoio }}>{escolta.codigo ?? 'Sem código'}</p>
+        {escolta.cartao ? (
+          <CartaoEscolta variante="cartao" escolta={escolta.cartao} perfil={p.perfil} />
+        ) : (
+          <>
+            <div style={{ height: '6px', backgroundColor: escolta.cor ?? COR.navy }} />
+            <div className="px-4 pt-4 space-y-2">
+              <p className="font-black leading-tight" style={{ fontSize: '22px', color: COR.texto }}>{escolta.cliente ?? 'Escolta'}</p>
+              <p style={{ fontSize: '14px', color: COR.apoio }}>{escolta.codigo ?? 'Sem código'}</p>
+            </div>
+          </>
+        )}
+        <div className="px-4 pb-4 pt-2 space-y-2">
           {proxima && etapaNum > 0 && (
             <>
               <p className="font-bold" style={{ fontSize: '17px', color: COR.navy }}>
