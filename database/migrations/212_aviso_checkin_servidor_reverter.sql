@@ -1,8 +1,10 @@
 -- 212_aviso_checkin_servidor_reverter.sql
 -- ORDEM: primeiro o git revert do código da onda J e o deploy (o alerta volta a ser
 -- calculado no navegador); depois este arquivo; a 211 só depois dele.
--- Desagenda o cron, remove as funções internas e devolve enfileirar_alerta_checkin ao
--- corpo da 208. Os avisos de check-in já gravados ficam (a reversão da 211 os guarda).
+-- Desagenda o cron, remove as funções internas e a reservar_alertas_checkin, devolve
+-- enfileirar_alerta_checkin ao corpo da 208 e tira a coluna checkin_telegram_pelo_cron.
+-- Os avisos de check-in já gravados ficam (a reversão da 211 os guarda). As reservas do
+-- navegador (avisos_reservados, chave checkin:...) ficam: a tabela é da 208.
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
@@ -49,6 +51,8 @@ $$;
 REVOKE ALL ON FUNCTION public.enfileirar_alerta_checkin(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.enfileirar_alerta_checkin(uuid) TO authenticated;
 
+DROP FUNCTION IF EXISTS public.reservar_alertas_checkin();
 DROP FUNCTION IF EXISTS lote_interno.gerar_avisos_checkin(timestamptz);
 DROP FUNCTION IF EXISTS lote_interno.enfileirar_alerta_checkin(uuid);
 DROP FUNCTION IF EXISTS lote_interno.tipo_da_observacao(text);
+ALTER TABLE public.configuracao_avisos DROP COLUMN IF EXISTS checkin_telegram_pelo_cron;

@@ -102,7 +102,13 @@ DECLARE v_tipo uuid; v_n int;
 BEGIN
   SELECT id INTO v_tipo FROM public.dom_tipos_evento WHERE codigo = p_tipo;
   IF v_tipo IS NULL THEN RAISE EXCEPTION 'Tipo de aviso desconhecido: %', p_tipo; END IF;
-  IF p_escolta_id IS NULL OR p_usuarios IS NULL THEN RETURN 0; END IF;
+  -- notificacoes.escolta_id é NOT NULL (com FK em cascata): aviso sem escolta não é gravado.
+  -- A onda L (conflito de escolta apagada) precisa tratar isso na própria migration.
+  IF p_escolta_id IS NULL THEN
+    RAISE WARNING 'lote_interno.notificar: aviso % sem escolta não gravado (notificacoes exige escolta_id).', p_tipo;
+    RETURN 0;
+  END IF;
+  IF p_usuarios IS NULL THEN RETURN 0; END IF;
   INSERT INTO public.notificacoes (escolta_id, canal, tipo_evento_id, destino, payload, usuario_dest_id, status_envio,
                                    titulo, texto, evento_chave)
   SELECT p_escolta_id, 'app', v_tipo, 'app',
@@ -117,16 +123,22 @@ $$;
 REVOKE ALL ON FUNCTION lote_interno.notificar(text, uuid, text, uuid[], text, text, jsonb) FROM PUBLIC, anon, authenticated;
 
 -- 5. RPCs do app. Cada um só vê e marca os próprios avisos.
+--    Paginação por cursor (criado_em, id): os avisos gravados numa mesma execução do cron
+--    têm o mesmo criado_em, e o corte só pela data pulava os que ficavam na página seguinte.
+--    Versões anteriores desta branch (sem p_antes_id e marcar_todos_lidos sem escolta) saem
+--    antes, para não ficarem duas assinaturas.
+DROP FUNCTION IF EXISTS public.meus_avisos(text, uuid, boolean, integer, timestamptz);
+DROP FUNCTION IF EXISTS public.marcar_todos_lidos(text);
 CREATE OR REPLACE FUNCTION public.meus_avisos(p_tipo text DEFAULT NULL, p_escolta_id uuid DEFAULT NULL,
                                               p_so_nao_lidas boolean DEFAULT false, p_limite integer DEFAULT 50,
-                                              p_antes timestamptz DEFAULT NULL)
+                                              p_antes timestamptz DEFAULT NULL, p_antes_id uuid DEFAULT NULL)
     RETURNS jsonb
     LANGUAGE plpgsql STABLE SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
     AS $$
 DECLARE v_eu uuid; v jsonb;
 BEGIN
-  IF public.get_meu_perfil() IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+  IF public.get_meu_perfil() IS NULL THEN RAISE EXCEPTION 'Sessão inválida.'; END IF;
   v_eu := public.get_meu_usuario_id();
   SELECT coalesce(jsonb_agg(x.j ORDER BY x.criado_em DESC, x.id DESC), '[]'::jsonb) INTO v
   FROM (
@@ -143,7 +155,8 @@ BEGIN
       AND (p_tipo IS NULL OR t.codigo = p_tipo)
       AND (p_escolta_id IS NULL OR n.escolta_id = p_escolta_id)
       AND (NOT coalesce(p_so_nao_lidas, false) OR n.lida IS NOT TRUE)
-      AND (p_antes IS NULL OR n.criado_em < p_antes)
+      AND (p_antes IS NULL
+           OR (n.criado_em, n.id) < (p_antes, coalesce(p_antes_id, 'ffffffff-ffff-ffff-ffff-ffffffffffff'::uuid)))
     ORDER BY n.criado_em DESC, n.id DESC
     LIMIT least(greatest(coalesce(p_limite, 50), 1), 200)
   ) x;
@@ -156,22 +169,24 @@ CREATE OR REPLACE FUNCTION public.contar_avisos_nao_lidos() RETURNS integer
     SET search_path TO 'public', 'pg_temp'
     AS $$
 BEGIN
-  IF public.get_meu_perfil() IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+  IF public.get_meu_perfil() IS NULL THEN RAISE EXCEPTION 'Sessão inválida.'; END IF;
   RETURN (SELECT count(*) FROM public.notificacoes
           WHERE usuario_dest_id = public.get_meu_usuario_id() AND canal = 'app' AND lida IS NOT TRUE);
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION public.marcar_todos_lidos(p_tipo text DEFAULT NULL) RETURNS integer
+-- Marcar todas respeita os filtros da Central: tipo e escolta (nulos = todos).
+CREATE OR REPLACE FUNCTION public.marcar_todos_lidos(p_tipo text DEFAULT NULL, p_escolta_id uuid DEFAULT NULL) RETURNS integer
     LANGUAGE plpgsql VOLATILE SECURITY DEFINER
     SET search_path TO 'public', 'pg_temp'
     AS $$
 DECLARE v_n int;
 BEGIN
-  IF public.get_meu_perfil() IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+  IF public.get_meu_perfil() IS NULL THEN RAISE EXCEPTION 'Sessão inválida.'; END IF;
   UPDATE public.notificacoes n SET lida_em = now()
    WHERE n.usuario_dest_id = public.get_meu_usuario_id() AND n.canal = 'app' AND n.lida IS NOT TRUE
-     AND (p_tipo IS NULL OR n.tipo_evento_id = (SELECT id FROM public.dom_tipos_evento WHERE codigo = p_tipo));
+     AND (p_tipo IS NULL OR n.tipo_evento_id = (SELECT id FROM public.dom_tipos_evento WHERE codigo = p_tipo))
+     AND (p_escolta_id IS NULL OR n.escolta_id = p_escolta_id);
   GET DIAGNOSTICS v_n = ROW_COUNT;
   RETURN v_n;
 END;
@@ -180,8 +195,8 @@ $$;
 DO $$
 DECLARE f text;
 BEGIN
-  FOREACH f IN ARRAY ARRAY['meus_avisos(text, uuid, boolean, integer, timestamptz)', 'contar_avisos_nao_lidos()',
-                           'marcar_todos_lidos(text)']
+  FOREACH f IN ARRAY ARRAY['meus_avisos(text, uuid, boolean, integer, timestamptz, uuid)', 'contar_avisos_nao_lidos()',
+                           'marcar_todos_lidos(text, uuid)']
   LOOP
     EXECUTE format('REVOKE ALL ON FUNCTION public.%s FROM PUBLIC, anon', f);
     EXECUTE format('GRANT EXECUTE ON FUNCTION public.%s TO authenticated', f);

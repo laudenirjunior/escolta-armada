@@ -52,8 +52,10 @@ DELETE FROM public.notificacoes WHERE tipo_evento_id IN
 DELETE FROM public.dom_tipos_evento WHERE codigo IN ('checkin_vencido', 'edicao_escolta', 'reset_escolta',
   'conclusao_antecipada', 'arquivamento_escolta', 'recuperacao_escolta', 'conflito_offline');
 
+DROP FUNCTION IF EXISTS public.meus_avisos(text, uuid, boolean, integer, timestamptz, uuid);
 DROP FUNCTION IF EXISTS public.meus_avisos(text, uuid, boolean, integer, timestamptz);
 DROP FUNCTION IF EXISTS public.contar_avisos_nao_lidos();
+DROP FUNCTION IF EXISTS public.marcar_todos_lidos(text, uuid);
 DROP FUNCTION IF EXISTS public.marcar_todos_lidos(text);
 
 DROP TRIGGER IF EXISTS tr_notificacoes_sincronizar_lida ON public.notificacoes;
