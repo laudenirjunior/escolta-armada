@@ -40,11 +40,25 @@ export function ufDaSugestaoMapbox(f: SugestaoMapboxUf | null | undefined): stri
   return ufDoShortCode(regiao?.short_code)
 }
 
+export interface UfsEscolta {
+  origem_uf?: string | null
+  destino_uf?: string | null
+  origem_uf_estimada?: boolean | null
+  destino_uf_estimada?: boolean | null
+  interestadual?: boolean | null
+}
+
 /**
- * Texto da etiqueta Interestadual (detalhe, impressão e PDF). Com UF estimada pela
- * coordenada, só "Interestadual", sem a UF vizinha por extenso (docs/14, 15.1 item 5).
+ * Texto da etiqueta Interestadual (detalhe, impressão e PDF). Com as duas UFs conhecidas e
+ * nenhuma estimada pela coordenada, "Interestadual: RJ para SP"; com qualquer lado estimado
+ * (ou fora do Brasil), só "Interestadual", sem a UF vizinha por extenso (docs/14, 15.1 item 5).
  */
-export function textoInterestadual(e: { origem_uf?: string | null; destino_uf?: string | null; uf_estimada?: boolean | null }): string {
-  if (!e.uf_estimada && e.origem_uf && e.destino_uf) return `Interestadual: ${e.origem_uf} para ${e.destino_uf}`
+export function textoInterestadual(e: UfsEscolta): string {
+  if (!e.origem_uf_estimada && !e.destino_uf_estimada && e.origem_uf && e.destino_uf) return `Interestadual: ${e.origem_uf} para ${e.destino_uf}`
   return 'Interestadual'
+}
+
+/** Sim, Não ou Não determinado (coluna gerada interestadual), para o CSV e o relatório. */
+export function rotuloInterestadual(e: Pick<UfsEscolta, 'interestadual'>): string {
+  return e.interestadual === true ? 'Sim' : e.interestadual === false ? 'Não' : 'Não determinado'
 }

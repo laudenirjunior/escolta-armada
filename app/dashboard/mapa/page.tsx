@@ -8,7 +8,7 @@ import { createClient } from '@/lib/supabase/client'
 import { lerObservacao } from '@/lib/pontos-controle'
 import { useAuth } from '@/hooks/useAuth'
 import { CartaoEscolta } from '@/components/escolta/cartao-escolta'
-import { SELECT_CARTAO, type CartaoEscolta as CartaoDados, corCartao, dataHoraBrasilia, completarCoresClientes } from '@/lib/cartao-escolta'
+import { SELECT_CARTAO, type CartaoEscolta as CartaoDados, corCartao, dataHoraBrasilia, completarCoresClientes, resumoEndereco, textoEquipe, etiquetas } from '@/lib/cartao-escolta'
 import { rotuloStatus } from '@/lib/fluxo-escolta'
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? ''
@@ -197,19 +197,31 @@ function esc(v: unknown): string {
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
 }
 
-function popupHTML(e: EscoltaAtiva): string {
+/**
+ * Popup do marcador: o resumo do cartão padrão (revisão adversarial K, menor 6), com as mesmas
+ * funções de lib/cartao-escolta.ts: código, cliente com a faixa, data e hora em Brasília,
+ * origem e destino resumidos, quem criou, equipe e todas as etiquetas. O status sai na cor do
+ * marcador, como na lista lateral.
+ */
+function popupHTML(e: EscoltaAtiva, perfil: string | null): string {
   const s = statusMapa(e.status)
   const pt = e.ultimo_ponto
+  const equipe = textoEquipe(e, perfil)
+  const criador = e.criador?.nome_completo ?? null
+  const selos = etiquetas(e, perfil).map(t =>
+    `<span data-teste="etiqueta-${t.chave}" style="font-size:9px;font-weight:700;padding:1px 6px;margin-left:4px;background:#FBF3DE;color:#8B6914;text-transform:uppercase">${esc(t.texto)}</span>`).join('')
   return `
-    <div style="font-family:system-ui;padding:4px 0;min-width:160px">
+    <div data-teste="popup-cartao" style="font-family:system-ui;padding:4px 0;min-width:200px;max-width:260px">
       <div style="display:flex;gap:8px">
       <div data-teste="faixa-cliente" style="width:5px;border-radius:2px;background-color:${esc(corCartao(e))}"></div>
       <div>
-      <div style="font-size:12px;font-weight:800;color:#0E1A33">${esc(e.codigo_escolta ?? '-')}</div>
+      <div style="font-size:12px;font-weight:800;color:#0E1A33">${esc(e.codigo_escolta ?? '-')}${selos}</div>
       <div style="font-size:11px;color:#5A6A80;margin:2px 0 2px">${esc(e.cliente?.nome_cliente ?? '-')}</div>
-      <div style="font-size:10px;color:#5A6A80;margin:0 0 4px">${esc(dataHoraBrasilia(e.data_hora_prevista))} (Brasília)</div>
-      <span style="font-size:9px;font-weight:700;padding:1px 6px;background:${s.color}22;color:${s.color};text-transform:uppercase">${esc(s.label)}</span>
-      ${e.interestadual === true ? `<span data-teste="etiqueta-interestadual" style="font-size:9px;font-weight:700;padding:1px 6px;margin-left:4px;background:#FBF3DE;color:#8B6914;text-transform:uppercase">Interestadual</span>` : ''}
+      <div style="font-size:10px;color:#5A6A80">${esc(dataHoraBrasilia(e.data_hora_prevista))} (Brasília)</div>
+      <div data-teste="origem-destino" style="font-size:10px;color:#5A6A80;margin:2px 0">${esc(resumoEndereco(e.origem_endereco))} &rarr; ${esc(resumoEndereco(e.destino_endereco))}</div>
+      ${equipe ? `<div style="font-size:10px;color:#6B7E8A">${esc(equipe)}</div>` : ''}
+      ${criador ? `<div style="font-size:10px;color:#6B7E8A">Criada por ${esc(criador)}</div>` : ''}
+      <span data-teste="status" style="display:inline-flex;align-items:center;gap:4px;font-size:9px;font-weight:700;margin-top:4px;color:${s.color};text-transform:uppercase"><span style="width:8px;height:8px;border-radius:50%;background:${s.color};display:inline-block"></span>${esc(s.label)}</span>
       </div>
       </div>
       ${pt ? `
@@ -239,6 +251,9 @@ export default function MapaPage() {
   const mapRef          = useRef<mapboxgl.Map | null>(null)
   const markersRef      = useRef<Map<string, MarkerSet>>(new Map())
   const fittedRef       = useRef(false) // controla o fit-to-all inicial
+  // Perfil para o popup (etiquetas e equipe do cartão padrão), lido dentro do efeito dos marcadores.
+  const perfilRef       = useRef<string | null>(null)
+  perfilRef.current = user?.perfil?.codigo ?? null
 
   // Atualiza contadores de tempo a cada minuto
   useEffect(() => {
@@ -447,7 +462,7 @@ export default function MapaPage() {
       const existing = markersRef.current.get(e.id)
       if (existing) {
         existing.pos.setLngLat([posLng, posLat])
-        existing.pos.getPopup()?.setHTML(popupHTML(e))
+        existing.pos.getPopup()?.setHTML(popupHTML(e, perfilRef.current))
       } else {
         // Origem
         const origEl = criarElOrigem(s.color)
@@ -466,7 +481,7 @@ export default function MapaPage() {
         posEl.addEventListener('click', () => setSelecionada(e))
         const posMarker = new mapboxgl.Marker({ element: posEl, anchor: 'bottom' })
           .setLngLat([posLng, posLat])
-          .setPopup(new mapboxgl.Popup({ offset: 24, closeButton: false }).setHTML(popupHTML(e)))
+          .setPopup(new mapboxgl.Popup({ offset: 24, closeButton: false }).setHTML(popupHTML(e, perfilRef.current)))
           .addTo(map)
 
         // Destino
@@ -686,7 +701,7 @@ export default function MapaPage() {
                   onMouseLeave={ev => { if (!isSel) (ev.currentTarget as HTMLElement).style.backgroundColor = '' }}
                 >
                   {/* Onda K: o cartão padrão, com a faixa na cor do cliente. */}
-                  <CartaoEscolta variante="cartao" escolta={e} perfil={user?.perfil?.codigo} />
+                  <CartaoEscolta variante="cartao" escolta={e} perfil={user?.perfil?.codigo} corStatus={s.color} />
 
                   {pt ? (
                     <div className="mt-2 flex items-start gap-1.5 rounded px-2 py-1.5"

@@ -11,6 +11,8 @@ import {
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { EMBED_CONCLUSAO, linhasPendencias, type ConclusaoEmbutida } from '@/lib/gestao'
+import { rotuloInterestadual, textoInterestadual } from '@/lib/uf-endereco'
+import { corDoCliente } from '@/lib/paleta-clientes'
 
 // ─── Paleta ───────────────────────────────────────────────────────────────────
 const P = {
@@ -78,6 +80,12 @@ interface EscoltaRelatorio {
   origem_endereco: string | null
   destino_endereco: string | null
   cliente: { id: string; nome_cliente: string; cor_destaque: string | null } | null
+  // Onda K (revisão adversarial, menor 5): etiqueta Interestadual na lista e coluna no CSV.
+  origem_uf?: string | null
+  destino_uf?: string | null
+  origem_uf_estimada?: boolean | null
+  destino_uf_estimada?: boolean | null
+  interestadual?: boolean | null
   veiculos: { quilometragem_saida: number; quilometragem_retorno: number | null }[]
   // Onda I: conclusão antecipada válida vira etiqueta "Concluída com pendências" e a lista
   // de pendências aparece na seção própria (adendo 4.3.6).
@@ -198,14 +206,25 @@ function toCSVRow(fields: (string | number | null | undefined)[]): string {
   return fields.map(f => `"${String(f ?? '').replace(/"/g, '""')}"`).join(',')
 }
 
+/**
+ * UF de origem, UF de destino e Interestadual (Sim, Não, Não determinado) para o CSV. UF
+ * estimada pela coordenada sai com "(estimada)"; lado fora do Brasil, "fora do Brasil".
+ */
+function colunasUf(e: EscoltaRelatorio): string[] {
+  const uf = (u: string | null | undefined, est: boolean | null | undefined) =>
+    u ? (est ? `${u} (estimada)` : u) : est ? 'fora do Brasil' : ''
+  return [uf(e.origem_uf, e.origem_uf_estimada), uf(e.destino_uf, e.destino_uf_estimada), rotuloInterestadual(e)]
+}
+
 function exportarCSVEscoltas(data: EscoltaRelatorio[], periodo: string): void {
-  const headers = toCSVRow(['Código','Cliente','Status','Origem','Destino','Data/Hora Prevista','Data Finalização','Duração (min)','KM Rodado'])
+  const headers = toCSVRow(['Código','Cliente','Status','Origem','Destino','UF origem','UF destino','Interestadual','Data/Hora Prevista','Data Finalização','Duração (min)','KM Rodado'])
   const rows = data.map(e => toCSVRow([
     e.codigo_escolta,
     e.cliente?.nome_cliente,
     STATUS_LABEL[e.status] ?? e.status,
     e.origem_endereco,
     e.destino_endereco,
+    ...colunasUf(e),
     new Date(e.data_hora_prevista).toLocaleString('pt-BR'),
     e.data_finalizacao ? new Date(e.data_finalizacao).toLocaleString('pt-BR') : '',
     calcDuracaoMin(e),
@@ -241,8 +260,8 @@ function exportarCSVCompleto(
   ocorrencias: OcorrenciaRelatorio[],
   periodo: string
 ): void {
-  const secEscoltas  = ['# ESCOLTAS', toCSVRow(['Código','Cliente','Status','Origem','Destino','Data Prevista','Data Fin.','Duração (min)','KM']),
-    ...escoltas.map(e => toCSVRow([e.codigo_escolta, e.cliente?.nome_cliente, STATUS_LABEL[e.status]??e.status, e.origem_endereco, e.destino_endereco, new Date(e.data_hora_prevista).toLocaleString('pt-BR'), e.data_finalizacao ? new Date(e.data_finalizacao).toLocaleString('pt-BR'):'', calcDuracaoMin(e), calcKmEscolta(e.veiculos)]))]
+  const secEscoltas  = ['# ESCOLTAS', toCSVRow(['Código','Cliente','Status','Origem','Destino','UF origem','UF destino','Interestadual','Data Prevista','Data Fin.','Duração (min)','KM']),
+    ...escoltas.map(e => toCSVRow([e.codigo_escolta, e.cliente?.nome_cliente, STATUS_LABEL[e.status]??e.status, e.origem_endereco, e.destino_endereco, ...colunasUf(e), new Date(e.data_hora_prevista).toLocaleString('pt-BR'), e.data_finalizacao ? new Date(e.data_finalizacao).toLocaleString('pt-BR'):'', calcDuracaoMin(e), calcKmEscolta(e.veiculos)]))]
   const secClientes = ['', '# ANÁLISE POR CLIENTE', toCSVRow(['Cliente','Total','Concluídas','Canceladas','KM Total']),
     ...clientes.map(c => toCSVRow([c.nome, c.total, c.concluidas, c.canceladas, c.kmTotal]))]
   const secOcorr    = ['', '# OCORRÊNCIAS', toCSVRow(['Data/Hora','Código Escolta','Tipo','Descrição','Registrado por']),
@@ -382,6 +401,7 @@ export default function RelatoriosPage() {
     let q = sb.from('escoltas').select(`
       id, codigo_escolta, status, data_hora_prevista, data_finalizacao, criado_em,
       origem_endereco, destino_endereco,
+      origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada, interestadual,
       cliente:clientes(id, nome_cliente, cor_destaque),
       veiculos:escolta_veiculos(quilometragem_saida, quilometragem_retorno),
       ${EMBED_CONCLUSAO}
@@ -1062,10 +1082,13 @@ export default function RelatoriosPage() {
                             style={{ cursor: 'pointer' }}
                             onClick={() => window.open(`/dashboard/escoltas/${e.id}`, '_blank')}
                           >
-                            <td><span style={{ fontFamily: 'monospace', fontSize: '12px', fontWeight: 700, color: P.text }}>{e.codigo_escolta ?? '—'}</span></td>
+                            <td>
+                              <span style={{ fontFamily: 'monospace', fontSize: '12px', fontWeight: 700, color: P.text }}>{e.codigo_escolta ?? '—'}</span>
+                              {e.interestadual === true && <span className="badge-warning ml-2 text-[10px]" data-teste="etiqueta-interestadual">{textoInterestadual(e)}</span>}
+                            </td>
                             <td>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                {e.cliente?.cor_destaque && <div style={{ width: '6px', height: '6px', borderRadius: '2px', backgroundColor: e.cliente.cor_destaque, flexShrink: 0 }} />}
+                                {e.cliente?.cor_destaque && <div style={{ width: '6px', height: '6px', borderRadius: '2px', backgroundColor: corDoCliente(e.cliente.cor_destaque), flexShrink: 0 }} />}
                                 <span style={{ fontSize: '12px', color: P.text, maxWidth: '130px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.cliente?.nome_cliente ?? '—'}</span>
                               </div>
                             </td>
@@ -1095,11 +1118,14 @@ export default function RelatoriosPage() {
                         className="w-full text-left rounded-lg p-3 border transition-all active:scale-[0.99]"
                         style={{ borderColor: P.border, backgroundColor: '#fff' }}>
                         <div className="flex items-center justify-between mb-1.5">
-                          <span style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: 700, color: P.text }}>{e.codigo_escolta ?? '—'}</span>
+                          <span style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: 700, color: P.text }}>
+                            {e.codigo_escolta ?? '—'}
+                            {e.interestadual === true && <span className="badge-warning ml-2 text-[10px]" data-teste="etiqueta-interestadual">{textoInterestadual(e)}</span>}
+                          </span>
                           <span className={STATUS_BADGE[e.status] ?? 'badge-neutral'}>{STATUS_LABEL[e.status] ?? e.status}{comPendencias(e) ? ' · com pendências' : ''}</span>
                         </div>
                         <div className="flex items-center gap-1.5 mb-1">
-                          {e.cliente?.cor_destaque && <div style={{ width: '6px', height: '6px', borderRadius: '2px', backgroundColor: e.cliente.cor_destaque, flexShrink: 0 }} />}
+                          {e.cliente?.cor_destaque && <div style={{ width: '6px', height: '6px', borderRadius: '2px', backgroundColor: corDoCliente(e.cliente.cor_destaque), flexShrink: 0 }} />}
                           <span style={{ fontSize: '12px', fontWeight: 600, color: P.text }}>{e.cliente?.nome_cliente ?? '—'}</span>
                         </div>
                         <p style={{ fontSize: '11px', color: P.textSub }} className="truncate">{e.origem_endereco ? e.origem_endereco.split(',').slice(0,2).join(',') : '—'}</p>

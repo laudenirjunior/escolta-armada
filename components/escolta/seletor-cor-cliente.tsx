@@ -59,7 +59,7 @@ export function SeletorCorCliente({
       </div>
       {usadaPor.length > 0 && (
         <p data-teste="aviso-cor-usada" className="mt-1.5" style={{ fontSize: '11px', color: '#8A5A10' }}>
-          Cor já usada por {usadaPor.join(', ')}. Pode manter, mas as escoltas dos dois clientes ficam com a mesma faixa.
+          Cor já usada por {usadaPor.join(', ')}. Pode manter, mas as escoltas desses clientes ficam com a mesma faixa.
         </p>
       )}
     </div>

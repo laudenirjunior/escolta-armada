@@ -11,7 +11,7 @@ import {
 } from 'lucide-react'
 import { printEscolta } from '@/utils/print'
 import { createClient } from '@/lib/supabase/client'
-import { corDoCliente } from '@/lib/paleta-clientes'
+import { COR_NEUTRA_SIGILO, corDoCliente } from '@/lib/paleta-clientes'
 import { textoInterestadual } from '@/lib/uf-endereco'
 import { useAuth } from '@/hooks/useAuth'
 import { formatarDataHora, formatarPlaca } from '@/utils/formatters'
@@ -79,7 +79,8 @@ interface EscoltaDetalhe {
   // Onda K: UF de origem e destino e a coluna gerada interestadual (migration 216).
   origem_uf?: string | null
   destino_uf?: string | null
-  uf_estimada?: boolean | null
+  origem_uf_estimada?: boolean | null
+  destino_uf_estimada?: boolean | null
   interestadual?: boolean | null
 }
 
@@ -846,7 +847,7 @@ export default function EscoltaDetalhePage() {
         origem_endereco, destino_endereco, observacao_fechamento,
         checklist_pendente_no_inicio, criada_por, criado_em,
         valor_cobrado, outros_custos, observacao_financeira,
-        periodicidade_checkin_min, origem_uf, destino_uf, uf_estimada, interestadual,
+        periodicidade_checkin_min, origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada, interestadual,
         arquivada_em, motivo_arquivamento, arquivador:usuarios!arquivada_por(nome_completo),
         cliente:clientes(id, nome_cliente, cor_destaque, telefone, metadados)
       `)
@@ -2864,7 +2865,8 @@ export default function EscoltaDetalhePage() {
    * pre-inicio. `proximo` continua alimentando rotulo informativo e barra de jornada.
    */
   const proximoGenerico = proximo && !exigeDialogoDedicado(proximo.status) ? proximo : null
-  const cor = corDoCliente(escolta.cliente?.cor_destaque)
+  // Decisão S17: sem o cliente (a RLS esconde do operador o de outra equipe), o cinza neutro.
+  const cor = escolta.cliente ? corDoCliente(escolta.cliente.cor_destaque) : COR_NEUTRA_SIGILO
   const etapaAtual = JORNADA_ETAPAS.findIndex((e) => e.statuses.includes(escolta.status))
   const totalEfetivo = viaturas.reduce((acc, v) => acc + v.efetivo.length, 0)
   const isFinalizado = ['finalizada', 'cancelada'].includes(escolta.status)

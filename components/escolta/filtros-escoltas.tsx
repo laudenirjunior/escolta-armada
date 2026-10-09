@@ -3,17 +3,26 @@
 /**
  * Barra de filtros da lista e do mural (lote 2026-10, onda K). Selects nativos, combinados;
  * o estado e a memória por usuário ficam em hooks/useFiltrosEscoltas.ts.
+ *
+ * Revisão adversarial K: a busca espera 300 ms depois da última tecla antes de valer (menor
+ * custo no celular, médio 3); no celular os selects ficam recolhidos num botão "Filtros (n)"
+ * para o mural aparecer na primeira tela (menor 15); o aviso de filtro lembrado descartado vem
+ * da tela, em `aviso`.
  */
-import { Search, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Search, SlidersHorizontal, X } from 'lucide-react'
 import { LABELS_STATUS, SEQUENCIA_STATUS, STATUS } from '@/lib/fluxo-escolta'
 import { type Filtros, type Periodo, filtrosAtivos } from '@/hooks/useFiltrosEscoltas'
 
 interface Opcao { id: string; nome: string }
 
+/** Espera da busca, em ms, depois da última tecla. */
+export const ESPERA_BUSCA_MS = 300
+
 const ROTULO = 'block text-[10px] font-bold uppercase tracking-wider mb-1'
 
 export function FiltrosEscoltas({
-  filtros, definir, limpar, clientes, criadores, statusPermitidos,
+  filtros, definir, limpar, clientes, criadores, statusPermitidos, aviso,
 }: {
   filtros: Filtros
   definir: (p: Partial<Filtros>) => void
@@ -22,18 +31,45 @@ export function FiltrosEscoltas({
   criadores: Opcao[]
   /** Status oferecidos (o operador só vê os ativos). Padrão: os 12. */
   statusPermitidos?: string[]
+  /** Aviso de filtro lembrado que deixou de existir (descartado pela tela). */
+  aviso?: string | null
 }) {
   const todos = [...SEQUENCIA_STATUS, STATUS.CANCELADA]
   const status = statusPermitidos ?? todos
   const n = filtrosAtivos(filtros)
+  const nSelects = n - (filtros.busca.trim() ? 1 : 0)
+  const [aberto, setAberto] = useState(false)
+  // Busca com espera: o texto do campo é local; o filtro só muda 300 ms depois da última tecla.
+  const [busca, setBusca] = useState(filtros.busca)
+  const ultimaEnviada = useRef(filtros.busca)
+  useEffect(() => {
+    // Mudança vinda de fora (limpar, troca de usuário): o campo acompanha.
+    if (filtros.busca !== ultimaEnviada.current) { ultimaEnviada.current = filtros.busca; setBusca(filtros.busca) }
+  }, [filtros.busca])
+  useEffect(() => {
+    if (busca === ultimaEnviada.current) return
+    const t = setTimeout(() => { ultimaEnviada.current = busca; definir({ busca }) }, ESPERA_BUSCA_MS)
+    return () => clearTimeout(t)
+  }, [busca, definir])
   return (
     <div className="card-light p-4 space-y-3" data-teste="barra-filtros">
-      <div className="relative">
-        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: '#A8B8C2' }} />
-        <input type="text" data-teste="filtro-busca" placeholder="Buscar por código, endereço, cliente ou quem criou..."
-          value={filtros.busca} onChange={(e) => definir({ busca: e.target.value })} className="input-light pl-9 w-full" />
+      <div className="flex gap-2">
+        <div className="relative flex-1 min-w-0">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: '#A8B8C2' }} />
+          <input type="text" data-teste="filtro-busca" placeholder="Buscar por código, endereço, cliente ou quem criou..."
+            value={busca} onChange={(e) => setBusca(e.target.value)} className="input-light pl-9 w-full" />
+        </div>
+        {/* Celular: os selects ficam recolhidos neste botão. */}
+        <button type="button" data-teste="filtro-abrir" onClick={() => setAberto(a => !a)} aria-expanded={aberto}
+          className="md:hidden inline-flex items-center gap-1 px-3 text-[11px] font-bold shrink-0"
+          style={{ minHeight: '40px', border: '1px solid #C8D5DC', color: '#5A6A80', borderRadius: '2px' }}>
+          <SlidersHorizontal size={13} /> Filtros{nSelects > 0 ? ` (${nSelects})` : ''}
+        </button>
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2">
+      {aviso && (
+        <p data-teste="filtro-aviso" className="text-[11px] p-2" style={{ color: '#8A5A10', backgroundColor: '#FFF7E6', borderRadius: '2px' }}>{aviso}</p>
+      )}
+      <div data-teste="filtro-selects" className={`${aberto ? 'grid' : 'hidden md:grid'} grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2`}>
         <label className="min-w-0">
           <span className={ROTULO} style={{ color: '#6B7E8A' }}>Status</span>
           <select data-teste="filtro-status" className="select-light w-full" value={filtros.status}
@@ -91,7 +127,7 @@ export function FiltrosEscoltas({
         </label>
       </div>
       {filtros.periodo === 'intervalo' && (
-        <div className="flex flex-wrap gap-2 items-end">
+        <div className={`${aberto ? 'flex' : 'hidden md:flex'} flex-wrap gap-2 items-end`}>
           <label>
             <span className={ROTULO} style={{ color: '#6B7E8A' }}>De</span>
             <input type="date" data-teste="filtro-de" className="input-light" value={filtros.de}

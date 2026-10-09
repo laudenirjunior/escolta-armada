@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { Plus, Eye, Pencil, MapPin, Clock, Truck, CheckCircle2, Shield, FileDown } from 'lucide-react'
 import { printEscolta } from '@/utils/print'
@@ -13,9 +13,9 @@ import { AvisosMural } from '@/components/escolta/avisos-mural'
 import { MapaInfoMural, lerInfoMural, confirmarPresencaBase, horaBrasilia } from '@/lib/mural'
 import { CartaoEscolta } from '@/components/escolta/cartao-escolta'
 import { FiltrosEscoltas } from '@/components/escolta/filtros-escoltas'
-import { SELECT_CARTAO, type CartaoEscolta as CartaoDados, temEquipeGestao, completarCoresClientes } from '@/lib/cartao-escolta'
+import { SELECT_CARTAO, type CartaoEscolta as CartaoDados, temEquipeGestao, lerCoresClientes, aplicarCoresClientes } from '@/lib/cartao-escolta'
 import { STATUS_ATIVOS } from '@/lib/fluxo-escolta'
-import { useFiltrosEscoltas, aplicarFiltrosServidor } from '@/hooks/useFiltrosEscoltas'
+import { useFiltrosEscoltas, aplicarFiltrosServidor, type Filtros } from '@/hooks/useFiltrosEscoltas'
 
 // Onda K: o cartão padrão (lib/cartao-escolta.ts) traz cliente, UF, etiquetas, criador e
 // equipe; status e rótulos vêm de lib/fluxo-escolta.ts (acabou o STATUS_MAP duplicado).
@@ -35,7 +35,13 @@ export default function EscoltasPage() {
   // Onda K: filtros combinados e lembrados por usuário no aparelho.
   const [opcoesClientes, setOpcoesClientes] = useState<{ id: string; nome: string }[]>([])
   const [opcoesCriadores, setOpcoesCriadores] = useState<{ id: string; nome: string }[]>([])
+  const [opcoesProntas, setOpcoesProntas] = useState(false)
+  const [avisoFiltro, setAvisoFiltro] = useState<string | null>(null)
+  // "Carregando" só na primeira carga; depois, a lista anterior fica na tela enquanto a nova
+  // chega (revisão adversarial K, médio 3), com um aviso discreto de atualização.
   const [loading, setLoading] = useState(true)
+  const [atualizando, setAtualizando] = useState(false)
+  const jaCarregou = useRef(false)
   // Operador: alternador "Minhas / Disponíveis / Todas".
   //
   // "Disponíveis" é o mural, decidido com Pecanha em 2026-08-19: escolta agendada e ainda
@@ -58,7 +64,19 @@ export default function EscoltasPage() {
   const perfil = (user?.perfil?.codigo ?? '') as any
   const { filtros, definir: definirFiltros, limpar: limparFiltros, pronto: filtrosProntos } = useFiltrosEscoltas(user?.id ?? null)
   const filtroStatus = filtros.status
+  // Revisão adversarial K, médio 3: a carga do servidor depende só dos filtros de servidor.
+  // Busca e equipe filtram no navegador (escoltasFiltradas), sem nova consulta.
+  const { status: fStatus, cliente: fCliente, periodo: fPeriodo, de: fDe, ate: fAte, criador: fCriador, interestadual: fInter } = filtros
+  const filtrosServidor = useMemo<Filtros>(() => ({
+    status: fStatus, cliente: fCliente, periodo: fPeriodo, de: fDe, ate: fAte, criador: fCriador, interestadual: fInter,
+    busca: '', equipe: 'todas',
+  }), [fStatus, fCliente, fPeriodo, fDe, fAte, fCriador, fInter])
   const seqCarga = useRef(0)
+  // Leituras auxiliares (mural_info e cores) só quando o conjunto de ids muda, ou quando uma
+  // ação do mural pede (forçar). Guardam a chave dos ids e o último resultado.
+  const auxMural = useRef<{ chave: string; lido: Awaited<ReturnType<typeof lerInfoMural>> | null }>({ chave: '', lido: null })
+  const auxCores = useRef<{ chave: string; cores: Map<string, string> | null }>({ chave: '', cores: null })
+  const auxOperador = useRef<{ vig: { id: string } | null; escoltaIds: string[]; comandoIds: string[] } | null>(null)
   // Onda G: sem perfil a lista não carrega (sairia como não operador). Se o perfil não
   // chegar (conta sem perfil, leitura falhou, sessão perdida), a tela não fica presa em
   // "Carregando": mostra a mensagem depois do login terminar, ou de 15 s no máximo.
@@ -74,15 +92,16 @@ export default function EscoltasPage() {
   // já como operador (ver o fim de carregar()).
   const jaEscolheuModo = useRef(false)
 
-  const carregar = useCallback(async () => {
+  const carregar = useCallback(async (forcar = false) => {
     // Onda G: enquanto o login não termina, o perfil é vazio e a carga sairia como se
     // fosse de não operador, sem as escoltas dele. Espera o usuário e o perfil chegarem.
     if (!user || !perfil || !filtrosProntos) return
     const seq = ++seqCarga.current
-    setLoading(true)
+    if (jaCarregou.current) setAtualizando(true)
+    else setLoading(true)
     // Onda I: "Concluída com pendências" é filtrada no banco (embed !inner com a conclusão
     // válida), não no navegador: o limite de linhas do PostgREST não esconde as antigas.
-    const soComPendencias = filtroStatus === 'com_pendencias'
+    const soComPendencias = filtrosServidor.status === 'com_pendencias'
     let q = sb
       .from('escoltas')
       .select(soComPendencias
@@ -96,7 +115,7 @@ export default function EscoltasPage() {
       q = q.eq('status', 'finalizada').is('conclusao.anulado_em', null)
     }
     // Onda K: status, cliente, período, quem criou e interestadual no servidor.
-    q = aplicarFiltrosServidor(q, filtros)
+    q = aplicarFiltrosServidor(q, filtrosServidor)
 
     const { data } = await q
     if (seq !== seqCarga.current) return
@@ -109,35 +128,52 @@ export default function EscoltasPage() {
         ['rascunho', 'agendada', 'em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando', 'na_base'].includes(e.status)
       )
 
-      // Resolve as escoltas em que este operador está escalado (via vigilante)
-      const { data: vig } = await sb.from('vigilantes').select('id').eq('usuario_id', user?.id).maybeSingle()
-      setMeuVigilanteId(vig?.id ?? null)
-      let escoltaIds: string[] = []
-      let comandoIds: string[] = []
-      if (vig) {
-        const { data: efet } = await sb
-          .from('escolta_efetivo')
-          .select('escolta_id, papel_na_escolta')
-          .eq('vigilante_id', vig.id)
-        escoltaIds = Array.from(new Set((efet ?? []).map((e: any) => e.escolta_id).filter(Boolean)))
-        comandoIds = Array.from(new Set((efet ?? [])
-          .filter((e: any) => e.papel_na_escolta === 'comandante')
-          .map((e: any) => e.escolta_id).filter(Boolean)))
+      // Resolve as escoltas em que este operador está escalado (via vigilante). Só relê
+      // quando forçado (ação do mural) ou na primeira carga: trocar filtro não muda a equipe.
+      if (forcar || !auxOperador.current) {
+        const { data: vig } = await sb.from('vigilantes').select('id').eq('usuario_id', user?.id).maybeSingle()
+        let escoltaIds: string[] = []
+        let comandoIds: string[] = []
+        if (vig) {
+          const { data: efet } = await sb
+            .from('escolta_efetivo')
+            .select('escolta_id, papel_na_escolta')
+            .eq('vigilante_id', vig.id)
+          escoltaIds = Array.from(new Set((efet ?? []).map((e: any) => e.escolta_id).filter(Boolean)))
+          comandoIds = Array.from(new Set((efet ?? [])
+            .filter((e: any) => e.papel_na_escolta === 'comandante')
+            .map((e: any) => e.escolta_id).filter(Boolean)))
+        }
+        auxOperador.current = { vig: vig ?? null, escoltaIds, comandoIds }
       }
-      escoltaIdsOperador = escoltaIds
-      setMinhasEscoltaIds(escoltaIds)
-      setSouComandanteIds(comandoIds)
+      if (seq !== seqCarga.current) return
+      const op = auxOperador.current
+      setMeuVigilanteId(op?.vig?.id ?? null)
+      escoltaIdsOperador = op?.escoltaIds ?? []
+      setMinhasEscoltaIds(escoltaIdsOperador)
+      setSouComandanteIds(op?.comandoIds ?? [])
+      // Decisão S17 (revisão K, médio 1): nas escoltas que não são dele (agendadas de outras
+      // equipes, no mural), a faixa sai no cinza neutro; a cor identificaria o cliente.
+      rows = rows.map(e => (escoltaIdsOperador.includes(e.id) ? e : { ...e, cor_sigilosa: true }))
     }
 
     // Mural: agendadas que ainda não têm ninguém escalado. Onda G: "sem equipe" vem só do
     // servidor (mural_info). O efetivo lido pelo próprio operador não serve, porque a RLS
     // esconde o efetivo dos colegas e toda escolta de outra dupla pareceria livre. Sem
     // mural_info (minutos entre o deploy e o bloco 2), toda escolta conta como com equipe.
+    // Revisão K, médio 3: só relê quando o conjunto de agendadas muda (ou forçado); o relógio
+    // de 30 s abaixo mantém o estado do mural em dia.
     const agendadas = rows.filter(e => e.status === 'agendada').map(e => e.id)
-    // Falha passageira (rede, tempo esgotado), já com uma nova tentativa: mantém o último
-    // estado lido e não escolhe a aba com base nela.
-    const lido = await lerInfoMural(sb, agendadas)
-    const livres = lido.ativo ? agendadas.filter(id => lido.info[id] && !lido.info[id].tem_equipe) : []
+    const chaveMural = [...agendadas].sort().join(',')
+    let lido = auxMural.current.lido
+    if (forcar || !lido || chaveMural !== auxMural.current.chave) {
+      // Falha passageira (rede, tempo esgotado), já com uma nova tentativa: mantém o último
+      // estado lido e não escolhe a aba com base nela.
+      lido = await lerInfoMural(sb, agendadas)
+      if (seq !== seqCarga.current) return
+      if (!lido.falhou) auxMural.current = { chave: chaveMural, lido }
+    }
+    const livres = lido.ativo ? agendadas.filter(id => lido!.info[id] && !lido!.info[id].tem_equipe) : []
     if (lido.falhou) {
       setSemEquipeIds(ant => ant.filter(id => agendadas.includes(id)))
     } else {
@@ -153,28 +189,45 @@ export default function EscoltasPage() {
     if (perfil === 'operador' && !jaEscolheuModo.current && !lido.falhou) {
       jaEscolheuModo.current = true
       const minhas = rows.filter(e => escoltaIdsOperador.includes(e.id)).length
-      const livresVisiveis = livres.filter(id => !escoltaIdsOperador.includes(id) && !lido.info[id]?.escala_fixa)
+      const livresVisiveis = livres.filter(id => !escoltaIdsOperador.includes(id) && !lido!.info[id]?.escala_fixa)
       if (minhas === 0 && livresVisiveis.length > 0) setModoLista('disponiveis')
     }
 
-    // Onda K: cor do cliente que a RLS esconde do operador (mural de outras equipes).
-    rows = await completarCoresClientes(sb, rows)
-    if (seq !== seqCarga.current) return
+    // Onda K: cor do cliente das linhas que vieram sem o cliente (nunca das sigilosas, S17).
+    // Só relê quando o conjunto de ids muda.
+    const semCliente = rows.filter(l => !l.cliente && !l.cor_sigilosa).map(l => l.id)
+    const chaveCores = [...semCliente].sort().join(',')
+    if (forcar || chaveCores !== auxCores.current.chave) {
+      const cores = await lerCoresClientes(sb, semCliente)
+      if (seq !== seqCarga.current) return
+      auxCores.current = { chave: chaveCores, cores }
+    }
+    rows = aplicarCoresClientes(rows, auxCores.current.cores)
     setEscoltas(rows)
+    jaCarregou.current = true
     setLoading(false)
-  }, [filtros, filtroStatus, filtrosProntos, perfil, user])
+    setAtualizando(false)
+  }, [filtrosServidor, filtrosProntos, perfil, user])
 
   // Opções dos filtros de cliente e de quem criou. O operador só lê os clientes das escoltas
   // em que está escalado (RLS); os das linhas carregadas entram também.
+  // Revisão K, menor 15: "Quem criou" traz também quem foi inativado e criou escoltas.
   useEffect(() => {
     if (!user) return
     ;(async () => {
-      const [{ data: cls }, { data: us }] = await Promise.all([
+      const [{ data: cls }, { data: us }, { data: criadas }] = await Promise.all([
         sb.from('clientes').select('id, nome_cliente').order('nome_cliente'),
         sb.from('usuarios').select('id, nome_completo').eq('status', 'ativo').order('nome_completo'),
+        sb.from('escoltas').select('criada_por, criador:usuarios!criada_por(id, nome_completo, status)').not('criada_por', 'is', null),
       ])
       setOpcoesClientes((cls ?? []).map((c: any) => ({ id: c.id, nome: c.nome_cliente })))
-      setOpcoesCriadores((us ?? []).map((u: any) => ({ id: u.id, nome: u.nome_completo })))
+      const m = new Map<string, string>((us ?? []).map((u: any) => [u.id, u.nome_completo]))
+      for (const e of (criadas ?? []) as any[]) {
+        const c = e.criador
+        if (c?.id && !m.has(c.id)) m.set(c.id, c.status === 'ativo' ? c.nome_completo : `${c.nome_completo} (inativo)`)
+      }
+      setOpcoesCriadores(Array.from(m, ([id, nome]) => ({ id, nome })).sort((a, b) => a.nome.localeCompare(b.nome)))
+      setOpcoesProntas(true)
     })()
   }, [user])
 
@@ -203,7 +256,7 @@ export default function EscoltasPage() {
     const { error } = await sb.rpc('puxar_escolta', { p_escolta_id: e.id })
     setAvisoMural(error ? { tipo: 'erro', texto: error.message ?? 'Não foi possível puxar a escolta.' } : { tipo: 'ok', texto: 'Escolta puxada. Você é o comandante.' })
     setPuxando(null)
-    await carregar()
+    await carregar(true)
   }
 
   const estouNaBase = async (id: string) => {
@@ -212,7 +265,7 @@ export default function EscoltasPage() {
     const erro = await confirmarPresencaBase(sb, id)
     setAvisoMural(erro ? { tipo: 'erro', texto: erro } : { tipo: 'ok', texto: 'Presença na base confirmada. Com a equipe na base, ninguém assume esta escolta.' })
     setPuxando(null)
-    await carregar()
+    await carregar(true)
   }
 
   const cancelarPedido = async (pedidoId: string, escoltaId: string) => {
@@ -220,7 +273,7 @@ export default function EscoltasPage() {
     const { error } = await sb.rpc('cancelar_meu_pedido_mural', { p_pedido_id: pedidoId })
     setAvisoMural(error ? { tipo: 'erro', texto: error.message } : { tipo: 'ok', texto: 'Pedido cancelado.' })
     setPuxando(null)
-    await carregar()
+    await carregar(true)
   }
 
   const ehOperador = perfil === 'operador'
@@ -253,7 +306,7 @@ export default function EscoltasPage() {
       setAvisoMural({ tipo: 'ok', texto: 'Escolta devolvida ao mural.' })
     }
     setPuxando(null)
-    await carregar()
+    await carregar(true)
   }
 
   const escoltasFiltradas = escoltas.filter((e) => {
@@ -291,6 +344,25 @@ export default function EscoltasPage() {
     escoltas.forEach(e => { if (e.cliente?.id && !m.has(e.cliente.id)) m.set(e.cliente.id, e.cliente.nome_cliente) })
     return Array.from(m, ([id, nome]) => ({ id, nome })).sort((a, b) => a.nome.localeCompare(b.nome))
   })()
+  const statusPermitidos = useMemo(() => (ehOperador ? ['rascunho', ...STATUS_ATIVOS] : undefined), [ehOperador])
+
+  // Revisão K, menor 15: filtro lembrado cujo valor não existe mais (cliente fora da lista,
+  // pessoa sem escolta criada, status que o perfil não oferece) é descartado, com aviso, em vez
+  // de deixar a lista vazia sem motivo. Uma vez por usuário, depois das opções e da 1ª carga.
+  const validadoPara = useRef<string | null>(null)
+  useEffect(() => {
+    if (!user?.id || !filtrosProntos || !opcoesProntas || loading || validadoPara.current === user.id) return
+    validadoPara.current = user.id
+    const descartes: string[] = []
+    const novo: Partial<Filtros> = {}
+    if (filtros.cliente !== 'todos' && !opcoesClientesTela.some(c => c.id === filtros.cliente)) { novo.cliente = 'todos'; descartes.push('cliente') }
+    if (filtros.criador !== 'todos' && !opcoesCriadores.some(c => c.id === filtros.criador)) { novo.criador = 'todos'; descartes.push('quem criou') }
+    if (statusPermitidos && filtros.status !== 'todos' && !statusPermitidos.includes(filtros.status)) { novo.status = 'todos'; descartes.push('status') }
+    if (descartes.length) {
+      definirFiltros(novo)
+      setAvisoFiltro(`O filtro lembrado de ${descartes.join(', ')} não existe mais e foi descartado.`)
+    }
+  }, [user?.id, filtrosProntos, opcoesProntas, loading, filtros, opcoesClientesTela, opcoesCriadores, statusPermitidos, definirFiltros])
 
   // Cálculos dos Cards
   const countNaoIniciadas = escoltas.filter(e => ['rascunho', 'agendada', 'em_pre_inicio'].includes(e.status)).length
@@ -356,12 +428,10 @@ export default function EscoltasPage() {
           <table className="table-content">
             <thead>
               <tr>
-                <th style={{ width: '6px', padding: 0 }} aria-label="Cor do cliente" />
-                <th>Código</th>
-                <th>Cliente</th>
+                <th style={{ paddingLeft: '16px' }}>Código</th>
+                <th>Cliente e equipe</th>
                 <th className="hidden md:table-cell">Origem → Destino</th>
                 <th className="hidden lg:table-cell">Data / Hora (Brasília)</th>
-                <th className="hidden lg:table-cell">Equipe</th>
                 <th>Status</th>
                 <th className="text-right">Ações</th>
               </tr>
@@ -652,9 +722,12 @@ export default function EscoltasPage() {
       </div>
 
       {/* ── Filtros (onda K): combinados e lembrados por usuário neste aparelho ── */}
-      <FiltrosEscoltas filtros={filtros} definir={definirFiltros} limpar={limparFiltros}
+      <FiltrosEscoltas filtros={filtros} definir={definirFiltros} limpar={() => { setAvisoFiltro(null); limparFiltros() }}
         clientes={opcoesClientesTela} criadores={opcoesCriadores}
-        statusPermitidos={ehOperador ? ['rascunho', ...STATUS_ATIVOS] : undefined} />
+        statusPermitidos={statusPermitidos} aviso={avisoFiltro} />
+      {atualizando && !loading && (
+        <p data-teste="lista-atualizando" className="text-[11px] -mt-4" style={{ color: '#8A99A6' }}>Atualizando a lista...</p>
+      )}
 
       {/* ── Listagem de Escoltas ── */}
       {semPerfil ? (
@@ -735,7 +808,7 @@ export default function EscoltasPage() {
                   ? 'Escolta assumida. A equipe anterior foi substituída e o registro ficou no histórico.'
                   : 'Escolta assumida. Você é o comandante e já pode iniciar o pré-início.',
             })
-            await carregar()
+            await carregar(true)
           }}
         />
       )}

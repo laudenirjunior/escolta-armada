@@ -11,12 +11,12 @@
  * ele mesmo lê (onda G: a escolta de outra dupla pareceria livre).
  */
 import { CLASSE_BADGE_STATUS, LABELS_STATUS } from '@/lib/fluxo-escolta'
-import { corDoCliente } from '@/lib/paleta-clientes'
+import { COR_NEUTRA_SIGILO, corDoCliente } from '@/lib/paleta-clientes'
 
 /** Colunas do cartão. UF e interestadual são da migration 216 (bloco 1, antes do deploy). */
 export const SELECT_CARTAO = `
   id, codigo_escolta, status, data_hora_prevista,
-  origem_endereco, destino_endereco, origem_uf, destino_uf, uf_estimada, interestadual,
+  origem_endereco, destino_endereco, origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada, interestadual,
   escala_fixa, checklist_pendente_no_inicio, reiniciada_em, arquivada_em, criada_por,
   criador:usuarios!criada_por(nome_completo),
   cliente:clientes(id, nome_cliente, cor_destaque),
@@ -33,7 +33,8 @@ export interface CartaoEscolta {
   destino_endereco: string | null
   origem_uf?: string | null
   destino_uf?: string | null
-  uf_estimada?: boolean | null
+  origem_uf_estimada?: boolean | null
+  destino_uf_estimada?: boolean | null
   interestadual?: boolean | null
   escala_fixa?: boolean | null
   checklist_pendente_no_inicio?: boolean | null
@@ -44,8 +45,14 @@ export interface CartaoEscolta {
   cliente: { id?: string; nome_cliente: string; cor_destaque: string | null } | null
   conclusao?: { id: string; anulado_em: string | null }[] | null
   efetivo?: { papel_na_escolta: string | null; vigilante: { nome_completo: string | null } | null }[] | null
-  /** Cor do cliente vinda do servidor (cores_clientes_das_escoltas) quando a RLS esconde o cliente. */
+  /** Cor do cliente vinda do servidor (cores_clientes_das_escoltas) quando o embed não trouxe o cliente. */
   cor_cliente_servidor?: string | null
+  /**
+   * Decisão S17 (revisão adversarial K, médio 1): a escolta é uma agendada de outra equipe no
+   * mural do operador. O cartão usa o cinza neutro, fora da paleta, para a cor não identificar
+   * o cliente que a RLS esconde.
+   */
+  cor_sigilosa?: boolean
 }
 
 export type Etiqueta = { chave: 'interestadual' | 'escala-fixa' | 'pendencias' | 'reiniciada' | 'arquivada'; texto: string; classe: string }
@@ -89,36 +96,49 @@ export function rotuloStatusCartao(status: string): { label: string; classe: str
   return { label: LABELS_STATUS[status] ?? status, classe: CLASSE_BADGE_STATUS[status] ?? 'badge-neutral' }
 }
 
-export function corCartao(e: Pick<CartaoEscolta, 'cliente' | 'cor_cliente_servidor'>): string {
-  return corDoCliente(e.cliente?.cor_destaque ?? e.cor_cliente_servidor)
+/**
+ * Cor da faixa. Escolta marcada como sigilosa (S17) ou sem cliente nem cor do servidor (a
+ * pessoa não lê o cliente): o cinza neutro. Nas demais, a cor da paleta do cliente.
+ */
+export function corCartao(e: Pick<CartaoEscolta, 'cliente' | 'cor_cliente_servidor' | 'cor_sigilosa'>): string {
+  if (e.cor_sigilosa) return COR_NEUTRA_SIGILO
+  const cor = e.cliente?.cor_destaque ?? e.cor_cliente_servidor
+  return cor ? corDoCliente(cor) : COR_NEUTRA_SIGILO
 }
 
 /**
- * Cor do cliente das escoltas cujo cliente a RLS esconde (o operador só lê o cliente das
- * escoltas em que está no efetivo; no mural, as agendadas de outra equipe vêm sem cliente e
- * sairiam todas na mesma cor). A RPC da 216 devolve só a cor, nunca o nome. Sem a RPC (ou com
- * erro) as linhas ficam como estão: a cor padrão.
+ * Cor do cliente das escoltas que vieram sem o cliente no embed. A RPC da 216 devolve só a
+ * cor, nunca o nome: à gestão, de toda escolta que ela lê; ao operador, só das escoltas em que
+ * ele é do efetivo (decisão S17). Sem resposta, a linha fica com o cinza neutro.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export async function completarCoresClientes<T extends CartaoEscolta>(sb: any, linhas: T[]): Promise<T[]> {
-  const ids = linhas.filter(l => !l.cliente).map(l => l.id)
-  if (ids.length === 0) return linhas
+export async function lerCoresClientes(sb: any, ids: string[]): Promise<Map<string, string> | null> {
+  if (ids.length === 0) return new Map()
   try {
     const { data, error } = await sb.rpc('cores_clientes_das_escoltas', { p_escolta_ids: ids })
-    if (error || !Array.isArray(data)) return linhas
-    const cor = new Map<string, string>((data as { escolta_id: string; cor_destaque: string }[]).map(d => [d.escolta_id, d.cor_destaque]))
-    return linhas.map(l => (cor.has(l.id) ? { ...l, cor_cliente_servidor: cor.get(l.id) } : l))
+    if (error || !Array.isArray(data)) return null
+    return new Map<string, string>((data as { escolta_id: string; cor_destaque: string }[]).map(d => [d.escolta_id, d.cor_destaque]))
   } catch {
-    return linhas
+    return null
   }
+}
+
+export function aplicarCoresClientes<T extends CartaoEscolta>(linhas: T[], cores: Map<string, string> | null): T[] {
+  if (!cores || cores.size === 0) return linhas
+  return linhas.map(l => (!l.cliente && cores.has(l.id) ? { ...l, cor_cliente_servidor: cores.get(l.id) } : l))
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function completarCoresClientes<T extends CartaoEscolta>(sb: any, linhas: T[]): Promise<T[]> {
+  return aplicarCoresClientes(linhas, await lerCoresClientes(sb, linhas.filter(l => !l.cliente).map(l => l.id)))
 }
 
 export const comPendencias = (e: Pick<CartaoEscolta, 'status' | 'conclusao'>) =>
   e.status === 'finalizada' && (e.conclusao ?? []).some(c => !c.anulado_em)
 
 /**
- * Etiquetas do cartão. Interestadual só quando a coluna gerada é verdadeira; quando a UF
- * é estimada pela coordenada (uf_estimada), só a etiqueta, sem nome de UF (15.1 item 5).
+ * Etiquetas do cartão. Interestadual só quando a coluna gerada é verdadeira; o cartão nunca
+ * mostra a UF por extenso (o detalhe mostra, quando nenhum lado é estimado: 15.1 item 5).
  * Arquivada só para o administrador (as outras pessoas nem leem a escolta arquivada).
  */
 export function etiquetas(e: CartaoEscolta, perfil: string | null | undefined): Etiqueta[] {

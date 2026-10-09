@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
-import { COR_PADRAO_CLIENTE, corDoCliente } from '@/lib/paleta-clientes'
+import { COR_PADRAO_CLIENTE, corDoCliente, primeiraCorLivre } from '@/lib/paleta-clientes'
 import { SeletorCorCliente } from '@/components/escolta/seletor-cor-cliente'
 import { mascaraCPF, mascaraTelefone, gerarLoginOperador } from '@/utils/formatters'
 
@@ -334,7 +334,7 @@ export default function CadastrosPage() {
           {canEdit && (
             <button
               onClick={() => {
-                if (tab==='clientes') { setEditCliente(null); setFormCliente(emptyCliente()); setDialogCliente(true) }
+                if (tab==='clientes') { setEditCliente(null); setFormCliente({ ...emptyCliente(), cor_destaque: primeiraCorLivre(clientes) }); setDialogCliente(true) }  // revisão K, menor 10: primeira cor livre
                 if (tab==='vigilantes') { setEditVigilante(null); setFormVigilante(emptyVigilante()); setErroVigilante(null); setDialogVigilante(true) }
                 if (tab==='veiculos') { setEditVeiculo(null); setFormVeiculo(emptyVeiculo()); setDialogVeiculo(true) }
               }}

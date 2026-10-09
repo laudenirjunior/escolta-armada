@@ -13,7 +13,7 @@ import { Label } from '@/components/ui/label'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
 import { urlsAssinadas, urlDoMapa } from '@/lib/fotos-url'
-import { COR_PADRAO_CLIENTE, corDoCliente } from '@/lib/paleta-clientes'
+import { COR_PADRAO_CLIENTE, corDoCliente, primeiraCorLivre } from '@/lib/paleta-clientes'
 import { SeletorCorCliente } from '@/components/escolta/seletor-cor-cliente'
 
 interface ClienteRow {
@@ -104,7 +104,8 @@ export default function ClientesPage() {
   const abrirNovo = () => {
     setEditando(null)
     setLogoRemovida(false)
-    setForm(FORM_VAZIO)
+    // Revisão adversarial K, menor 10: o cliente novo nasce com a primeira cor livre da paleta.
+    setForm({ ...FORM_VAZIO, cor_destaque: primeiraCorLivre(clientes) })
     setLogoFile(null)
     setLogoPreview('')
     setErro(null)

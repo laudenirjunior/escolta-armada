@@ -32,7 +32,8 @@ interface EscoltaPDF {
   // Onda K (migration 216): etiqueta Interestadual.
   origem_uf?: string | null
   destino_uf?: string | null
-  uf_estimada?: boolean | null
+  origem_uf_estimada?: boolean | null
+  destino_uf_estimada?: boolean | null
   interestadual?: boolean | null
 }
 interface OcorrenciaPDF {
@@ -616,7 +617,7 @@ function RelatoriosPDFConteudo() {
       let escoltasQ = sb.from('escoltas').select(`
         id, codigo_escolta, status, data_hora_prevista, data_finalizacao,
         origem_endereco, destino_endereco, valor_cobrado, outros_custos,
-        origem_uf, destino_uf, uf_estimada, interestadual,
+        origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada, interestadual,
         cliente:clientes(id, nome_cliente, cor_destaque),
         veiculos:escolta_veiculos(
           id, veiculo_id,

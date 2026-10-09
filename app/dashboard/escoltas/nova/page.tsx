@@ -63,8 +63,9 @@ interface DadosBasicos  {
   observacoes: string
   /**
    * Onda K (docs/14, 15.2 item 4): UF de cada lado, gravada em escoltas.origem_uf e
-   * destino_uf. Vazia vira nula. `_uf_estimada`: a UF veio da coordenada (RPC
-   * uf_da_coordenada), não da sugestão com region nem do local salvo.
+   * destino_uf. Vazia vira nula. `_uf_estimada` (por lado, como no banco): a UF veio da
+   * coordenada (RPC uf_da_coordenada), não da sugestão com region nem do local salvo. UF vazia
+   * com a marca ligada: a coordenada caiu fora do Brasil (revisão adversarial K, menor 12).
    */
   origem_uf: string
   destino_uf: string
@@ -465,6 +466,10 @@ function FormularioEscolta() {
   // sequência do lado; a resposta da RPC que chegar depois de uma escolha mais nova é
   // descartada, para nunca gravar a UF de um endereço que já não está no campo.
   const ufSeq = useRef({ origem: 0, destino: 0 })
+  // Revisão adversarial K, menor 11: consultas de UF em andamento. Enquanto houver alguma, o
+  // botão de confirmar espera (e, se mesmo assim a UF for nula com coordenada, o servidor
+  // calcula pela malha: triggers da 216). Nunca grava a UF nula por pressa.
+  const [ufPendentes, setUfPendentes] = useState(0)
   const definirUf = useCallback((lado: 'origem' | 'destino', uf: string | null, estimada: boolean) => {
     ufSeq.current[lado]++
     setDados(d => ({ ...d, [`${lado}_uf`]: uf ?? '', [`${lado}_uf_estimada`]: Boolean(uf) && estimada }))
@@ -475,13 +480,17 @@ function FormularioEscolta() {
     setDados(d => ({ ...d, [`${lado}_uf`]: '', [`${lado}_uf_estimada`]: false }))
     if (!lat || !lng) return
     let uf: string | null = null
+    let calculada = false
+    setUfPendentes(n => n + 1)
     try {
       const { data, error } = await sb.rpc('uf_da_coordenada', { p_lat: lat, p_lng: lng })
-      // Sem a 216 (função ausente) ou qualquer erro: UF nula, a escolta grava sem ela.
-      if (!error) uf = (Array.isArray(data) ? data[0]?.uf : data?.uf) ?? null
-    } catch { uf = null }
+      // Sem a 216 (função ausente) ou qualquer erro: UF nula, e o servidor calcula ao salvar.
+      // Uma linha com UF nula: coordenada fora do Brasil (a tela avisa para conferir).
+      const linha = !error ? (Array.isArray(data) ? data[0] : data) : null
+      if (linha) { uf = linha.uf ?? null; calculada = true }
+    } catch { uf = null } finally { setUfPendentes(n => Math.max(0, n - 1)) }
     if (seq !== ufSeq.current[lado]) return
-    setDados(d => ({ ...d, [`${lado}_uf`]: uf ?? '', [`${lado}_uf_estimada`]: Boolean(uf) }))
+    setDados(d => ({ ...d, [`${lado}_uf`]: uf ?? '', [`${lado}_uf_estimada`]: calculada }))
   }, [])
   // "Salvar este endereço" ao lado do campo (onda D2): endereço, complemento, coordenada e UF
   // do campo; nasce aguardando conferência (a trigger da 205 garante, mesmo pedindo ativo).
@@ -528,7 +537,7 @@ function FormularioEscolta() {
           id, cliente_id, status, data_hora_prevista, metadados,
           origem_endereco, origem_lat, origem_lng,
           destino_endereco, destino_lat, destino_lng,
-          origem_uf, destino_uf, uf_estimada,
+          origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada,
           periodicidade_checkin_min, valor_cobrado, outros_custos, observacao_financeira, escala_fixa,
           veiculos:escolta_veiculos(
             id, veiculo_id, criado_em,
@@ -574,8 +583,8 @@ function FormularioEscolta() {
         observacoes: meta.observacoes ?? '',
         // Onda K: a UF gravada volta ao formulário; só muda se o endereço daquele lado mudar.
         origem_uf: e.origem_uf ?? '', destino_uf: e.destino_uf ?? '',
-        origem_uf_estimada: Boolean(e.uf_estimada && e.origem_uf),
-        destino_uf_estimada: Boolean(e.uf_estimada && e.destino_uf),
+        origem_uf_estimada: Boolean(e.origem_uf_estimada),
+        destino_uf_estimada: Boolean(e.destino_uf_estimada),
       })
       enderecoEscolhido.current = { origem: tirarSufixo(e.origem_endereco ?? '', origComp), destino: tirarSufixo(e.destino_endereco ?? '', destComp) }
 
@@ -735,12 +744,13 @@ function FormularioEscolta() {
           observacao_financeira: obsFinanceiro.trim() ? obsFinanceiro.trim() : null,
         } : {}),
         ...(podeEscalaFixa ? { escala_fixa: escalaFixa } : {}),
-        // Onda K: UF de cada lado (vazia vira nula) e se alguma veio da coordenada. Vai
-        // sempre, na criação e na edição: o estado do formulário já foi regravado pelo
-        // caminho que mudou o endereço (nunca a UF antiga mantida por omissão).
+        // Onda K: UF de cada lado (vazia vira nula) e a marca de cada lado (veio da
+        // coordenada). Vai sempre, na criação e na edição: o estado do formulário já foi
+        // regravado pelo caminho que mudou o endereço (nunca a UF antiga mantida por omissão).
         origem_uf:   dados.origem_uf || null,
         destino_uf:  dados.destino_uf || null,
-        uf_estimada: (dados.origem_uf_estimada && !!dados.origem_uf) || (dados.destino_uf_estimada && !!dados.destino_uf),
+        origem_uf_estimada:  dados.origem_uf_estimada,
+        destino_uf_estimada: dados.destino_uf_estimada,
       }
 
       let escoltaId: string
@@ -1107,6 +1117,12 @@ function FormularioEscolta() {
                 conferida={confOrigem.conferida} semNumero={confOrigem.semNumero} viaLocal={confOrigem.viaLocal} uf={dados.origem_uf_estimada ? '' : dados.origem_uf}
                 onMover={(lat, lng) => { setDados(d => ({ ...d, origem_lat: lat, origem_lng: lng })); ufPelaCoordenada('origem', lat, lng) }}
                 onConferir={(v) => setConfOrigem(c => ({ ...c, conferida: v }))} />
+              {/* Revisão K, menor 12: coordenada fora do Brasil (a malha não dá UF). */}
+              {!dados.origem_uf && dados.origem_uf_estimada && (
+                <p data-teste="aviso-fora-brasil" className="mt-1.5 font-bold" style={{ fontSize: '11px', color: '#B83832' }}>
+                  Endereço fora do Brasil, confira.
+                </p>
+              )}
             </div>
 
             {/* Complemento da origem: campo separado de propósito, para que digitar aqui
@@ -1175,6 +1191,12 @@ function FormularioEscolta() {
                 conferida={confDestino.conferida} semNumero={confDestino.semNumero} viaLocal={confDestino.viaLocal} uf={dados.destino_uf_estimada ? '' : dados.destino_uf}
                 onMover={(lat, lng) => { setDados(d => ({ ...d, destino_lat: lat, destino_lng: lng })); ufPelaCoordenada('destino', lat, lng) }}
                 onConferir={(v) => setConfDestino(c => ({ ...c, conferida: v }))} />
+              {/* Revisão K, menor 12: coordenada fora do Brasil (a malha não dá UF). */}
+              {!dados.destino_uf && dados.destino_uf_estimada && (
+                <p data-teste="aviso-fora-brasil" className="mt-1.5 font-bold" style={{ fontSize: '11px', color: '#B83832' }}>
+                  Endereço fora do Brasil, confira.
+                </p>
+              )}
             </div>
 
             {/* Complemento do destino: mesma regra da origem. */}
@@ -1566,8 +1588,10 @@ function FormularioEscolta() {
                     <p className="text-xs font-semibold" style={{ color: P.text }}>{r.value}</p>
                   </div>
                 ))}
-                {/* Onda K: mesma regra da coluna gerada interestadual (origem ou destino fora do RJ). */}
-                {((dados.origem_uf && dados.origem_uf !== 'RJ') || (dados.destino_uf && dados.destino_uf !== 'RJ')) && (
+                {/* Onda K: mesma regra da coluna gerada interestadual (origem ou destino fora do RJ;
+                    lado fora do Brasil, UF vazia com a marca, conta como fora do RJ). */}
+                {((dados.origem_uf && dados.origem_uf !== 'RJ') || (dados.destino_uf && dados.destino_uf !== 'RJ')
+                  || (!dados.origem_uf && dados.origem_uf_estimada) || (!dados.destino_uf && dados.destino_uf_estimada)) && (
                   <div className="py-2.5" style={{ borderBottom: `1px solid ${P.border}` }}>
                     <span data-teste="etiqueta-interestadual" className="text-[10px] font-black uppercase tracking-widest px-1.5 py-0.5"
                       style={{ backgroundColor: '#FFF7E6', color: '#8A5A10', borderRadius: '2px' }}>Interestadual</span>
@@ -1666,12 +1690,13 @@ function FormularioEscolta() {
         ) : (
           <button
             onClick={salvar}
-            disabled={salvando}
+            disabled={salvando || ufPendentes > 0}
+            data-teste="botao-confirmar"
             className="flex items-center justify-center gap-2 px-6 text-sm font-black uppercase tracking-wider text-white transition-all disabled:opacity-50 w-full sm:w-auto"
             style={{ backgroundColor: P.success, borderRadius: '2px', minHeight: '56px' }}
           >
             <CheckCircle size={14} />
-            {editandoId ? (salvando ? 'Salvando...' : 'Confirmar e Salvar Alterações') : (salvando ? 'Criando...' : 'Confirmar e Criar Escolta')}
+            {ufPendentes > 0 ? 'Conferindo a UF...' : editandoId ? (salvando ? 'Salvando...' : 'Confirmar e Salvar Alterações') : (salvando ? 'Criando...' : 'Confirmar e Criar Escolta')}
           </button>
         )}
       </div>

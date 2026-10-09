@@ -423,7 +423,7 @@ export function PainelGuiado(p: PainelGuiadoProps) {
             <Cartao key={a.id}>
               <Rotulo>Escolta Agendada</Rotulo>
               {a.cartao ? (
-                <CartaoEscolta variante="cartao" escolta={a.cartao} perfil={p.perfil} />
+                <CartaoEscolta variante="cartao" tamanho="grande" escolta={a.cartao} perfil={p.perfil} />
               ) : (
                 <>
                   <p className="font-black" style={{ fontSize: '20px', color: COR.texto }}>{a.cliente ?? 'Cliente'}</p>
@@ -596,7 +596,7 @@ export function PainelGuiado(p: PainelGuiadoProps) {
       {/* Escolta e etapa */}
       <div style={{ backgroundColor: COR.fundo, border: `1.5px solid ${COR.borda}`, borderRadius: '4px', overflow: 'hidden' }}>
         {escolta.cartao ? (
-          <CartaoEscolta variante="cartao" escolta={escolta.cartao} perfil={p.perfil} />
+          <CartaoEscolta variante="cartao" tamanho="grande" escolta={escolta.cartao} perfil={p.perfil} />
         ) : (
           <>
             <div style={{ height: '6px', backgroundColor: escolta.cor ?? COR.navy }} />

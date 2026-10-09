@@ -30,7 +30,8 @@ interface PrintData {
     // Onda K (migration 216).
     origem_uf?: string | null
     destino_uf?: string | null
-    uf_estimada?: boolean | null
+    origem_uf_estimada?: boolean | null
+    destino_uf_estimada?: boolean | null
     interestadual?: boolean | null
   }
   viaturas: Array<{
@@ -163,7 +164,7 @@ export default function EscoltaPrintPage() {
           .from('escoltas')
           .select(`id, codigo_escolta, status, data_hora_prevista, data_finalizacao,
             origem_endereco, destino_endereco, observacao_fechamento, criado_em,
-            valor_cobrado, outros_custos, origem_uf, destino_uf, uf_estimada, interestadual,
+            valor_cobrado, outros_custos, origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada, interestadual,
             cliente:clientes(nome_cliente, telefone)`)
           .eq('id', id)
           .maybeSingle()
