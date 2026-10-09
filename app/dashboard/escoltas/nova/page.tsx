@@ -185,7 +185,10 @@ function AddressAutocomplete({
   const proximidade  = useRef('-43.1729,-22.9068') // lon,lat — RJ default, atualiza via GPS
   // Escolher uma sugestão troca o texto do input, e isso reentra no efeito de busca.
   // Sem esta marca a busca dispararia de novo e reabriria a lista já fechada.
-  const puloRef      = useRef(false)
+  // Onda K: o campo que já nasce com endereço (edição) também não busca ao montar; antes,
+  // abrir a edição chamava a Mapbox com o endereço gravado e abria a lista de sugestões
+  // de origem e destino sozinha (achado no teste da K com a Mapbox respondida pelo roteiro).
+  const puloRef      = useRef(Boolean(value))
   // Sequência do ciclo de busca: resposta de ciclo antigo é descartada em vez de
   // sobrescrever o resultado do ciclo atual.
   const seqRef       = useRef(0)
