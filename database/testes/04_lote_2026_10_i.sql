@@ -495,25 +495,60 @@ BEGIN
 END $$;
 ROLLBACK;
 
--- ── Edição em agendada: duas viaturas trocam de placa entre si (índice único da 210) ──
+-- ── Edição em agendada: troca de placa é UPDATE na mesma linha (revisão I, médio 1) ──
+-- Troca simples e troca entre duas viaturas (restrição única da 210 adiada na RPC):
+-- escolta_veiculo_id, confirmado, valor pago, armamentos, combustível e ordem preservados.
 BEGIN;
 SELECT set_config('t.esc', qa.nova_escolta(now() + interval '1 day', 'agendada', 'qa_um', 2)::text, true);
 UPDATE public.escolta_veiculos SET abastecimento_litros = 30 WHERE id = pg_temp.ev(current_setting('t.esc')::uuid, 1);
+UPDATE public.escolta_efetivo SET valor_pago_vigilante = 150 WHERE escolta_id = current_setting('t.esc')::uuid;
+INSERT INTO public.escolta_armamentos (escolta_veiculo_id, tipo_id, calibre_id, quantidade)
+SELECT pg_temp.ev(current_setting('t.esc')::uuid, n), (SELECT id FROM public.dom_tipos_armamento ORDER BY id LIMIT 1),
+       (SELECT id FROM public.dom_calibres ORDER BY id LIMIT 1), n
+  FROM generate_series(1, 2) n;
 DO $$
-DECLARE e uuid := current_setting('t.esc')::uuid; ev1 uuid := pg_temp.ev(current_setting('t.esc')::uuid, 1); ev2 uuid := pg_temp.ev(current_setting('t.esc')::uuid, 2);
+DECLARE e uuid := current_setting('t.esc')::uuid; ev1 uuid := pg_temp.ev(current_setting('t.esc')::uuid, 1);
+  ev2 uuid := pg_temp.ev(current_setting('t.esc')::uuid, 2); ef uuid;
+  f1 uuid := '00000000-0000-4000-a000-0000000000f1'; f2 uuid := '00000000-0000-4000-a000-0000000000f2';
+  f3 uuid := '00000000-0000-4000-a000-0000000000f3';
+  cmd jsonb := jsonb_build_array(jsonb_build_object('vigilante_id', qa.vigilante('qa_um'), 'papel_na_escolta', 'comandante'));
 BEGIN
+  SELECT id INTO ef FROM public.escolta_efetivo WHERE escolta_id = e;
+  -- 1. Troca simples (supervisor): a viatura 1 passa da placa f1 para a f3.
+  PERFORM qa.como('qa_supervisor');
+  PERFORM public.editar_escolta(e, '{}'::jsonb, jsonb_build_array(
+    jsonb_build_object('escolta_veiculo_id', ev1, 'veiculo_id', f3, 'membros', cmd),
+    jsonb_build_object('escolta_veiculo_id', ev2, 'veiculo_id', f2, 'membros', '[]'::jsonb)), NULL);
+  PERFORM pg_temp.pg();
+  IF (SELECT veiculo_id FROM public.escolta_veiculos WHERE id = ev1) = f3
+     AND (SELECT count(*) FROM public.escolta_veiculos WHERE escolta_id = e) = 2
+     AND pg_temp.ev(e, 1) = ev1
+     AND (SELECT escolta_veiculo_id = ev1 AND confirmado AND valor_pago_vigilante = 150 FROM public.escolta_efetivo WHERE id = ef)
+     AND (SELECT abastecimento_litros FROM public.escolta_veiculos WHERE id = ev1) = 30
+     AND (SELECT quantidade FROM public.escolta_armamentos WHERE escolta_veiculo_id = ev1) = 1 THEN
+    RAISE NOTICE 'PASSOU: troca simples de placa é UPDATE na mesma linha: mesmo escolta_veiculo_id e ordem, comandante confirmado com valor pago 150, armamento e combustível preservados';
+  ELSE RAISE NOTICE 'FALHOU: troca simples de placa'; END IF;
+  -- 2. Troca entre as duas viaturas (gestor): f3 e f2 trocam de lugar sem apagar linha.
   PERFORM qa.como('qa_gestor');
   PERFORM public.editar_escolta(e, '{}'::jsonb, jsonb_build_array(
-    jsonb_build_object('escolta_veiculo_id', ev1, 'veiculo_id', '00000000-0000-4000-a000-0000000000f2',
-      'membros', jsonb_build_array(jsonb_build_object('vigilante_id', qa.vigilante('qa_um'), 'papel_na_escolta', 'comandante'))),
-    jsonb_build_object('escolta_veiculo_id', ev2, 'veiculo_id', '00000000-0000-4000-a000-0000000000f1', 'membros', '[]'::jsonb)), NULL);
+    jsonb_build_object('escolta_veiculo_id', ev1, 'veiculo_id', f2, 'membros', cmd),
+    jsonb_build_object('escolta_veiculo_id', ev2, 'veiculo_id', f3, 'membros', '[]'::jsonb)), NULL);
   PERFORM pg_temp.pg();
-  IF (SELECT ev.veiculo_id FROM public.escolta_efetivo ee JOIN public.escolta_veiculos ev ON ev.id = ee.escolta_veiculo_id
-       WHERE ee.escolta_id = e AND ee.vigilante_id = qa.vigilante('qa_um')) = '00000000-0000-4000-a000-0000000000f2'
-     AND (SELECT abastecimento_litros FROM public.escolta_veiculos WHERE escolta_id = e AND veiculo_id = '00000000-0000-4000-a000-0000000000f2') = 30
-     AND (SELECT count(*) FROM public.escolta_veiculos WHERE escolta_id = e) = 2 THEN
-    RAISE NOTICE 'PASSOU: duas viaturas sem registro trocam de placa entre si; a equipe acompanha a viatura e o combustível vai junto';
+  IF (SELECT veiculo_id FROM public.escolta_veiculos WHERE id = ev1) = f2
+     AND (SELECT veiculo_id FROM public.escolta_veiculos WHERE id = ev2) = f3
+     AND pg_temp.ev(e, 1) = ev1 AND pg_temp.ev(e, 2) = ev2
+     AND (SELECT escolta_veiculo_id = ev1 AND confirmado AND valor_pago_vigilante = 150 FROM public.escolta_efetivo WHERE id = ef)
+     AND (SELECT abastecimento_litros FROM public.escolta_veiculos WHERE id = ev1) = 30
+     AND (SELECT quantidade FROM public.escolta_armamentos WHERE escolta_veiculo_id = ev1) = 1
+     AND (SELECT quantidade FROM public.escolta_armamentos WHERE escolta_veiculo_id = ev2) = 2 THEN
+    RAISE NOTICE 'PASSOU: duas viaturas trocam de placa entre si (restrição da 210 adiada): ids, ordem, confirmado, valor pago, armamentos e combustível preservados';
   ELSE RAISE NOTICE 'FALHOU: troca de placas entre viaturas'; END IF;
+  -- 3. Fora da RPC, a restrição continua valendo na hora: placa repetida é recusada.
+  BEGIN
+    UPDATE public.escolta_veiculos SET veiculo_id = f3 WHERE id = ev1;
+    RAISE NOTICE 'FALHOU: placa repetida aceita fora da RPC';
+  EXCEPTION WHEN unique_violation THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: fora da editar_escolta a placa repetida na escolta é recusada na hora (restrição INITIALLY IMMEDIATE)';
+  END;
 END $$;
 ROLLBACK;
 
@@ -571,8 +606,8 @@ BEGIN
      AND (SELECT count(*) FROM public.logs_auditoria WHERE registro_id = e AND acao IN ('ARQUIVAR_ESCOLTA', 'RECUPERAR_ESCOLTA')) = 2
      AND (SELECT count(*) FROM public.notificacoes n JOIN public.dom_tipos_evento t ON t.id = n.tipo_evento_id
            WHERE n.escolta_id = e AND t.codigo IN ('arquivamento_escolta', 'recuperacao_escolta')) >= 2
-     AND (SELECT count(*) FROM public.escolta_status_historico WHERE escolta_id = e AND via_rpc) = 2 THEN
-    RAISE NOTICE 'PASSOU: administrador recupera; volta agendada, versao_gestao 2, auditoria, histórico via_rpc e avisos das duas ações';
+     AND NOT EXISTS (SELECT 1 FROM public.escolta_status_historico WHERE escolta_id = e AND status_anterior = status_novo) THEN
+    RAISE NOTICE 'PASSOU: administrador recupera; volta agendada, versao_gestao 2, auditoria e avisos das duas ações; nenhuma linha de histórico de X para X (a âncora não se desloca)';
   ELSE RAISE NOTICE 'FALHOU: recuperação'; END IF;
   IF NOT public.avisos_pelo_banco_ativos()
      OR (SELECT count(*) FROM public.avisos_telegram WHERE escolta_id = e AND evento_chave LIKE 'gestao:%' AND destino = 'central') = 2 THEN
@@ -619,11 +654,11 @@ BEGIN
   ELSE RAISE NOTICE 'FALHOU: prévia %', pv; END IF;
   PERFORM qa.como('qa_gestor');
   BEGIN
-    PERFORM public.voltar_etapa_escolta(e, 'curto', false);
+    PERFORM public.voltar_etapa_escolta(e, 'curto', false, public.voltar_etapa_escolta(e, NULL, true) -> 'resumo');
     RAISE NOTICE 'FALHOU: volta sem motivo';
   EXCEPTION WHEN raise_exception THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: voltar etapa exige motivo de 10 caracteres';
   END;
-  r := public.voltar_etapa_escolta(e, 'Foto do destino saiu errada, refazer', false);
+  r := public.voltar_etapa_escolta(e, 'Foto do destino saiu errada, refazer', false, public.voltar_etapa_escolta(e, NULL, true) -> 'resumo');
   PERFORM pg_temp.pg();
   IF (SELECT status FROM public.escoltas WHERE id = e) = 'em_transito_destino'
      AND (SELECT count(*) FROM public.pontos_controle pc JOIN public.escolta_veiculos ev ON ev.id = pc.escolta_veiculo_id
@@ -656,7 +691,7 @@ DO $$
 DECLARE e uuid := current_setting('t.esc')::uuid; r jsonb; v_res record;
 BEGIN
   PERFORM qa.como('qa_administrador');
-  r := public.voltar_etapa_escolta(e, 'Checklist feito na viatura errada', false);
+  r := public.voltar_etapa_escolta(e, 'Checklist feito na viatura errada', false, public.voltar_etapa_escolta(e, NULL, true) -> 'resumo');
   PERFORM pg_temp.pg();
   SELECT (SELECT count(*) FROM public.checklists c JOIN public.escolta_veiculos ev ON ev.id = c.escolta_veiculo_id WHERE ev.escolta_id = e AND c.anulado_em IS NOT NULL) AS ck,
          (SELECT count(*) FROM public.pontos_controle pc JOIN public.escolta_veiculos ev ON ev.id = pc.escolta_veiculo_id WHERE ev.escolta_id = e AND pc.anulado_em IS NOT NULL) AS pt,
@@ -689,7 +724,7 @@ DO $$
 DECLARE e uuid := current_setting('t.esc')::uuid; v_res record;
 BEGIN
   PERFORM qa.como('qa_gestor');
-  PERFORM public.voltar_etapa_escolta(e, 'Relatório final saiu incompleto', false);
+  PERFORM public.voltar_etapa_escolta(e, 'Relatório final saiu incompleto', false, public.voltar_etapa_escolta(e, NULL, true) -> 'resumo');
   PERFORM pg_temp.pg();
   SELECT (SELECT count(*) FROM public.checklists c JOIN public.escolta_veiculos ev ON ev.id = c.escolta_veiculo_id
            WHERE ev.escolta_id = e AND c.anulado_em IS NULL) AS validos,
@@ -731,7 +766,7 @@ BEGIN
     PERFORM set_config('t.x', qa.nova_escolta(now() + interval '1 day', s, NULL, 1)::text, true);
     PERFORM qa.como('qa_gestor');
     BEGIN
-      PERFORM public.voltar_etapa_escolta(current_setting('t.x')::uuid, 'voltar sem etapa anterior', false);
+      PERFORM public.voltar_etapa_escolta(current_setting('t.x')::uuid, 'voltar sem etapa anterior', false, public.voltar_etapa_escolta(current_setting('t.x')::uuid, NULL, true) -> 'resumo');
       RAISE NOTICE 'FALHOU: voltou de %', s;
     EXCEPTION WHEN raise_exception THEN v_ok := v_ok + 1;
     END;
@@ -775,7 +810,7 @@ DO $$
 DECLARE e uuid := current_setting('t.esc')::uuid; r jsonb;
 BEGIN
   PERFORM qa.como('qa_gestor');
-  r := public.voltar_etapa_escolta(e, 'Pulou a etapa de trânsito no fluxo antigo', false);
+  r := public.voltar_etapa_escolta(e, 'Pulou a etapa de trânsito no fluxo antigo', false, public.voltar_etapa_escolta(e, NULL, true) -> 'resumo');
   PERFORM pg_temp.pg();
   IF r ->> 'para' = 'em_transito_destino' THEN
     PERFORM qa.como('qa_um');
@@ -798,11 +833,186 @@ VALUES (current_setting('t.esc')::uuid, pg_temp.ev(current_setting('t.esc')::uui
 SELECT qa.como('qa_gestor');
 DO $$
 BEGIN
-  PERFORM public.zerar_escolta(current_setting('t.esc')::uuid, 'zerar com emergência aberta', false);
+  PERFORM public.zerar_escolta(current_setting('t.esc')::uuid, 'zerar com emergência aberta', false, public.zerar_escolta(current_setting('t.esc')::uuid, NULL, true) -> 'resumo');
   RAISE NOTICE 'FALHOU: zerou com emergência aberta';
 EXCEPTION WHEN raise_exception THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: com emergência aberta, voltar e zerar são recusados (%)', SQLERRM;
 END $$;
 SELECT pg_temp.pg();
+ROLLBACK;
+
+-- Emergência aberta impede concluir e arquivar (revisão I, médio 3).
+BEGIN;
+SELECT set_config('t.esc', qa.nova_escolta(now(), 'agendada', 'qa_um', 1)::text, true);
+SELECT pg_temp.jornada(current_setting('t.esc')::uuid, 'em_transito_destino');
+INSERT INTO public.emergencias (escolta_id, escolta_veiculo_id, acionado_por, data_hora, sem_sinal_gps)
+VALUES (current_setting('t.esc')::uuid, pg_temp.ev(current_setting('t.esc')::uuid, 1), qa.usuario('qa_um'), now(), true);
+SELECT set_config('t.ag', qa.nova_escolta(now() + interval '1 day', 'agendada', 'qa_dois', 1)::text, true);
+INSERT INTO public.emergencias (escolta_id, escolta_veiculo_id, acionado_por, data_hora, sem_sinal_gps, status)
+VALUES (current_setting('t.ag')::uuid, pg_temp.ev(current_setting('t.ag')::uuid, 1), qa.usuario('qa_dois'), now(), true, 'em_atendimento');
+SELECT qa.como('qa_gestor');
+DO $$
+BEGIN
+  BEGIN
+    PERFORM public.concluir_escolta_antecipada(current_setting('t.esc')::uuid, 'concluir com emergência aberta');
+    RAISE NOTICE 'FALHOU: concluiu com emergência aberta';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM LIKE '%encerre a emergência antes%' THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: com emergência aberta, concluir é recusado (%)', SQLERRM;
+    ELSE RAISE NOTICE 'FALHOU: concluir recusado por outro motivo: %', SQLERRM; END IF;
+  END;
+  BEGIN
+    PERFORM public.arquivar_escolta(current_setting('t.ag')::uuid, 'arquivar com emergência em atendimento');
+    RAISE NOTICE 'FALHOU: arquivou com emergência aberta';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM LIKE '%encerre a emergência antes%' THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: com emergência em atendimento, arquivar é recusado (%)', SQLERRM;
+    ELSE RAISE NOTICE 'FALHOU: arquivar recusado por outro motivo: %', SQLERRM; END IF;
+  END;
+END $$;
+SELECT pg_temp.pg();
+DO $$
+BEGIN
+  IF (SELECT status FROM public.escoltas WHERE id = current_setting('t.esc')::uuid) = 'em_transito_destino'
+     AND (SELECT arquivada_em IS NULL FROM public.escoltas WHERE id = current_setting('t.ag')::uuid) THEN
+    RAISE NOTICE 'PASSOU: depois das recusas, a escolta continua em trânsito e a agendada continua visível (emergência segue no Painel)';
+  ELSE RAISE NOTICE 'FALHOU: recusa mudou a escolta'; END IF;
+END $$;
+ROLLBACK;
+
+-- Confirmação com o resumo da prévia (revisão I, menor 10).
+BEGIN;
+SELECT set_config('t.esc', qa.nova_escolta(now(), 'agendada', 'qa_um', 1)::text, true);
+SELECT pg_temp.jornada(current_setting('t.esc')::uuid, 'no_destino');
+DO $$
+DECLARE e uuid := current_setting('t.esc')::uuid; pv jsonb; pv2 jsonb; r jsonb;
+BEGIN
+  PERFORM qa.como('qa_gestor');
+  pv := public.voltar_etapa_escolta(e, NULL, true);
+  BEGIN
+    PERFORM public.voltar_etapa_escolta(e, 'confirmação sem o resumo da prévia', false);
+    RAISE NOTICE 'FALHOU: confirmou sem resumo';
+  EXCEPTION WHEN raise_exception THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: confirmação sem o resumo da prévia (%)', SQLERRM;
+  END;
+  -- O operador registra uma ocorrência entre a prévia e a confirmação.
+  PERFORM pg_temp.pg();
+  PERFORM qa.como('qa_um');
+  INSERT INTO public.ocorrencias (escolta_id, tipo_ocorrencia_id, descricao, data_hora, registrado_por)
+  VALUES (e, (SELECT id FROM public.dom_tipos_ocorrencia LIMIT 1), 'ocorrência entre a prévia e a confirmação', now(), qa.usuario('qa_um'));
+  PERFORM pg_temp.pg();
+  PERFORM qa.como('qa_gestor');
+  BEGIN
+    PERFORM public.voltar_etapa_escolta(e, 'confirmação com prévia antiga', false, pv -> 'resumo');
+    RAISE NOTICE 'FALHOU: confirmou com prévia antiga';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM LIKE 'A escolta mudou desde a prévia%' THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: a escolta mudou desde a prévia (registro novo): %', SQLERRM;
+    ELSE RAISE NOTICE 'FALHOU: recusa por outro motivo: %', SQLERRM; END IF;
+  END;
+  pv2 := public.voltar_etapa_escolta(e, NULL, true);
+  r := public.voltar_etapa_escolta(e, 'Confirmação com a prévia nova e a ocorrência', false, pv2 -> 'resumo');
+  PERFORM pg_temp.pg();
+  IF (pv2 ->> 'total')::int = (pv ->> 'total')::int + 1 AND (r ->> 'anulados')::int = (pv2 ->> 'total')::int
+     AND (pv -> 'resumo' ->> 'hash') <> (pv2 -> 'resumo' ->> 'hash')
+     AND (SELECT status FROM public.escoltas WHERE id = e) = 'em_transito_destino' THEN
+    RAISE NOTICE 'PASSOU: com a prévia nova (versão, status, total e hash dos ids), a confirmação anula exatamente o que a gestão viu (% itens)', r ->> 'anulados';
+  ELSE RAISE NOTICE 'FALHOU: confirmação com prévia nova % %', pv2 -> 'resumo', r; END IF;
+END $$;
+ROLLBACK;
+
+-- Volta de finalizada concluída em agendada recebe o tratamento do zerar (revisão I, menor
+-- 6); devolver a escolta ao mural não apaga a presença anulada (menor 7).
+BEGIN;
+SELECT set_config('t.esc', qa.nova_escolta(now() + interval '20 min', 'agendada', 'qa_um', 1)::text, true);
+SELECT qa.como('qa_um');
+SELECT public.confirmar_presenca_base(current_setting('t.esc')::uuid);
+SELECT pg_temp.pg();
+DO $$
+DECLARE e uuid := current_setting('t.esc')::uuid; r jsonb; pv jsonb;
+BEGIN
+  PERFORM qa.como('qa_gestor');
+  r := public.concluir_escolta_antecipada(e, 'Cliente desistiu, fechar a agendada');
+  pv := public.voltar_etapa_escolta(e, NULL, true);
+  r := public.voltar_etapa_escolta(e, 'Cliente voltou atrás, reabrir a escolta', false, pv -> 'resumo');
+  PERFORM pg_temp.pg();
+  IF pv ->> 'destino' = 'agendada' AND pv ->> 'tipo' = 'zerar'
+     AND (SELECT status = 'agendada' AND reiniciada_em IS NOT NULL AND data_finalizacao IS NULL FROM public.escoltas WHERE id = e)
+     AND (SELECT anulado_em IS NOT NULL FROM public.mural_presencas WHERE escolta_id = e)
+     AND NOT EXISTS (SELECT 1 FROM public.escolta_conclusoes_antecipadas WHERE escolta_id = e AND anulado_em IS NULL) THEN
+    RAISE NOTICE 'PASSOU: volta de finalizada concluída em agendada vai a agendada com o tratamento do zerar (presença do mural anulada, reiniciada_em, conclusão anulada)';
+  ELSE RAISE NOTICE 'FALHOU: volta para agendada sem o tratamento do zerar % %', pv, r; END IF;
+  PERFORM qa.como('qa_um');
+  PERFORM public.devolver_escolta(e);
+  PERFORM pg_temp.pg();
+  IF (SELECT count(*) FROM public.mural_presencas WHERE escolta_id = e AND anulado_em IS NOT NULL) = 1
+     AND NOT EXISTS (SELECT 1 FROM public.escolta_efetivo WHERE escolta_id = e) THEN
+    RAISE NOTICE 'PASSOU: comandante devolve a escolta ao mural e a presença anulada continua guardada (só as válidas saem)';
+  ELSE RAISE NOTICE 'FALHOU: devolver apagou a presença anulada'; END IF;
+END $$;
+ROLLBACK;
+
+-- Nada é apagado (revisão I, médio 2): linha anulada e viatura com registro de campo,
+-- para supervisor, central, gestor e administrador, pela API (identidade de cada um).
+BEGIN;
+SELECT set_config('t.esc', qa.nova_escolta(now(), 'agendada', 'qa_um', 2)::text, true);
+SELECT pg_temp.jornada(current_setting('t.esc')::uuid, 'na_origem');
+SELECT qa.como('qa_gestor');
+SELECT public.zerar_escolta(current_setting('t.esc')::uuid, 'Zerar para o teste de apagar', false,
+                            public.zerar_escolta(current_setting('t.esc')::uuid, NULL, true) -> 'resumo') IS NOT NULL;
+SELECT pg_temp.pg();
+DO $$
+DECLARE e uuid := current_setting('t.esc')::uuid; n0 int; l text; v_ck uuid; v_pc uuid; v_hi uuid; v_ok int := 0; v_msgs text := '';
+  v_ant int := 0; v_por text := '';
+BEGIN
+  n0 := pg_temp.contar(e, false);
+  SELECT c.id INTO v_ck FROM public.checklists c JOIN public.escolta_veiculos ev ON ev.id = c.escolta_veiculo_id
+   WHERE ev.escolta_id = e AND c.anulado_em IS NOT NULL LIMIT 1;
+  SELECT pc.id INTO v_pc FROM public.pontos_controle pc JOIN public.escolta_veiculos ev ON ev.id = pc.escolta_veiculo_id
+   WHERE ev.escolta_id = e AND pc.anulado_em IS NOT NULL LIMIT 1;
+  SELECT id INTO v_hi FROM public.escolta_status_historico WHERE escolta_id = e AND anulado_em IS NOT NULL LIMIT 1;
+  FOREACH l IN ARRAY ARRAY['qa_supervisor', 'qa_central', 'qa_gestor', 'qa_administrador'] LOOP
+    PERFORM qa.como(l);
+    BEGIN DELETE FROM public.checklists WHERE id = v_ck;
+    EXCEPTION WHEN insufficient_privilege THEN v_ok := v_ok + 1; v_msgs := SQLERRM; END;
+    BEGIN DELETE FROM public.pontos_controle WHERE id = v_pc;
+    EXCEPTION WHEN insufficient_privilege THEN v_ok := v_ok + 1; END;
+    BEGIN DELETE FROM public.escolta_status_historico WHERE id = v_hi;
+    EXCEPTION WHEN insufficient_privilege THEN v_ok := v_ok + 1; END;
+    BEGIN DELETE FROM public.mural_presencas WHERE escolta_id = e AND anulado_em IS NOT NULL;
+    EXCEPTION WHEN insufficient_privilege THEN v_ok := v_ok + 1; END;
+    -- A escolta voltou a agendada: sem esta trava, apagar a viatura levaria tudo em cascata.
+    BEGIN DELETE FROM public.escolta_veiculos WHERE escolta_id = e;
+    EXCEPTION WHEN insufficient_privilege THEN v_ok := v_ok + 1; END;
+    PERFORM pg_temp.pg();
+    v_por := v_por || ' ' || replace(l, 'qa_', '') || '=' || (v_ok - v_ant);
+    v_ant := v_ok;
+  END LOOP;
+  IF pg_temp.contar(e, false) = n0 AND (SELECT count(*) FROM public.escolta_veiculos WHERE escolta_id = e) = 2
+     AND EXISTS (SELECT 1 FROM public.checklists WHERE id = v_ck) AND EXISTS (SELECT 1 FROM public.pontos_controle WHERE id = v_pc) THEN
+    RAISE NOTICE 'BLOQUEADO CORRETAMENTE: supervisor, central, gestor e administrador não apagam checklist, ponto, histórico e presença anulados nem a viatura da escolta zerada (recusas pela trava:%; % linhas intactas): %', v_por, n0, v_msgs;
+  ELSE RAISE NOTICE 'FALHOU: algo foi apagado (% recusas, % de % linhas)', v_ok, pg_temp.contar(e, false), n0; END IF;
+END $$;
+ROLLBACK;
+
+-- Ponto gravado não muda de autor nem de horário (revisão I, menor 8).
+BEGIN;
+SELECT set_config('t.esc', qa.nova_escolta(now(), 'agendada', 'qa_um', 1)::text, true);
+SELECT qa.como('qa_um');
+SELECT pg_temp.jornada(current_setting('t.esc')::uuid, 'na_origem');
+SELECT pg_temp.pg();
+DO $$
+DECLARE e uuid := current_setting('t.esc')::uuid; v_pc uuid; l text; v_ok int := 0; v_msg text;
+BEGIN
+  SELECT pc.id INTO v_pc FROM public.pontos_controle pc JOIN public.escolta_veiculos ev ON ev.id = pc.escolta_veiculo_id
+   WHERE ev.escolta_id = e LIMIT 1;
+  FOREACH l IN ARRAY ARRAY['qa_supervisor', 'qa_gestor'] LOOP
+    PERFORM qa.como(l);
+    BEGIN UPDATE public.pontos_controle SET lancado_por = qa.usuario('qa_dois') WHERE id = v_pc;
+    EXCEPTION WHEN insufficient_privilege THEN v_ok := v_ok + 1; v_msg := SQLERRM; END;
+    BEGIN UPDATE public.pontos_controle SET data_hora = data_hora - interval '5 days' WHERE id = v_pc;
+    EXCEPTION WHEN insufficient_privilege THEN v_ok := v_ok + 1; END;
+    PERFORM pg_temp.pg();
+  END LOOP;
+  IF v_ok = 4 AND (SELECT lancado_por = qa.usuario('qa_um') AND data_hora > now() - interval '1 hour' FROM public.pontos_controle WHERE id = v_pc) THEN
+    RAISE NOTICE 'BLOQUEADO CORRETAMENTE: supervisor e gestor não mudam lancado_por nem data_hora de ponto gravado (%)', v_msg;
+  ELSE RAISE NOTICE 'FALHOU: ponto mudou de autor ou de horário (% recusas)', v_ok; END IF;
+END $$;
 ROLLBACK;
 
 -- ── Concluir com pendências; voltar dela vai ao status em que estava ────────────────
@@ -832,19 +1042,21 @@ BEGIN
   IF n = (SELECT count(*) FROM jsonb_array_elements(v_c.pendencias) et, jsonb_array_elements(et -> 'viaturas') vt, jsonb_array_elements(vt -> 'faltando')) AND n >= 9 THEN
     RAISE NOTICE 'PASSOU: vw_pendencias_conclusao com uma linha por item (% itens)', n;
   ELSE RAISE NOTICE 'FALHOU: view com % linhas', n; END IF;
-  -- Leitura: o efetivo lê a da própria escolta; central não lê; supervisor lê.
+  -- Leitura: o efetivo lê a da própria escolta; a central também (quem vê a escolta vê a lista).
   PERFORM qa.como('qa_um');
   SELECT count(*) INTO n FROM public.escolta_conclusoes_antecipadas WHERE escolta_id = e;
   PERFORM pg_temp.pg();
   IF n = 1 THEN
     PERFORM qa.como('qa_central');
     SELECT count(*) INTO n FROM public.escolta_conclusoes_antecipadas WHERE escolta_id = e;
+    SELECT n * 1000 + count(*) INTO n FROM public.vw_pendencias_conclusao WHERE escolta_id = e;
     PERFORM pg_temp.pg();
-    IF n = 0 THEN RAISE NOTICE 'PASSOU: o efetivo lê a conclusão da própria escolta; a central não (supervisor ou acima)'; END IF;
+    IF n >= 1009 THEN RAISE NOTICE 'PASSOU: o efetivo lê a conclusão da própria escolta; a central lê a conclusão e a lista da view (adendo 4.3.6)';
+    ELSE RAISE NOTICE 'FALHOU: leitura da central %', n; END IF;
   ELSE RAISE NOTICE 'FALHOU: efetivo não leu a conclusão'; END IF;
   -- Voltar: vai ao status em que ela estava e anula a linha de pendências.
   PERFORM qa.como('qa_gestor');
-  r := public.voltar_etapa_escolta(e, 'Conclusão feita antes da hora', false);
+  r := public.voltar_etapa_escolta(e, 'Conclusão feita antes da hora', false, public.voltar_etapa_escolta(e, NULL, true) -> 'resumo');
   PERFORM pg_temp.pg();
   IF r ->> 'para' = 'em_transito_destino' AND (SELECT status FROM public.escoltas WHERE id = e) = 'em_transito_destino'
      AND NOT EXISTS (SELECT 1 FROM public.escolta_conclusoes_antecipadas WHERE escolta_id = e AND anulado_em IS NULL)
@@ -885,7 +1097,7 @@ BEGIN
   SELECT string_agg(vigilante_id::text, ',' ORDER BY vigilante_id) INTO ef0 FROM public.escolta_efetivo WHERE escolta_id = e;
   SELECT string_agg(id::text, ',' ORDER BY id) INTO vt0 FROM public.escolta_veiculos WHERE escolta_id = e;
   PERFORM qa.como('qa_gestor');
-  r := public.zerar_escolta(e, 'Escolta reiniciada: cliente remarcou a saída', false);
+  r := public.zerar_escolta(e, 'Escolta reiniciada: cliente remarcou a saída', false, public.zerar_escolta(e, NULL, true) -> 'resumo');
   PERFORM pg_temp.pg();
   IF (SELECT status FROM public.escoltas WHERE id = e) = 'agendada'
      AND pg_temp.contar(e, false) = n0 + 1
@@ -980,7 +1192,7 @@ BEGIN;
 SELECT set_config('t.esc', qa.nova_escolta(now(), 'agendada', 'qa_um', 1)::text, true);
 SELECT pg_temp.jornada(current_setting('t.esc')::uuid, 'na_origem');
 SELECT qa.como('qa_gestor');
-SELECT public.voltar_etapa_escolta(current_setting('t.esc')::uuid, 'teste da chave estrangeira', false) IS NOT NULL;
+SELECT public.voltar_etapa_escolta(current_setting('t.esc')::uuid, 'teste da chave estrangeira', false, public.voltar_etapa_escolta(current_setting('t.esc')::uuid, NULL, true) -> 'resumo') IS NOT NULL;
 SELECT pg_temp.pg();
 DO $$
 BEGIN

@@ -39,7 +39,7 @@ BEGIN
   PERFORM public.assumir_escolta(current_setting('t.esc')::uuid, '{}', NULL, 'a equipe escalada nao apareceu na base');
   RAISE NOTICE 'FALHOU: assumiu com presenca confirmada';
 EXCEPTION WHEN raise_exception THEN
-  IF SQLERRM LIKE '%confirmou presenca%' THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: presenca confirmada';
+  IF SQLERRM LIKE '%confirmou presença%' THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: presenca confirmada';
   ELSE RAISE NOTICE 'FALHOU: erro inesperado %', SQLERRM; END IF;
 END $$;
 ROLLBACK;

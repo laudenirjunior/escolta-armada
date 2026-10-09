@@ -127,7 +127,7 @@ BEGIN
   PERFORM public.incluir_vigilante_na_minha_escolta(current_setting('t.e')::uuid, qa.vigilante('qa_dois'));
   RAISE NOTICE 'FALHOU: vigilante já presente incluído de novo';
 EXCEPTION WHEN raise_exception THEN
-  IF SQLERRM = 'Este vigilante ja esta na escolta.' THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: incluir vigilante já presente';
+  IF SQLERRM = 'Este vigilante já está na escolta.' THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: incluir vigilante já presente';
   ELSE RAISE NOTICE 'FALHOU: mensagem inesperada %', SQLERRM; END IF;
 WHEN others THEN RAISE NOTICE 'FALHOU: erro cru %', SQLERRM;
 END $$;
