@@ -415,18 +415,45 @@ A emergência **nunca é bloqueada por falta de GPS**: é um toque, e a central 
 
 `[PRINT P35]`
 
-## B9. Sem internet (outubro de 2026, em implantação)
+## B9. Sem internet (outubro de 2026)
 
-Quando o aparelho perde a conexão, aparece no topo uma **faixa vermelha fixa**: "Sem conexão." e, se houver, quantos registros estão guardados no aparelho. Com a conexão de volta, a faixa fica âmbar enquanto os registros guardados sobem e **some quando tudo foi enviado**. O Painel mostra o mesmo contador e, se for o caso, "N registros não aceitos; a supervisão foi avisada".
+Quando o aparelho perde a conexão, aparece no topo uma **faixa vermelha fixa**: "Sem conexão." e, se houver, quantos registros estão guardados no aparelho. Com a conexão de volta, a faixa fica âmbar enquanto os registros guardados sobem e **some quando tudo foi enviado**. O Painel mostra o mesmo contador.
 
-- O **Campo** e o **Painel** abrem sem internet, desde que você já tenha entrado com internet neste aparelho (o primeiro login sempre exige internet). Outras telas mostram "Esta tela precisa de internet. Volte ao Painel".
-- Ao **sair do sistema** com registros guardados, o aplicativo avisa: eles ficam no aparelho e só sobem quando você entrar de novo, neste aparelho, com internet.
+**O que dá para fazer sem internet** (pelo Campo, pelo Painel Guiado e pela tela da escolta): pré-início e o checklist de partida (wizard, com o KM e as fotos de cada viatura), saída da base, as etapas até a chegada na base com o KM final, check-in, parada, ocorrência, checklist do Campo, "Estou na base" e emergência. Cada registro guarda a hora e o GPS do momento da ação. **Exigem internet:** criar e editar escolta, ações da gestão, a finalização (checklist de entrega e relatório final), a tela de conflitos e o login.
+
+**Como fica a confirmação:** sem sinal, a tela diz **"Guardado no aparelho. Será enviado quando houver sinal."** e nunca "a central foi avisada". A tela já mostra a etapa seguinte (o registro guardado conta). Quando o sinal volta, os registros sobem sozinhos, **na ordem em que foram feitos** (a emergência primeiro), uma vez só. O Telegram de cada registro sai nessa hora e, se a diferença passar de 2 minutos, diz "Registrado às HH:MM sem conexão, enviado às HH:MM (Brasília)". Fotos já enviadas aparecem como "Foto indisponível sem conexão"; as guardadas aparecem a partir do próprio aparelho.
+
+**Emergência sem internet:** a emergência fica guardada e é a primeira a subir quando o sinal voltar, mas **até lá ninguém foi avisado**. A tela fica vermelha com "SEM CONEXÃO: NINGUÉM FOI AVISADO. Use o rádio ou ligue para a central agora" e o botão **Ligar para a central** (o número cadastrado em Configurações; sem número, só o texto). Use o rádio ou o telefone na hora.
+
+**Registro não aceito (conflito):** se a escolta mudou enquanto você estava sem sinal (a gestão zerou, arquivou, concluiu ou voltou a etapa, outra viatura já registrou a mesma etapa, você saiu da equipe), o registro **não é aplicado e não se perde**: fica guardado no servidor com tudo o que você registrou, inclusive as fotos, e a supervisão é avisada. O Painel mostra "N registros não aceitos; a supervisão foi avisada". Não há como apagar.
+
+**Registro recusado:** registro de escolta com a qual você não tem vínculo nenhum é recusado pelo servidor e fica em **"Registros recusados"** no Painel, só no aparelho. Avise a central.
+
+**Para a supervisão (supervisor, gestor e administrador): Conflitos de campo.** No menu Gestão, **Conflitos de campo** lista os registros não aplicados, com o motivo, a hora no aparelho e a hora do recebimento (Brasília), o conteúdo completo e as fotos. **Marcar como tratado** pede justificativa (pelo menos 10 caracteres) e não grava o registro na escolta nem apaga nada. A Central recebe o aviso "Registro sem conexão em conflito" (até 5 por pessoa a cada 10 minutos; os demais ficam só na tela) e "EMERGÊNCIA não aceita" quando for o caso.
+
+**Limitações (leia antes de depender do modo sem internet):**
+
+- O **Campo**, o **Painel** e a **tela das escoltas que aparecem no seu Campo** abrem sem internet, desde que você já tenha entrado com internet neste aparelho (o primeiro login sempre exige internet). Outras telas mostram "Esta tela precisa de internet. Volte ao Painel".
 - **iPhone:** o envio só acontece com o aplicativo aberto (o Safari não envia em segundo plano). **Instale o aplicativo na tela de início**: sem isso, o iPhone pode apagar os dados guardados depois de alguns dias sem uso.
 - Registro que ainda está **só no aparelho se perde** se o aparelho for perdido, quebrado ou limpo antes do envio. Procure sinal assim que puder.
-- A hora gravada é a do **relógio do aparelho** no momento da ação; o servidor guarda também a hora em que recebeu.
-- **Teste em aparelho real** (Android e iPhone) é obrigatório antes de depender do modo sem internet.
+- A hora gravada é a do **relógio do aparelho** no momento da ação; o servidor guarda também a hora em que recebeu. Relógio errado no aparelho dá hora errada no registro.
+- As fotos são guardadas inteiras; se o espaço do aparelho acabar, a câmera avisa e não deixa tirar a foto até liberar espaço ou enviar o que está guardado.
+- Sem internet, o endereço por extenso do check-in e da parada não é buscado (fica só a coordenada).
+- Ao **sair do sistema** com registros guardados, o aplicativo avisa: eles ficam no aparelho e só sobem quando você entrar de novo, neste aparelho, com internet.
+- A chave de liga e desliga é da administração (`offline_ligado`); desligada, o aplicativo grava direto, como antes, e continua enviando o que já estava guardado.
 
-A gravação dos registros sem internet pelo Campo e pela tela da escolta, a tela de conflitos da supervisão e a emergência sem conexão entram na segunda parte desta entrega; este trecho será completado com elas.
+**Roteiro do teste em aparelho real (obrigatório antes de depender do modo sem internet; um Android e um iPhone, com o aplicativo instalado na tela de início):**
+
+1. Com internet, entrar com um operador de teste, abrir o Campo e esperar a tela carregar; abrir uma vez o Painel.
+2. Pôr o aparelho em modo avião. Fechar o aplicativo e abrir de novo: o Campo deve abrir com a faixa "Sem conexão.".
+3. Pelo Painel, abrir a escolta de teste e fazer o pré-início e o checklist de partida com fotos; registrar a chegada na origem; fazer um check-in e uma parada; registrar uma ocorrência.
+4. Conferir a faixa e o contador ("N registros guardados no aparelho") e que a tela mostra a etapa seguinte.
+5. Esperar pelo menos 3 minutos, desligar o modo avião e manter o aplicativo aberto: o contador deve zerar; conferir na tela da escolta (de outro aparelho com internet) que cada registro apareceu uma vez, com a hora da ação, e o Telegram com "Registrado às ... sem conexão, enviado às ...".
+6. Repetir no iPhone com o aplicativo fechado durante a volta do sinal: o envio só deve acontecer ao abrir o aplicativo.
+7. Emergência de teste sem sinal (combinada com a central): conferir a tela vermelha e o botão de ligar; ao voltar o sinal, a emergência deve ser a primeira a chegar.
+8. Anotar modelo do aparelho, versão do sistema, tempo até o envio e qualquer diferença, e registrar no relatório de prontidão.
+
+`[PRINT P36]` faixa sem conexão e contador; `[PRINT P37]` emergência sem conexão; `[PRINT P38]` Conflitos de campo.
 
 ---
 
@@ -459,7 +486,7 @@ Rascunho, Agendada, Pré-Início, Em Andamento, Na Origem, Trânsito p/ Destino,
 
 ## Anexo 3: O que o sistema não faz
 
-- **Sem internet, só o essencial.** O Campo e o Painel abrem sem conexão (seção B9); criar e editar escolta, ações da gestão, finalização e login exigem internet.
+- **Sem internet, só o essencial.** O Campo, o Painel e a tela das escoltas do operador abrem e registram sem conexão (seção B9); criar e editar escolta, ações da gestão, finalização, a tela de conflitos e login exigem internet.
 - **Não substitui o rádio.**
 - **Não rastreia continuamente.** A posição é gravada nos pontos, check-ins e paradas.
 - **Não há cadastro de equipamentos/ferramentas.** Arma vai em Armamentos; colete, rádio e lanterna são itens de checklist conferidos no pré-início.
