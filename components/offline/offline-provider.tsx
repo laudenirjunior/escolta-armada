@@ -8,13 +8,13 @@
  *
  * Com a fila vazia e internet, nada disto chama o servidor além de config_offline (uma vez).
  */
-import { useEffect, useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import {
   assinarEstadoEnvio, iniciarEnvioAutomatico, lerConfigOffline, lerEstadoEnvio,
   type ClienteOffline, type EstadoEnvio,
 } from '@/lib/offline/envio'
-import { filaDisponivel, lerSnapshot, limparRecibos } from '@/lib/offline/fila'
+import { filaDisponivel, lerSnapshot, limparRecibos, registrosDoUsuario, type RegistroFila } from '@/lib/offline/fila'
 import { precarregarTelas } from '@/lib/offline/sessao'
 
 function useEstadoFila(): EstadoEnvio {
@@ -79,10 +79,39 @@ export function FaixaOffline() {
   )
 }
 
+const ROTULO_TIPO: Record<string, string> = {
+  etapa: 'Etapa', linhas: 'Registro de campo', presenca_base: 'Presença na base', emergencia: 'Emergência',
+}
+
+/** DD/MM/AAAA HH:MM no horário de Brasília. */
+function horaBr(iso: string | null | undefined): string {
+  if (!iso) return '-'
+  return new Date(iso).toLocaleString('pt-BR', {
+    timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  }).replace(',', '')
+}
+
+/** Registros não aceitos e recusados que ficam no aparelho (o operador vê; não há como apagar). */
+function useNaoAceitos(authUserId: string | null, chave: string): RegistroFila[] {
+  const [lista, setLista] = useState<RegistroFila[]>([])
+  useEffect(() => {
+    let ativo = true
+    if (!authUserId || !filaDisponivel()) { setLista([]); return }
+    registrosDoUsuario(authUserId)
+      .then(rs => { if (ativo) setLista(rs.filter(r => r.estado === 'conflito' || r.estado === 'recusado').sort((a, b) => (b.seq ?? 0) - (a.seq ?? 0))) })
+      .catch(() => {})
+    return () => { ativo = false }
+  }, [authUserId, chave])
+  return lista
+}
+
 /** Contador do Painel: guardados, não aceitos (conflito) e recusados. Some com tudo zero. */
 export function ContadorFila() {
   const e = useEstadoFila()
+  const naoAceitos = useNaoAceitos(e.authUserId, `${e.conflitos}:${e.recusados}`)
   if (e.pendentes === 0 && e.conflitos === 0 && e.recusados === 0) return null
+  const recusados = naoAceitos.filter(r => r.estado === 'recusado')
+  const conflitos = naoAceitos.filter(r => r.estado === 'conflito')
   return (
     <div data-teste="contador-fila" className="p-3 space-y-1" style={{ backgroundColor: '#FFF8E6', border: '1.5px solid #E9C46A', borderRadius: '4px' }}>
       {e.pendentes > 0 && (
@@ -99,6 +128,28 @@ export function ContadorFila() {
         <p data-teste="contador-recusados" className="font-bold" style={{ fontSize: '16px', color: '#B83832' }}>
           {e.recusados} {plural(e.recusados, 'registro recusado', 'registros recusados')}: você não tem vínculo com a escolta. Avise a central.
         </p>
+      )}
+      {conflitos.length > 0 && (
+        <details data-teste="lista-nao-aceitos">
+          <summary className="font-bold cursor-pointer" style={{ fontSize: '14px', color: '#5C4510' }}>Registros não aceitos</summary>
+          <ul className="mt-1 space-y-1" style={{ fontSize: '14px', color: '#5C4510' }}>
+            {conflitos.map(r => (
+              <li key={r.client_id}>{ROTULO_TIPO[r.tipo] ?? r.tipo} de {horaBr(r.data_hora_acao)}: guardado no servidor e enviado à supervisão.</li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {recusados.length > 0 && (
+        <div data-teste="lista-recusados">
+          <p className="font-bold" style={{ fontSize: '14px', color: '#B83832' }}>Registros recusados</p>
+          <ul className="mt-1 space-y-1" style={{ fontSize: '14px', color: '#5C4510' }}>
+            {recusados.map(r => (
+              <li key={r.client_id} data-teste="registro-recusado">
+                {ROTULO_TIPO[r.tipo] ?? r.tipo} de {horaBr(r.data_hora_acao)}: {r.ultimo_erro === 'SEM_VINCULO' ? 'sem vínculo com a escolta' : (r.ultimo_erro ?? 'recusado pelo sistema')}. Ficou só neste aparelho.
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
     </div>
   )
