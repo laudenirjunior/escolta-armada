@@ -13,7 +13,8 @@
 --      Depois: segredos telegram_bot_token e telegram_chat_central pela tela Vault do
 --      painel do Supabase (nunca pelo SQL Editor). Responder "aplicado 1".
 --   2. Push das ondas para a master, uma a uma, com o teste de produção depois de cada uma.
---   3. BLOCO 2, logo depois do deploy das ondas A, C, G, J e I. Responder "aplicado 2".
+--   3. BLOCO 2, logo depois do deploy das ondas A, C, G, J, I e K (termina com a carga de UF da
+--      216 de novo, para a escolta que ficou sem UF na janela). Responder "aplicado 2".
 --   Cada bloco roda inteiro numa transação: se qualquer comando falhar, nada do bloco fica.
 --   Se o SQL Editor recusar BEGIN/COMMIT, rode migration por migration, na ordem.
 --
@@ -2939,9 +2940,17 @@ SELECT lote_interno.carregar_uso_locais();
 --
 -- Por quê:
 -- 1. Etiqueta "Interestadual": escoltas.origem_uf e destino_uf (duas letras maiúsculas, CHECK),
---    uf_estimada (a UF veio da coordenada, não da Mapbox nem de local salvo) e a coluna gerada
---    interestadual = origem_uf <> 'RJ' OR destino_uf <> 'RJ' (nula quando não dá para saber:
---    as duas UFs desconhecidas, ou uma RJ e a outra desconhecida). Índice para o filtro.
+--    a marca por lado origem_uf_estimada e destino_uf_estimada (a UF daquele lado veio da
+--    coordenada, não da Mapbox nem de local salvo; revisão adversarial K, menor 14) e a coluna
+--    gerada interestadual. Regra da coluna gerada (revisão K, menor 12):
+--      - lado "fora do Brasil" = UF nula com a marca de estimada ligada (a coordenada foi
+--        calculada e caiu fora do país); conta como fora do RJ;
+--      - verdadeira quando um lado tem UF diferente de RJ ou está fora do Brasil (por exemplo,
+--        fora do Brasil com o outro lado no RJ, ou com o outro lado desconhecido);
+--      - falsa quando os dois lados são RJ;
+--      - nula ("não determinado") nos demais casos: as duas UFs desconhecidas, ou uma RJ e a
+--        outra desconhecida (sem coordenada).
+--    Índice para o filtro.
 -- 2. UF pela coordenada sem serviço externo: malha das 27 UFs do IBGE em lote_interno.malha_uf
 --    (uf, poligonos jsonb no formato GeoJSON MultiPolygon) e lote_interno.malha_uf_aneis (cada
 --    anel em vetores de latitude e longitude, com a caixa), baixada UMA vez da API de malhas do
@@ -2958,46 +2967,76 @@ SELECT lote_interno.carregar_uso_locais();
 --    polígono de outra UF mais próximo, em km, projeção equirretangular na latitude do ponto;
 --    o litoral não conta como divisa) e fora_da_malha. Ponto fora de todos os polígonos (baía,
 --    ilha, litoral na malha mínima) recebe a UF do polígono mais próximo.
+--    Fora do Brasil (revisão K, menor 12): ponto fora de todos os polígonos e a mais de 30 km
+--    do polígono mais próximo fica com UF nula e fora_da_malha (Buenos Aires, Assunção, o
+--    meio do mar); as ilhas e o litoral da malha mínima ficam a menos de 30 km e continuam com
+--    a UF mais próxima.
 --    public.uf_da_coordenada(lat, lng): RPC para a Nova (pino movido, sugestão sem região),
 --    STABLE, SECURITY DEFINER (lê lote_interno), qualquer perfil autenticado; zero linhas para
---    coordenada nula ou 0,0. As funções internas ficam no lote_interno, sem GRANT.
--- 3. Carga das escoltas existentes (lote_interno.carregar_uf_escoltas): UF pela coordenada, com
---    uf_estimada = true, só nas escoltas sem nenhuma UF gravada e com coordenada. ESC-2026-0001 e
---    ESC-2026-0007 ficam de fora (regra 1.11 e seção 0.8: nenhuma mudança nelas) e vão listadas
---    no relatório. Lado a menos de 5 km da divisa, ou fora da malha, vai para
---    backup_20261008.uf_a_conferir e para a lista do relatório. A carga não aciona a trigger da
---    215 (ela só olha endereço, coordenada e status) e muda atualizado_em das escoltas
---    atualizadas pela trigger existente, sem efeito de negócio. Roda a cada aplicação (só pega
---    quem continua sem UF; escolta criada pela master na janela entre o bloco 1 e o deploy
---    ganha a UF se a 216 for reaplicada).
+--    coordenada nula ou 0,0; uma linha com UF nula e fora_da_malha para ponto fora do Brasil
+--    (a Nova avisa "Endereço fora do Brasil, confira"). As funções internas ficam no
+--    lote_interno, sem GRANT.
+--    UF no servidor (revisão K, médio 2 e menor 11): triggers em escoltas recalculam pela malha
+--    a UF do lado cuja coordenada mudou quando o mesmo comando não informou a UF daquele lado
+--    (a master na janela entre o bloco 1 e o deploy, ou qualquer UPDATE que só mude endereço e
+--    coordenada), e preenchem o lado com coordenada e UF nula (INSERT da master, salvar com a
+--    consulta da UF ainda pendente na tela). "Informou" é ter a coluna da UF ou da marca daquele
+--    lado no SET do UPDATE (triggers BEFORE UPDATE OF, que valem também para a editar_escolta
+--    da 218, montada só com as chaves recebidas); o lado recalculado fica com a marca de
+--    estimada. Coordenada que não mudou nunca muda a UF (ESC-2026-0001 e 0007 continuam como
+--    estão se alguém só mudar a hora delas).
+-- 3. Carga das escoltas existentes (lote_interno.carregar_uf_escoltas): por lado, UF pela
+--    coordenada com a marca de estimada, só no lado sem UF, sem marca e com coordenada.
+--    ESC-2026-0001 e ESC-2026-0007 ficam de fora sempre, pelo código (regra 1.11 e seção 0.8:
+--    nenhuma mudança nelas) e vão listadas no relatório. Lado a menos de 5 km da divisa, ou fora
+--    da malha, vai para backup_20261008.uf_a_conferir e para a lista do relatório. A carga não
+--    aciona a trigger da 215 (ela só olha endereço, coordenada e status) e muda atualizado_em
+--    das escoltas atualizadas pela trigger existente, sem efeito de negócio. Roda a cada
+--    aplicação e de novo no bloco 2 do PACOTE, logo depois do deploy (revisão K, médio 2), para
+--    pegar qualquer escolta que tenha ficado sem UF na janela.
+--    Reaplicação depois de uma reversão (revisão K, menor 13): antes da carga, as UFs e as
+--    marcas guardadas pela reversão em backup_20261008.escoltas_uf voltam para as escoltas ainda
+--    sem UF cuja coordenada não mudou desde a reversão; assim uma UF da Mapbox ou de local
+--    salvo não vira estimada.
 -- 4. Paleta fechada de 12 cores para o cliente (decisão 6 e S6: não exclusiva), em
 --    public.paleta_clientes (RLS ligada, sem policy e sem GRANT: só a trigger lê; o app tem a
 --    mesma lista em lib/paleta-clientes.ts), com contraste de texto branco de pelo menos 4,5:1.
 --    Trigger BEFORE INSERT OR UPDATE OF cor_destaque em clientes: cor #rrggbb (sem diferenciar
 --    maiúscula) vira a mais próxima da paleta pela distância CIE76 no espaço Lab; texto que não
 --    é #rrggbb (ou nulo) vira a cor padrão. Nunca erro, sem CHECK. DEFAULT da coluna trocado
---    para a cor padrão. Carga, só na primeira aplicação (quando a paleta nasce): clientes ativos,
---    na ordem de criação, cada um na cor da paleta mais próxima ainda livre (sem repetir
---    enquanto houver cor livre); os demais na mais próxima. A cor antiga fica em
---    backup_20261008.cores_clientes e as trocas saem em NOTICE e na conferência.
--- 5. Cor do cliente no mural do operador: public.cores_clientes_das_escoltas(ids) devolve só a
---    cor (nunca o nome) das escoltas que a pessoa já enxerga; a RLS de clientes esconde do
---    operador o cliente das agendadas de outra equipe, e o mural sairia todo na mesma cor.
--- 6. impedir_edicao_por_operador (197) recriada com origem_uf, destino_uf e uf_estimada na lista
---    de colunas que o operador não altera. A trava de escolta iniciada (214) já pega as colunas
---    novas por to_jsonb e ignora a coluna gerada.
+--    para a cor padrão. Carga, só quando a paleta nasce (primeira aplicação, ou reaplicação
+--    depois de uma reversão): quem já está numa cor da paleta fica com ela; os demais clientes
+--    ativos, na ordem de criação, cada um na cor da paleta mais próxima ainda livre (sem repetir
+--    enquanto houver cor livre); os inativos na mais próxima. A cor antiga fica em
+--    backup_20261008.cores_clientes e as trocas saem em NOTICE e na conferência. Na reaplicação,
+--    o cliente cuja cor ainda é a que a reversão devolveu volta para a cor da paleta que tinha
+--    na reversão (backup_20261008.cores_reversao): cor escolhida não muda (revisão K, menor 13).
+--    Paleta revista na revisão K (menor 9): nenhum par a menos de 10 de distância CIE76 na
+--    simulação de deuteranopia nem na de protanopia (Machado 2009, severidade 1), contraste de
+--    texto branco de pelo menos 4,5:1. O cinza #9CA3AF (fora da paleta) é a cor neutra do
+--    mural do operador (item 5).
+-- 5. Cor do cliente (decisão S17, revisão K, médio 1): public.cores_clientes_das_escoltas(ids)
+--    devolve só a cor (nunca o nome). Gestão, supervisor e central recebem a cor de toda escolta
+--    que leem; o operador, só a das escoltas em que é do efetivo (as mesmas em que a RLS de
+--    clientes já lhe mostra o cliente). Nas agendadas de outras equipes, no mural, a cor
+--    identificaria o cliente que a RLS esconde: a RPC não devolve nada e a tela usa o cinza
+--    neutro #9CA3AF, fora da paleta.
+-- 6. impedir_edicao_por_operador (197) recriada com origem_uf, destino_uf, origem_uf_estimada e
+--    destino_uf_estimada na lista de colunas que o operador não altera. A trava de escolta
+--    iniciada (214) já pega as colunas novas por to_jsonb e ignora a coluna gerada.
 --
 -- Conferência:
 -- SELECT count(*) FROM lote_interno.malha_uf;                                              -- 27
 -- SELECT count(*), count(*) FILTER (WHERE padrao) FROM public.paleta_clientes;             -- 12, 1
--- SELECT codigo_escolta, origem_uf, destino_uf, uf_estimada FROM escoltas
---  WHERE codigo_escolta IN ('ESC-2026-0001', 'ESC-2026-0007');                             -- sem UF, false
+-- SELECT codigo_escolta, origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada FROM escoltas
+--  WHERE codigo_escolta IN ('ESC-2026-0001', 'ESC-2026-0007');                             -- sem UF, false, false
 -- SELECT count(*) FILTER (WHERE origem_uf IS NOT NULL OR destino_uf IS NOT NULL), count(*) FILTER (WHERE interestadual) FROM escoltas;
 -- SELECT * FROM backup_20261008.uf_a_conferir ORDER BY codigo_escolta, lado;               -- lista do relatório
 -- SELECT nome_cliente, cor_antiga, cor_nova FROM backup_20261008.cores_clientes ORDER BY nome_cliente;  -- trocas
 -- SELECT has_function_privilege('authenticated', 'public.uf_da_coordenada(double precision, double precision)', 'EXECUTE');  -- true
--- Reversão: 216_uf_e_paleta_reverter.sql (guarda as UFs em backup_20261008.escoltas_uf, devolve
--- as cores do backup, tira colunas, triggers, funções, paleta e malha).
+-- Reversão: 216_uf_e_paleta_reverter.sql (guarda UFs, marcas e coordenadas em
+-- backup_20261008.escoltas_uf e as cores do momento em backup_20261008.cores_reversao, devolve
+-- as cores antigas, tira colunas, triggers, funções, paleta e malha).
 
 CREATE SCHEMA IF NOT EXISTS lote_interno;
 REVOKE ALL ON SCHEMA lote_interno FROM PUBLIC, anon, authenticated;
@@ -3010,9 +3049,15 @@ SELECT set_config('lote216.carregar_cores', CASE WHEN to_regclass('public.paleta
 -- ════════ 1. UF de origem e destino ════════
 ALTER TABLE public.escoltas ADD COLUMN IF NOT EXISTS origem_uf text;
 ALTER TABLE public.escoltas ADD COLUMN IF NOT EXISTS destino_uf text;
-ALTER TABLE public.escoltas ADD COLUMN IF NOT EXISTS uf_estimada boolean NOT NULL DEFAULT false;
+ALTER TABLE public.escoltas ADD COLUMN IF NOT EXISTS origem_uf_estimada boolean NOT NULL DEFAULT false;
+ALTER TABLE public.escoltas ADD COLUMN IF NOT EXISTS destino_uf_estimada boolean NOT NULL DEFAULT false;
+-- Fora do Brasil (UF nula com a marca) conta como fora do RJ; ver a regra no cabeçalho, item 1.
 ALTER TABLE public.escoltas ADD COLUMN IF NOT EXISTS interestadual boolean
-  GENERATED ALWAYS AS (origem_uf <> 'RJ' OR destino_uf <> 'RJ') STORED;
+  GENERATED ALWAYS AS (CASE
+    WHEN origem_uf <> 'RJ' OR destino_uf <> 'RJ'
+      OR (origem_uf IS NULL AND origem_uf_estimada) OR (destino_uf IS NULL AND destino_uf_estimada) THEN true
+    WHEN origem_uf = 'RJ' AND destino_uf = 'RJ' THEN false
+  END) STORED;
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'escoltas_origem_uf_formato' AND conrelid = 'public.escoltas'::regclass) THEN
@@ -3023,8 +3068,9 @@ BEGIN
   END IF;
 END $$;
 CREATE INDEX IF NOT EXISTS idx_escoltas_interestadual ON public.escoltas (interestadual);
-COMMENT ON COLUMN public.escoltas.uf_estimada IS 'Onda K: alguma das UFs veio da coordenada (malha do IBGE), não da Mapbox nem de local salvo. Na tela, só a etiqueta Interestadual, sem a UF por extenso.';
-COMMENT ON COLUMN public.escoltas.interestadual IS 'Onda K: origem ou destino fora do RJ. Nula quando não dá para saber.';
+COMMENT ON COLUMN public.escoltas.origem_uf_estimada IS 'Onda K: a UF da origem veio da coordenada (malha do IBGE), não da Mapbox nem de local salvo. Com origem_uf nula: coordenada fora do Brasil. Na tela, só a etiqueta Interestadual, sem a UF por extenso.';
+COMMENT ON COLUMN public.escoltas.destino_uf_estimada IS 'Onda K: a UF do destino veio da coordenada (malha do IBGE), não da Mapbox nem de local salvo. Com destino_uf nula: coordenada fora do Brasil. Na tela, só a etiqueta Interestadual, sem a UF por extenso.';
+COMMENT ON COLUMN public.escoltas.interestadual IS 'Onda K: origem ou destino fora do RJ (lado fora do Brasil conta como fora do RJ). Nula quando não dá para saber.';
 
 -- ════════ 2. Malha das UFs (IBGE) ════════
 CREATE TABLE IF NOT EXISTS lote_interno.malha_uf (
@@ -3195,7 +3241,9 @@ END;
 $$;
 REVOKE ALL ON FUNCTION lote_interno.uf_mais_proxima(double precision, double precision, text) FROM PUBLIC, anon, authenticated;
 
--- UF do ponto. Interna (a carga e a RPC chamam). Coordenada nula, 0,0 ou fora da faixa: tudo nulo.
+-- UF do ponto. Interna (a carga, a RPC e as triggers chamam). Coordenada nula, 0,0 ou fora da
+-- faixa: tudo nulo. Fora do Brasil (fora da malha e a mais de 30 km dela): UF nula,
+-- fora_da_malha verdadeiro e, em distancia_divisa_km, a distância até a UF mais próxima.
 CREATE OR REPLACE FUNCTION lote_interno.uf_do_ponto(p_lat double precision, p_lng double precision,
                                                     OUT uf text, OUT distancia_divisa_km numeric, OUT fora_da_malha boolean)
     LANGUAGE plpgsql STABLE
@@ -3225,8 +3273,14 @@ BEGIN
     fora_da_malha := false;
   ELSE
     SELECT * INTO v_prox FROM lote_interno.uf_mais_proxima(p_lat, p_lng, NULL);
-    uf := v_prox.uf;
     fora_da_malha := true;
+    -- Revisão K, menor 12: a mais de 30 km de qualquer UF é fora do Brasil (UF nula). Ilhas e
+    -- litoral da malha mínima (Galeão, Búzios, Arraial, porto de Itaguaí) ficam bem abaixo.
+    IF v_prox.km > 30 THEN
+      distancia_divisa_km := round(v_prox.km::numeric, 1);
+      RETURN;
+    END IF;
+    uf := v_prox.uf;
   END IF;
   SELECT * INTO v_prox FROM lote_interno.uf_mais_proxima(p_lat, p_lng, uf);
   distancia_divisa_km := round(v_prox.km::numeric, 1);
@@ -3248,8 +3302,9 @@ BEGIN
   IF v_perfil IS NULL THEN
     RAISE EXCEPTION 'Sem permissão para consultar a UF.' USING ERRCODE = '42501';
   END IF;
+  -- Nula ou 0,0: nenhuma linha. Fora do Brasil: uma linha com UF nula e fora_da_malha.
   RETURN QUERY SELECT u.uf, u.distancia_divisa_km, u.fora_da_malha
-                 FROM lote_interno.uf_do_ponto(p_lat, p_lng) u WHERE u.uf IS NOT NULL;
+                 FROM lote_interno.uf_do_ponto(p_lat, p_lng) u WHERE u.fora_da_malha IS NOT NULL;
 END;
 $$;
 REVOKE ALL ON FUNCTION public.uf_da_coordenada(double precision, double precision) FROM PUBLIC, anon;
@@ -3275,27 +3330,41 @@ CREATE OR REPLACE FUNCTION lote_interno.carregar_uf_escoltas() RETURNS integer
     SET search_path TO 'public', 'pg_temp'
     AS $$
 DECLARE
-  e record; o record; d record; v_n integer := 0;
+  e record; o record; d record; v_n integer := 0; v_o boolean := false; v_d boolean := false;
 BEGIN
+  -- Por lado: só o lado sem UF, sem a marca de estimada (UF nula com marca = já calculado e
+  -- fora do Brasil) e com coordenada. ESC-2026-0001 e 0007 nunca, pelo código.
   FOR e IN
-    SELECT x.id, x.codigo_escolta, x.origem_lat, x.origem_lng, x.destino_lat, x.destino_lng
+    SELECT x.id, x.codigo_escolta, x.origem_lat, x.origem_lng, x.destino_lat, x.destino_lng,
+           (x.origem_uf IS NULL AND NOT x.origem_uf_estimada AND coalesce(x.origem_lat, 0) <> 0 AND coalesce(x.origem_lng, 0) <> 0) AS falta_o,
+           (x.destino_uf IS NULL AND NOT x.destino_uf_estimada AND coalesce(x.destino_lat, 0) <> 0 AND coalesce(x.destino_lng, 0) <> 0) AS falta_d
       FROM public.escoltas x
-     WHERE x.origem_uf IS NULL AND x.destino_uf IS NULL
-       AND coalesce(x.codigo_escolta, '') NOT IN ('ESC-2026-0001', 'ESC-2026-0007')
+     WHERE coalesce(x.codigo_escolta, '') NOT IN ('ESC-2026-0001', 'ESC-2026-0007')
+       AND ((x.origem_uf IS NULL AND NOT x.origem_uf_estimada AND coalesce(x.origem_lat, 0) <> 0 AND coalesce(x.origem_lng, 0) <> 0)
+         OR (x.destino_uf IS NULL AND NOT x.destino_uf_estimada AND coalesce(x.destino_lat, 0) <> 0 AND coalesce(x.destino_lng, 0) <> 0))
      ORDER BY x.codigo_escolta, x.id
   LOOP
-    SELECT * INTO o FROM lote_interno.uf_do_ponto(e.origem_lat::double precision, e.origem_lng::double precision);
-    SELECT * INTO d FROM lote_interno.uf_do_ponto(e.destino_lat::double precision, e.destino_lng::double precision);
-    CONTINUE WHEN o.uf IS NULL AND d.uf IS NULL;
-    UPDATE public.escoltas SET origem_uf = o.uf, destino_uf = d.uf, uf_estimada = true WHERE id = e.id;
+    -- Sem cálculo, o lado fica; calculado é com UF ou fora do Brasil (UF nula, fora_da_malha).
+    SELECT * INTO o FROM lote_interno.uf_do_ponto(CASE WHEN e.falta_o THEN e.origem_lat::double precision END, e.origem_lng::double precision);
+    SELECT * INTO d FROM lote_interno.uf_do_ponto(CASE WHEN e.falta_d THEN e.destino_lat::double precision END, e.destino_lng::double precision);
+    v_o := o.fora_da_malha IS NOT NULL;
+    v_d := d.fora_da_malha IS NOT NULL;
+    CONTINUE WHEN NOT v_o AND NOT v_d;
+    -- As colunas da UF vão no SET: as triggers de recálculo não mexem (a coordenada não muda).
+    UPDATE public.escoltas
+       SET origem_uf = CASE WHEN v_o THEN o.uf ELSE origem_uf END,
+           origem_uf_estimada = CASE WHEN v_o THEN true ELSE origem_uf_estimada END,
+           destino_uf = CASE WHEN v_d THEN d.uf ELSE destino_uf END,
+           destino_uf_estimada = CASE WHEN v_d THEN true ELSE destino_uf_estimada END
+     WHERE id = e.id;
     v_n := v_n + 1;
-    IF o.uf IS NOT NULL AND (o.fora_da_malha OR o.distancia_divisa_km < 5) THEN
+    IF v_o AND (o.fora_da_malha OR o.distancia_divisa_km < 5) THEN
       INSERT INTO backup_20261008.uf_a_conferir (escolta_id, lado, codigo_escolta, uf, distancia_divisa_km, fora_da_malha, lat, lng)
       VALUES (e.id, 'origem', e.codigo_escolta, o.uf, o.distancia_divisa_km, o.fora_da_malha, e.origem_lat, e.origem_lng)
       ON CONFLICT (escolta_id, lado) DO UPDATE SET uf = EXCLUDED.uf, distancia_divisa_km = EXCLUDED.distancia_divisa_km,
         fora_da_malha = EXCLUDED.fora_da_malha, lat = EXCLUDED.lat, lng = EXCLUDED.lng, registrado_em = now();
     END IF;
-    IF d.uf IS NOT NULL AND (d.fora_da_malha OR d.distancia_divisa_km < 5) THEN
+    IF v_d AND (d.fora_da_malha OR d.distancia_divisa_km < 5) THEN
       INSERT INTO backup_20261008.uf_a_conferir (escolta_id, lado, codigo_escolta, uf, distancia_divisa_km, fora_da_malha, lat, lng)
       VALUES (e.id, 'destino', e.codigo_escolta, d.uf, d.distancia_divisa_km, d.fora_da_malha, e.destino_lat, e.destino_lng)
       ON CONFLICT (escolta_id, lado) DO UPDATE SET uf = EXCLUDED.uf, distancia_divisa_km = EXCLUDED.distancia_divisa_km,
@@ -3306,6 +3375,104 @@ BEGIN
 END;
 $$;
 REVOKE ALL ON FUNCTION lote_interno.carregar_uf_escoltas() FROM PUBLIC, anon, authenticated;
+
+-- UF no servidor (revisão K, médio 2 e menor 11). Duas triggers BEFORE UPDATE OF anotam, na
+-- variável lote216.uf_informada da transação, que o comando trouxe a UF (ou a marca) daquele
+-- lado no SET; a terceira, que roda depois delas (ordem alfabética do nome), lê e limpa a
+-- anotação da linha e recalcula pela malha:
+--   - INSERT: lado com coordenada e UF nula (a master não manda UF; a tela, com a consulta
+--     pendente, manda nula) recebe a UF da coordenada, com a marca de estimada;
+--   - UPDATE que muda a coordenada de um lado sem informar a UF dele (a master na janela,
+--     editar_escolta sem as chaves de UF, SQL direto): UF recalculada, com a marca;
+--   - UPDATE que muda a coordenada e informa UF nula com coordenada válida (salvar com pressa):
+--     recalculada também; UF informada não nula fica como veio;
+--   - coordenada que não mudou: nada muda.
+-- Coordenada nula ou 0,0 deixa o lado sem UF e sem marca. SECURITY DEFINER só para ler a malha
+-- (lote_interno); nunca recusa nada.
+CREATE OR REPLACE FUNCTION lote_interno.anotar_uf_informada() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path TO 'public', 'pg_temp'
+    AS $$
+BEGIN
+  PERFORM set_config('lote216.uf_informada',
+    coalesce(nullif(current_setting('lote216.uf_informada', true), ''), '') || ' ' || NEW.id::text || ':' || TG_ARGV[0], true);
+  RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION lote_interno.anotar_uf_informada() FROM PUBLIC, anon, authenticated;
+
+CREATE OR REPLACE FUNCTION lote_interno.recalcular_uf_escolta() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $$
+DECLARE
+  v_anot text := coalesce(current_setting('lote216.uf_informada', true), '');
+  v_inf_o boolean; v_inf_d boolean; v_calc_o boolean := false; v_calc_d boolean := false; u record;
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    v_calc_o := NEW.origem_uf IS NULL;
+    v_calc_d := NEW.destino_uf IS NULL;
+  ELSE
+    v_inf_o := position(' ' || NEW.id::text || ':origem' IN v_anot) > 0;
+    v_inf_d := position(' ' || NEW.id::text || ':destino' IN v_anot) > 0;
+    IF v_inf_o OR v_inf_d THEN
+      PERFORM set_config('lote216.uf_informada',
+        replace(replace(v_anot, ' ' || NEW.id::text || ':origem', ''), ' ' || NEW.id::text || ':destino', ''), true);
+    END IF;
+    IF NEW.origem_lat IS DISTINCT FROM OLD.origem_lat OR NEW.origem_lng IS DISTINCT FROM OLD.origem_lng THEN
+      v_calc_o := NOT v_inf_o OR NEW.origem_uf IS NULL;
+    END IF;
+    IF NEW.destino_lat IS DISTINCT FROM OLD.destino_lat OR NEW.destino_lng IS DISTINCT FROM OLD.destino_lng THEN
+      v_calc_d := NOT v_inf_d OR NEW.destino_uf IS NULL;
+    END IF;
+  END IF;
+  IF v_calc_o THEN
+    SELECT * INTO u FROM lote_interno.uf_do_ponto(NEW.origem_lat::double precision, NEW.origem_lng::double precision);
+    NEW.origem_uf := u.uf;
+    NEW.origem_uf_estimada := u.fora_da_malha IS NOT NULL;
+  END IF;
+  IF v_calc_d THEN
+    SELECT * INTO u FROM lote_interno.uf_do_ponto(NEW.destino_lat::double precision, NEW.destino_lng::double precision);
+    NEW.destino_uf := u.uf;
+    NEW.destino_uf_estimada := u.fora_da_malha IS NOT NULL;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+REVOKE ALL ON FUNCTION lote_interno.recalcular_uf_escolta() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS tr_escoltas_uf_1_informada_origem ON public.escoltas;
+CREATE TRIGGER tr_escoltas_uf_1_informada_origem BEFORE UPDATE OF origem_uf, origem_uf_estimada ON public.escoltas
+  FOR EACH ROW EXECUTE FUNCTION lote_interno.anotar_uf_informada('origem');
+DROP TRIGGER IF EXISTS tr_escoltas_uf_1_informada_destino ON public.escoltas;
+CREATE TRIGGER tr_escoltas_uf_1_informada_destino BEFORE UPDATE OF destino_uf, destino_uf_estimada ON public.escoltas
+  FOR EACH ROW EXECUTE FUNCTION lote_interno.anotar_uf_informada('destino');
+DROP TRIGGER IF EXISTS tr_escoltas_uf_2_recalcular ON public.escoltas;
+CREATE TRIGGER tr_escoltas_uf_2_recalcular BEFORE INSERT OR UPDATE ON public.escoltas
+  FOR EACH ROW EXECUTE FUNCTION lote_interno.recalcular_uf_escolta();
+
+-- Reaplicação depois de uma reversão (revisão K, menor 13): devolve UF e marcas guardadas pela
+-- reversão às escoltas ainda sem UF cuja coordenada não mudou desde então.
+DO $$
+DECLARE v_n integer := 0;
+BEGIN
+  IF to_regclass('backup_20261008.escoltas_uf') IS NOT NULL
+     AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'backup_20261008' AND table_name = 'escoltas_uf'
+                  AND column_name = 'origem_uf_estimada') THEN
+    EXECUTE $q$
+      UPDATE public.escoltas e
+         SET origem_uf = b.origem_uf, destino_uf = b.destino_uf,
+             origem_uf_estimada = b.origem_uf_estimada, destino_uf_estimada = b.destino_uf_estimada
+        FROM backup_20261008.escoltas_uf b
+       WHERE b.escolta_id = e.id
+         AND e.origem_uf IS NULL AND e.destino_uf IS NULL AND NOT e.origem_uf_estimada AND NOT e.destino_uf_estimada
+         AND e.origem_lat IS NOT DISTINCT FROM b.origem_lat AND e.origem_lng IS NOT DISTINCT FROM b.origem_lng
+         AND e.destino_lat IS NOT DISTINCT FROM b.destino_lat AND e.destino_lng IS NOT DISTINCT FROM b.destino_lng
+         AND coalesce(e.codigo_escolta, '') NOT IN ('ESC-2026-0001', 'ESC-2026-0007')$q$;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+  END IF;
+  RAISE NOTICE 'Onda K: % escolta(s) com a UF devolvida do backup da reversão.', v_n;
+END $$;
 
 DO $$
 DECLARE v_n integer;
@@ -3352,9 +3519,9 @@ REVOKE ALL ON public.paleta_clientes FROM PUBLIC, anon, authenticated;
 COMMENT ON TABLE public.paleta_clientes IS 'Onda K: paleta fechada de cores de cliente (a mesma de lib/paleta-clientes.ts). Só a trigger de clientes lê.';
 INSERT INTO public.paleta_clientes (cor, nome, ordem, padrao, lab)
 SELECT v.cor, v.nome, v.ordem, v.ordem = 1, lote_interno.cor_lab(v.cor)
-  FROM (VALUES ('#1D4ED8', 'Azul', 1), ('#15803D', 'Verde', 2), ('#B91C1C', 'Vermelho', 3), ('#A16207', 'Mostarda', 4),
-               ('#7C3AED', 'Violeta', 5), ('#BE185D', 'Rosa escuro', 6), ('#4D7C0F', 'Oliva', 7), ('#475569', 'Grafite', 8),
-               ('#1E3A8A', 'Marinho', 9), ('#86198F', 'Ameixa', 10), ('#115E59', 'Petróleo', 11), ('#6B4423', 'Marrom', 12)) v(cor, nome, ordem)
+  FROM (VALUES ('#1D4ED8', 'Azul', 1), ('#15803D', 'Verde', 2), ('#DD1144', 'Vermelho', 3), ('#A16207', 'Mostarda', 4),
+               ('#3311CC', 'Anil', 5), ('#BE185D', 'Rosa escuro', 6), ('#665500', 'Oliva', 7), ('#115577', 'Aço', 8),
+               ('#1E3A8A', 'Marinho', 9), ('#9900AA', 'Roxo', 10), ('#115E59', 'Petróleo', 11), ('#6B4423', 'Marrom', 12)) v(cor, nome, ordem)
 ON CONFLICT (cor) DO UPDATE SET nome = EXCLUDED.nome, ordem = EXCLUDED.ordem, padrao = EXCLUDED.padrao, lab = EXCLUDED.lab;
 
 -- Cor da paleta mais próxima (CIE76), sem as de p_excluir enquanto sobrar alguma. Texto que não
@@ -3413,30 +3580,54 @@ CREATE TABLE IF NOT EXISTS backup_20261008.cores_clientes (
 );
 REVOKE ALL ON backup_20261008.cores_clientes FROM PUBLIC, anon, authenticated;
 
+-- Cor do momento da reversão (a 216_reverter grava; vazio na primeira aplicação).
+CREATE TABLE IF NOT EXISTS backup_20261008.cores_reversao (
+  cliente_id      uuid PRIMARY KEY,
+  cor_na_reversao text,
+  cor_devolvida   text,
+  guardado_em     timestamptz NOT NULL DEFAULT now()
+);
+REVOKE ALL ON backup_20261008.cores_reversao FROM PUBLIC, anon, authenticated;
+
 DO $$
 DECLARE
-  c record; v_usadas text[] := '{}'; v_nova text; v_trocas integer := 0;
+  cl record; v_usadas text[] := '{}'; v_nova text; v_trocas integer := 0; v_volta integer := 0;
 BEGIN
   IF current_setting('lote216.carregar_cores', true) IS DISTINCT FROM 'on' THEN
     RAISE NOTICE 'Onda K: paleta já existia; cores dos clientes não redistribuídas.';
     RETURN;
   END IF;
-  FOR c IN SELECT id, nome_cliente, cor_destaque, status FROM public.clientes
+  -- Reaplicação depois de uma reversão: quem ainda está com a cor que a reversão devolveu
+  -- volta para a cor da paleta que tinha (a trigger ainda não existe aqui).
+  UPDATE public.clientes c SET cor_destaque = r.cor_na_reversao
+    FROM backup_20261008.cores_reversao r
+   WHERE r.cliente_id = c.id AND c.cor_destaque IS NOT DISTINCT FROM r.cor_devolvida
+     AND c.cor_destaque IS DISTINCT FROM r.cor_na_reversao
+     AND EXISTS (SELECT 1 FROM public.paleta_clientes p WHERE p.cor = r.cor_na_reversao);
+  GET DIAGNOSTICS v_volta = ROW_COUNT;
+  IF v_volta > 0 THEN RAISE NOTICE 'Onda K: % cliente(s) de volta à cor da paleta que tinham na reversão.', v_volta; END IF;
+  -- Quem já está numa cor da paleta fica com ela (e a cor conta como usada, se ativo).
+  SELECT coalesce(array_agg(DISTINCT c.cor_destaque), '{}') INTO v_usadas
+    FROM public.clientes c WHERE c.status = 'ativo' AND EXISTS (SELECT 1 FROM public.paleta_clientes p WHERE p.cor = c.cor_destaque);
+  FOR cl IN SELECT id, nome_cliente, cor_destaque, status FROM public.clientes
             ORDER BY (status = 'ativo') DESC, criado_em, id LOOP
-    IF c.status = 'ativo' THEN
-      v_nova := lote_interno.cor_da_paleta(c.cor_destaque, v_usadas);
+    IF EXISTS (SELECT 1 FROM public.paleta_clientes p WHERE p.cor = cl.cor_destaque) THEN
+      v_nova := cl.cor_destaque;
+    ELSIF cl.status = 'ativo' THEN
+      v_nova := lote_interno.cor_da_paleta(cl.cor_destaque, v_usadas);
       v_usadas := v_usadas || v_nova;
     ELSE
-      v_nova := lote_interno.cor_da_paleta(c.cor_destaque);
+      v_nova := lote_interno.cor_da_paleta(cl.cor_destaque);
     END IF;
+    -- Na reaplicação, a cor antiga guardada na primeira vez fica (ON CONFLICT não a troca).
     INSERT INTO backup_20261008.cores_clientes (cliente_id, nome_cliente, cor_antiga, cor_nova, ativo)
-    VALUES (c.id, c.nome_cliente, c.cor_destaque, v_nova, c.status = 'ativo')
+    VALUES (cl.id, cl.nome_cliente, cl.cor_destaque, v_nova, cl.status = 'ativo')
     ON CONFLICT (cliente_id) DO UPDATE SET cor_nova = EXCLUDED.cor_nova, nome_cliente = EXCLUDED.nome_cliente,
                                            ativo = EXCLUDED.ativo, guardado_em = now();
-    IF c.cor_destaque IS DISTINCT FROM v_nova THEN
-      UPDATE public.clientes SET cor_destaque = v_nova WHERE id = c.id;
+    IF cl.cor_destaque IS DISTINCT FROM v_nova THEN
+      UPDATE public.clientes SET cor_destaque = v_nova WHERE id = cl.id;
       v_trocas := v_trocas + 1;
-      RAISE NOTICE 'Onda K: cliente % (%): cor % para %', left(c.id::text, 8), c.status, coalesce(c.cor_destaque, 'nula'), v_nova;
+      RAISE NOTICE 'Onda K: cliente % (%): cor % para %', left(cl.id::text, 8), cl.status, coalesce(cl.cor_destaque, 'nula'), v_nova;
     END IF;
   END LOOP;
   RAISE NOTICE 'Onda K: % cliente(s) com a cor trocada para a paleta.', v_trocas;
@@ -3446,12 +3637,14 @@ DROP TRIGGER IF EXISTS tr_normalizar_cor_cliente ON public.clientes;
 CREATE TRIGGER tr_normalizar_cor_cliente BEFORE INSERT OR UPDATE OF cor_destaque ON public.clientes
   FOR EACH ROW EXECUTE FUNCTION lote_interno.normalizar_cor_cliente();
 
--- ════════ 6. Cor do cliente no mural do operador ════════
--- A RLS de clientes (clientes_operador_select) só mostra ao operador o cliente das escoltas em
--- que ele está no efetivo: no mural (agendadas de outras equipes) o cliente vem nulo e todas as
--- escoltas sairiam na mesma cor. Esta RPC devolve só a COR do cliente (nunca o nome, que
--- continua sigiloso para quem não é da escolta) das escoltas que a pessoa já enxerga pela
--- escoltas_select (gestão, efetivo da escolta ou agendada) e pela escoltas_arquivada_so_admin.
+-- ════════ 6. Cor do cliente (decisão S17) ════════
+-- Esta RPC devolve só a COR do cliente, nunca o nome. Gestão, supervisor e central: a cor de
+-- toda escolta que leem (escoltas_select e escoltas_arquivada_so_admin). Operador: só a das
+-- escoltas em que é do efetivo, as mesmas em que a RLS de clientes (clientes_operador_select)
+-- já lhe mostra o cliente. Nas agendadas de outras equipes (mural) a cor, sendo quase sempre
+-- única por cliente, identificaria o cliente que a RLS esconde (revisão K, médio 1): nada volta
+-- e a tela usa o cinza neutro #9CA3AF, fora da paleta. Mudar isso é decisão do Peçanha no
+-- "publicar" (S17).
 CREATE OR REPLACE FUNCTION public.cores_clientes_das_escoltas(p_escolta_ids uuid[])
     RETURNS TABLE (escolta_id uuid, cor_destaque text)
     LANGUAGE plpgsql STABLE SECURITY DEFINER
@@ -3469,7 +3662,7 @@ BEGIN
     SELECT e.id, c.cor_destaque
       FROM public.escoltas e JOIN public.clientes c ON c.id = e.cliente_id
      WHERE e.id = ANY (coalesce(p_escolta_ids, '{}'))
-       AND (v_perfil IN ('administrador', 'gestor', 'supervisor', 'central') OR public.sou_do_efetivo(e.id) OR e.status = 'agendada')
+       AND (v_perfil IN ('administrador', 'gestor', 'supervisor', 'central') OR public.sou_do_efetivo(e.id))
        AND (e.arquivada_em IS NULL OR v_perfil = 'administrador');
 END;
 $$;
@@ -3535,8 +3728,8 @@ BEGIN
   FOREACH v_col IN ARRAY ARRAY['valor_cobrado','outros_custos','observacao_financeira','fluxo_versao',
                                'checklist_pendente_no_inicio','periodicidade_checkin_min','codigo_escolta',
                                'criada_por','escala_fixa','metadados','data_solicitacao','criado_em',
-                               -- onda K (216): UF de origem e destino e a marca de estimativa
-                               'origem_uf','destino_uf','uf_estimada']
+                               -- onda K (216): UF de origem e destino e as marcas de estimativa
+                               'origem_uf','destino_uf','origem_uf_estimada','destino_uf_estimada']
   LOOP
     IF (v_new -> v_col) IS DISTINCT FROM (v_old -> v_col) THEN
       RAISE EXCEPTION 'Operador nao altera este campo da escolta (%). Fale com o supervisor.', v_col;
@@ -3628,13 +3821,14 @@ UNION ALL SELECT 'onda D2: falhas da contagem de uso (esperado 0; repetir depois
 UNION ALL SELECT 'onda D2: locais com UF RJ (esperado 5) e uso carregado das escoltas', (SELECT count(*) FROM public.locais_salvos WHERE uf = 'RJ') || '; ' || (SELECT string_agg(nome || '=' || vezes_usado, ', ' ORDER BY vezes_usado DESC, nome) FROM public.locais_salvos)
 UNION ALL SELECT 'onda K: malha (esperado 27), paleta (12, 1 padrão), trigger de cor (1)', (SELECT count(*) FROM lote_interno.malha_uf) || ', ' || (SELECT count(*) FROM public.paleta_clientes) || ', ' || (SELECT count(*) FROM public.paleta_clientes WHERE padrao) || ', ' || (SELECT count(*) FROM pg_trigger WHERE tgname = 'tr_normalizar_cor_cliente')
 UNION ALL SELECT 'onda K: escoltas com UF, interestaduais, sem determinar, a conferir', (SELECT count(*) FROM public.escoltas WHERE origem_uf IS NOT NULL OR destino_uf IS NOT NULL) || ', ' || (SELECT count(*) FROM public.escoltas WHERE interestadual) || ', ' || (SELECT count(*) FROM public.escoltas WHERE interestadual IS NULL) || ', ' || (SELECT count(*) FROM backup_20261008.uf_a_conferir)
-UNION ALL SELECT 'onda K: ESC-2026-0001 e 0007 sem UF (esperado 0)', count(*)::text FROM public.escoltas WHERE codigo_escolta IN ('ESC-2026-0001', 'ESC-2026-0007') AND (origem_uf IS NOT NULL OR destino_uf IS NOT NULL OR uf_estimada)
+UNION ALL SELECT 'onda K: ESC-2026-0001 e 0007 sem UF (esperado 0)', count(*)::text FROM public.escoltas WHERE codigo_escolta IN ('ESC-2026-0001', 'ESC-2026-0007') AND (origem_uf IS NOT NULL OR destino_uf IS NOT NULL OR origem_uf_estimada OR destino_uf_estimada)
+UNION ALL SELECT 'onda K: triggers da UF no servidor (esperado 3) e lados fora do Brasil', (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'tr_escoltas_uf_%') || '; ' || (SELECT count(*) FROM public.escoltas WHERE (origem_uf IS NULL AND origem_uf_estimada) OR (destino_uf IS NULL AND destino_uf_estimada))
 UNION ALL SELECT 'onda K: clientes fora da paleta (esperado 0) e trocas de cor', (SELECT count(*) FROM public.clientes c WHERE NOT EXISTS (SELECT 1 FROM public.paleta_clientes p WHERE p.cor = c.cor_destaque)) || '; ' || (SELECT count(*) FROM backup_20261008.cores_clientes WHERE cor_antiga IS DISTINCT FROM cor_nova)
 UNION ALL SELECT 'onda K: RPCs para authenticated (esperado true, true)', has_function_privilege('authenticated', 'public.uf_da_coordenada(double precision, double precision)', 'EXECUTE') || ', ' || has_function_privilege('authenticated', 'public.cores_clientes_das_escoltas(uuid[])', 'EXECUTE');
 -- Esperado: 9 funções, 8 tabelas, 0 abertas com periodicidade, 5 locais aguardando_conferencia,
 -- troca true,true, cron lote2026_avisos_telegram e lote2026_avisos_checkin; 4; notificacoes_select; 0; false; false;
 -- onda I: 9; 9, 10, 3; 3; 0; 11; true; onda D2: 2, false; 0; 5 e o uso de cada local (escoltas não canceladas);
--- onda K: 27, 12, 1, 1; os números da carga de UF; 0; 0 e as trocas; true, true. ESC-2026-0001 e 0007: atualizado_em igual ao da consulta prévia
+-- onda K: 27, 12, 1, 1; os números da carga de UF; 0; 3 e os lados fora do Brasil (listar no relatório); 0 e as trocas; true, true. ESC-2026-0001 e 0007: atualizado_em igual ao da consulta prévia
 -- (a 213 não reescreve a linha; a carga da 215 só lê escoltas; a carga de UF da 216 as exclui e a coluna gerada
 -- interestadual reescreve a tabela por dentro sem trigger e sem mudar valor).
 -- 'envio pelo banco ativo' falso: o Telegram do check-in sai pelo navegador (reserva no banco,
@@ -5154,7 +5348,7 @@ DECLARE
   v_permitidos text[] := ARRAY['cliente_id', 'data_hora_prevista', 'origem_endereco', 'origem_lat', 'origem_lng',
                                'destino_endereco', 'destino_lat', 'destino_lng', 'metadados', 'periodicidade_checkin_min',
                                'valor_cobrado', 'outros_custos', 'observacao_financeira', 'escala_fixa',
-                               'origem_uf', 'destino_uf', 'uf_estimada'];
+                               'origem_uf', 'destino_uf', 'origem_uf_estimada', 'destino_uf_estimada'];
   v_financeiro text[] := ARRAY['valor_cobrado', 'outros_custos', 'observacao_financeira'];
   v_sets text; v_k text; v_antes jsonb; v_depois jsonb; v_equipe_antes jsonb; v_equipe_depois jsonb;
   vt jsonb; m jsonb; v_ev uuid; v_ev_atual record; v_mudou_estrutura boolean := false; v_ids_mantidos uuid[] := '{}';
@@ -5181,7 +5375,11 @@ BEGIN
     IF NOT v_k = ANY (v_permitidos) THEN RAISE EXCEPTION 'Campo não editável: %', v_k; END IF;
   END LOOP;
   IF v_perfil = 'central' THEN v_campos := v_campos - v_financeiro; END IF;
-  -- Colunas que ainda não existem (UF da onda K) ficam de fora sem erro.
+  -- Colunas que ainda não existem (UF da onda K) ficam de fora sem erro. UF no servidor (onda K,
+  -- revisão adversarial, médio 2): o UPDATE abaixo leva só as chaves recebidas; se a coordenada
+  -- de um lado muda e as chaves de UF daquele lado não vêm (ou a UF vem nula com coordenada), as
+  -- triggers da 216 em escoltas (tr_escoltas_uf_*) recalculam a UF pela malha e ligam a marca de
+  -- estimada daquele lado. A UF antiga nunca fica por omissão.
   SELECT string_agg(CASE WHEN a.attname = 'metadados'
                            THEN 'metadados = nullif(jsonb_strip_nulls(coalesce(e.metadados, ''{}''::jsonb) || coalesce(r.metadados, ''{}''::jsonb)), ''{}''::jsonb)'
                          ELSE format('%I = r.%I', a.attname, a.attname) END, ', ')
@@ -6169,6 +6367,17 @@ END $$;
 -- SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'lote_interno'::regnamespace
 --   AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE'));   -- 0
 
+-- ──────── 216 de novo: carga de UF logo depois do deploy (revisão adversarial K, médio 2) ────────
+-- Pega qualquer escolta que tenha ficado sem UF na janela entre o bloco 1 e o deploy (as
+-- triggers da 216 já dão a UF a quem a master criou ou editou com coordenada; isto é a rede de
+-- segurança). Só o lado sem UF e com coordenada; ESC-2026-0001 e 0007 nunca (pelo código).
+DO $$
+DECLARE v_n integer;
+BEGIN
+  v_n := lote_interno.carregar_uf_escoltas();
+  RAISE NOTICE 'Onda K, bloco 2: % escolta(s) com UF carregada pela coordenada depois do deploy.', v_n;
+END $$;
+
 COMMIT;
 
 -- Conferência do bloco 2 (somente leitura):
@@ -6184,8 +6393,23 @@ UNION ALL SELECT 'Telegram do check-in pelo cron (esperado true)', checkin_teleg
 UNION ALL SELECT 'onda I: RPCs da gestão (esperado 7)', count(*)::text FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ('editar_escolta','pendencias_da_escolta','concluir_escolta_antecipada','voltar_etapa_escolta','zerar_escolta','arquivar_escolta','recuperar_escolta')
 UNION ALL SELECT 'onda I: registrar_etapa_escolta com anulado, arquivada e via_rpc (esperado true)', (prosrc LIKE '%pc.anulado_em IS NULL%' AND prosrc LIKE '%v_arquivada%' AND prosrc LIKE '%historico_rpc%')::text FROM pg_proc WHERE proname = 'registrar_etapa_escolta'
 UNION ALL SELECT 'onda I: funções do lote_interno executáveis por anon ou authenticated (esperado 0)', count(*)::text FROM pg_proc p WHERE p.pronamespace = 'lote_interno'::regnamespace AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE'))
-UNION ALL SELECT 'onda I: restrição das viaturas adiável e imediata (esperado true)', (condeferrable AND NOT condeferred)::text FROM pg_constraint WHERE conname = 'escolta_veiculos_escolta_veiculo_uk';
--- Esperado: true; lote2026_avisos_telegram, lote2026_pedidos_vencidos, lote2026_avisos_checkin; false; fotos_leitura_autenticada; 0; 2; true; true; onda I: 7; true; 0; true.
+UNION ALL SELECT 'onda I: restrição das viaturas adiável e imediata (esperado true)', (condeferrable AND NOT condeferred)::text FROM pg_constraint WHERE conname = 'escolta_veiculos_escolta_veiculo_uk'
+UNION ALL SELECT 'onda K: escoltas com coordenada e sem UF depois da carga do bloco 2 (esperado: só ESC-2026-0001 e 0007)', coalesce(string_agg(coalesce(codigo_escolta, left(id::text, 8)), ', '), 'nenhuma') FROM public.escoltas
+  WHERE ((origem_uf IS NULL AND NOT origem_uf_estimada AND coalesce(origem_lat, 0) <> 0) OR (destino_uf IS NULL AND NOT destino_uf_estimada AND coalesce(destino_lat, 0) <> 0))
+UNION ALL SELECT 'onda K: editar_escolta com as marcas por lado (esperado true)', (prosrc LIKE '%origem_uf_estimada%' AND prosrc NOT LIKE '%''uf_estimada''%')::text FROM pg_proc WHERE oid = 'public.editar_escolta(uuid, jsonb, jsonb, text)'::regprocedure;
+-- Esperado: true; lote2026_avisos_telegram, lote2026_pedidos_vencidos, lote2026_avisos_checkin; false; fotos_leitura_autenticada; 0; 2; true; true; onda I: 7; true; 0; true;
+-- onda K: só ESC-2026-0001 e 0007 (ou nenhuma); true.
+-- Onda K (revisão adversarial, médio 2), somente leitura, para listar e decidir (sem corrigir em massa as que
+-- vieram da Mapbox ou de local salvo): escoltas mexidas desde o bloco 1 cuja UF gravada sem a marca difere da
+-- UF pela malha. Trocar :'inicio_bloco1' pela hora em que o bloco 1 foi aplicado.
+-- SELECT e.codigo_escolta, 'origem' AS lado, e.origem_uf AS gravada, u.uf AS pela_malha, u.distancia_divisa_km
+--   FROM public.escoltas e, lote_interno.uf_do_ponto(e.origem_lat::float8, e.origem_lng::float8) u
+--  WHERE e.atualizado_em >= :'inicio_bloco1' AND NOT e.origem_uf_estimada AND e.origem_uf IS DISTINCT FROM u.uf AND u.fora_da_malha IS NOT NULL
+-- UNION ALL
+-- SELECT e.codigo_escolta, 'destino', e.destino_uf, u.uf, u.distancia_divisa_km
+--   FROM public.escoltas e, lote_interno.uf_do_ponto(e.destino_lat::float8, e.destino_lng::float8) u
+--  WHERE e.atualizado_em >= :'inicio_bloco1' AND NOT e.destino_uf_estimada AND e.destino_uf IS DISTINCT FROM u.uf AND u.fora_da_malha IS NOT NULL
+-- ORDER BY 1, 2;
 -- Com 'envio pelo banco ativo' falso (conferência do bloco 1), o Telegram do check-in continua
 -- saindo pelo navegador, com reserva no banco (reservar_alertas_checkin); registrar no relatório.
 -- Teste rápido sem escrever dado: abrir em aba anônima a URL pública antiga de uma foto (deve falhar).
@@ -7269,13 +7493,16 @@ UNION ALL SELECT 'onda I: restrição das viaturas adiável e imediata (esperado
 -- ──────── reverter 216_uf_e_paleta ────────
 -- -- 216_uf_e_paleta_reverter.sql
 -- -- ORDEM: primeiro o git revert do código da onda K e o deploy; depois este arquivo (antes da
--- -- 215_reverter). Guarda as UFs em backup_20261008.escoltas_uf (uma linha por escolta com UF;
--- -- rodar de novo não apaga o que já foi guardado), devolve a cor antiga (backup_20261008.cores_clientes)
--- -- aos clientes que continuam com a cor da carga (quem trocou de cor depois da 216 fica com a da
--- -- paleta, que também é válida), devolve o DEFAULT antigo da cor, tira a trigger de cor, a paleta,
--- -- as RPCs uf_da_coordenada e cores_clientes_das_escoltas, as funções internas, a malha, o índice, as restrições e as colunas
--- -- (a gerada primeiro) e recria impedir_edicao_por_operador com o corpo da 197.
--- -- A lista de conferência (backup_20261008.uf_a_conferir) e os backups ficam.
+-- -- 215_reverter). Guarda UF, marcas de estimada e coordenadas em backup_20261008.escoltas_uf
+-- -- (uma linha por escolta com UF ou marca; rodar de novo atualiza) e a cor de cada cliente no
+-- -- momento em backup_20261008.cores_reversao, para a reaplicação da 216 devolver as duas coisas
+-- -- sem transformar em estimada uma UF que não era e sem mudar cor escolhida (revisão K, menor
+-- -- 13). Devolve a cor antiga (backup_20261008.cores_clientes) aos clientes que continuam com a
+-- -- cor da carga (quem trocou de cor depois da 216 fica com a da paleta, que também é válida),
+-- -- devolve o DEFAULT antigo da cor, tira as triggers de cor e de UF, a paleta, as RPCs
+-- -- uf_da_coordenada e cores_clientes_das_escoltas, as funções internas, a malha, o índice, as
+-- -- restrições e as colunas (a gerada primeiro) e recria impedir_edicao_por_operador com o corpo
+-- -- da 197. A lista de conferência (backup_20261008.uf_a_conferir) e os backups ficam.
 -- CREATE SCHEMA IF NOT EXISTS backup_20261008;
 -- REVOKE ALL ON SCHEMA backup_20261008 FROM PUBLIC, anon, authenticated;
 -- DO $$
@@ -7283,23 +7510,50 @@ UNION ALL SELECT 'onda I: restrição das viaturas adiável e imediata (esperado
 --   IF EXISTS (SELECT 1 FROM information_schema.columns
 --               WHERE table_schema = 'public' AND table_name = 'escoltas' AND column_name = 'origem_uf') THEN
 --     CREATE TABLE IF NOT EXISTS backup_20261008.escoltas_uf (escolta_id uuid PRIMARY KEY, codigo_escolta text,
---       origem_uf text, destino_uf text, uf_estimada boolean, guardado_em timestamptz NOT NULL DEFAULT now());
+--       origem_uf text, destino_uf text, guardado_em timestamptz NOT NULL DEFAULT now());
+--     ALTER TABLE backup_20261008.escoltas_uf ADD COLUMN IF NOT EXISTS origem_uf_estimada boolean;
+--     ALTER TABLE backup_20261008.escoltas_uf ADD COLUMN IF NOT EXISTS destino_uf_estimada boolean;
+--     ALTER TABLE backup_20261008.escoltas_uf ADD COLUMN IF NOT EXISTS origem_lat numeric;
+--     ALTER TABLE backup_20261008.escoltas_uf ADD COLUMN IF NOT EXISTS origem_lng numeric;
+--     ALTER TABLE backup_20261008.escoltas_uf ADD COLUMN IF NOT EXISTS destino_lat numeric;
+--     ALTER TABLE backup_20261008.escoltas_uf ADD COLUMN IF NOT EXISTS destino_lng numeric;
 --     REVOKE ALL ON backup_20261008.escoltas_uf FROM PUBLIC, anon, authenticated;
 --     EXECUTE $q$
---       INSERT INTO backup_20261008.escoltas_uf (escolta_id, codigo_escolta, origem_uf, destino_uf, uf_estimada)
---       SELECT id, codigo_escolta, origem_uf, destino_uf, uf_estimada FROM public.escoltas
---        WHERE origem_uf IS NOT NULL OR destino_uf IS NOT NULL
+--       INSERT INTO backup_20261008.escoltas_uf (escolta_id, codigo_escolta, origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada,
+--                                                origem_lat, origem_lng, destino_lat, destino_lng)
+--       SELECT id, codigo_escolta, origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada,
+--              origem_lat, origem_lng, destino_lat, destino_lng FROM public.escoltas
+--        WHERE origem_uf IS NOT NULL OR destino_uf IS NOT NULL OR origem_uf_estimada OR destino_uf_estimada
 --       ON CONFLICT (escolta_id) DO UPDATE SET origem_uf = EXCLUDED.origem_uf, destino_uf = EXCLUDED.destino_uf,
---         uf_estimada = EXCLUDED.uf_estimada, guardado_em = now()$q$;
+--         origem_uf_estimada = EXCLUDED.origem_uf_estimada, destino_uf_estimada = EXCLUDED.destino_uf_estimada,
+--         origem_lat = EXCLUDED.origem_lat, origem_lng = EXCLUDED.origem_lng, destino_lat = EXCLUDED.destino_lat,
+--         destino_lng = EXCLUDED.destino_lng, guardado_em = now()$q$;
 --   END IF;
 -- END $$;
+--
+-- -- Triggers e funções da UF no servidor.
+-- DROP TRIGGER IF EXISTS tr_escoltas_uf_2_recalcular ON public.escoltas;
+-- DROP TRIGGER IF EXISTS tr_escoltas_uf_1_informada_origem ON public.escoltas;
+-- DROP TRIGGER IF EXISTS tr_escoltas_uf_1_informada_destino ON public.escoltas;
+-- DROP FUNCTION IF EXISTS lote_interno.recalcular_uf_escolta();
+-- DROP FUNCTION IF EXISTS lote_interno.anotar_uf_informada();
 --
 -- -- Cor: trigger fora antes de devolver a cor antiga (senão ela voltaria para a paleta).
 -- DROP TRIGGER IF EXISTS tr_normalizar_cor_cliente ON public.clientes;
 -- DROP FUNCTION IF EXISTS lote_interno.normalizar_cor_cliente();
 -- DO $$
 -- BEGIN
---   IF to_regclass('backup_20261008.cores_clientes') IS NOT NULL THEN
+--   IF to_regclass('backup_20261008.cores_clientes') IS NOT NULL AND to_regclass('public.paleta_clientes') IS NOT NULL THEN
+--     -- Cor de cada cliente agora (para a reaplicação) e a que a reversão devolve.
+--     CREATE TABLE IF NOT EXISTS backup_20261008.cores_reversao (cliente_id uuid PRIMARY KEY, cor_na_reversao text,
+--       cor_devolvida text, guardado_em timestamptz NOT NULL DEFAULT now());
+--     REVOKE ALL ON backup_20261008.cores_reversao FROM PUBLIC, anon, authenticated;
+--     INSERT INTO backup_20261008.cores_reversao (cliente_id, cor_na_reversao, cor_devolvida)
+--     SELECT c.id, c.cor_destaque,
+--            CASE WHEN b.cliente_id IS NOT NULL AND c.cor_destaque IS NOT DISTINCT FROM b.cor_nova THEN b.cor_antiga ELSE c.cor_destaque END
+--       FROM public.clientes c LEFT JOIN backup_20261008.cores_clientes b ON b.cliente_id = c.id
+--     ON CONFLICT (cliente_id) DO UPDATE SET cor_na_reversao = EXCLUDED.cor_na_reversao, cor_devolvida = EXCLUDED.cor_devolvida,
+--       guardado_em = now();
 --     UPDATE public.clientes c SET cor_destaque = b.cor_antiga
 --       FROM backup_20261008.cores_clientes b
 --      WHERE b.cliente_id = c.id AND c.cor_destaque IS NOT DISTINCT FROM b.cor_nova
@@ -7325,7 +7579,8 @@ UNION ALL SELECT 'onda I: restrição das viaturas adiável e imediata (esperado
 -- ALTER TABLE public.escoltas DROP CONSTRAINT IF EXISTS escoltas_origem_uf_formato;
 -- ALTER TABLE public.escoltas DROP CONSTRAINT IF EXISTS escoltas_destino_uf_formato;
 -- ALTER TABLE public.escoltas DROP COLUMN IF EXISTS interestadual;
--- ALTER TABLE public.escoltas DROP COLUMN IF EXISTS uf_estimada;
+-- ALTER TABLE public.escoltas DROP COLUMN IF EXISTS destino_uf_estimada;
+-- ALTER TABLE public.escoltas DROP COLUMN IF EXISTS origem_uf_estimada;
 -- ALTER TABLE public.escoltas DROP COLUMN IF EXISTS destino_uf;
 -- ALTER TABLE public.escoltas DROP COLUMN IF EXISTS origem_uf;
 --
