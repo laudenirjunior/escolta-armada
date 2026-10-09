@@ -2,7 +2,8 @@
 -- ORDEM: primeiro o git revert do código da onda I e o deploy; depois 218_reverter (bloco 2);
 -- então este arquivo; a 213 só depois dele. Aborta se a 218 ainda estiver aplicada.
 -- Recria os corpos anteriores (207, 208, 212 e o da produção para as triggers de status),
--- tira as três triggers tr_impedir_edicao_escolta_iniciada e as três policies novas.
+-- tira as três triggers tr_impedir_edicao_escolta_iniciada, as onze tr_impedir_apagar_gestao_*
+-- e as três policies novas.
 DO $$
 BEGIN
   IF to_regprocedure('public.editar_escolta(uuid, jsonb, jsonb, text)') IS NOT NULL THEN
@@ -17,6 +18,19 @@ DROP TRIGGER IF EXISTS tr_impedir_edicao_escolta_iniciada ON public.escoltas;
 DROP TRIGGER IF EXISTS tr_impedir_edicao_escolta_iniciada ON public.escolta_veiculos;
 DROP TRIGGER IF EXISTS tr_impedir_edicao_escolta_iniciada ON public.escolta_efetivo;
 DROP FUNCTION IF EXISTS lote_interno.impedir_edicao_escolta_iniciada();
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['pontos_controle', 'checklists', 'ocorrencias', 'emergencias', 'presencas', 'mural_presencas',
+                           'atualizacoes_status', 'rastreamento', 'escolta_status_historico',
+                           'escolta_conclusoes_antecipadas', 'escolta_veiculos']
+  LOOP
+    IF to_regclass('public.' || t) IS NOT NULL THEN
+      EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I', 'tr_impedir_apagar_gestao_' || t, t);
+    END IF;
+  END LOOP;
+END $$;
+DROP FUNCTION IF EXISTS lote_interno.impedir_apagar_registro();
 
 -- Corpos anteriores (copiados do banco montado na ordem dos blocos, antes da 214).
 CREATE OR REPLACE FUNCTION public.validar_transicao_status_escolta()

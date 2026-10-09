@@ -31,6 +31,12 @@
 --    cliente fica false. A anulação por janela de tempo usa só linhas via_rpc.
 -- 8. pontos_controle.lancado_por nulo vira o usuário da sessão (a master pode mandar
 --    user?.id nulo com sessão válida; a policy da 214 confere o autor depois disto).
+--    Ponto já gravado não muda de autor nem de horário (revisão adversarial I, menor 8):
+--    UPDATE de lancado_por e data_hora em pontos_controle entra na mesma trava do item 6
+--    (só as RPCs da gestão, ou sem usuário final). A master nunca faz UPDATE de ponto.
+-- A central lê a conclusão antecipada e a lista de pendências da escolta que vê (revisão
+-- adversarial I, médio 4; adendo 4.3.6: a lista aparece na tela da escolta e no relatório
+-- para quem vê a escolta). A tela "Pendências de conclusão" continua supervisor ou acima.
 -- Chaves estrangeiras de anulado_por, arquivada_por, concluida_por e feito_por para
 -- usuarios SEM ação (18.8, item 7): excluir quem anulou ou arquivou é recusado.
 -- Reversão: 213_poder_total_estrutura_reverter.sql (depois da 214), que guarda as colunas
@@ -130,6 +136,8 @@ BEGIN
   IF TG_TABLE_NAME <> 'escoltas' THEN
     v_cols := v_cols || ARRAY['status_escolta_no_registro'];
     IF v_new ? 'via_rpc' THEN v_cols := v_cols || ARRAY['via_rpc']; END IF;
+    -- Em nome de quem fez e quando: ponto gravado não muda de autor nem de horário.
+    IF TG_TABLE_NAME = 'pontos_controle' THEN v_cols := v_cols || ARRAY['lancado_por', 'data_hora']; END IF;
   END IF;
   FOREACH c IN ARRAY v_cols LOOP
     IF (v_new -> c) IS DISTINCT FROM (v_old -> c) THEN
@@ -197,7 +205,8 @@ CREATE POLICY escolta_resets_leitura ON public.escolta_resets FOR SELECT TO auth
   USING ((SELECT public.get_meu_perfil()) = ANY (ARRAY['administrador', 'gestor', 'supervisor']));
 COMMENT ON TABLE public.escolta_resets IS 'Lote 2026-10 (onda I): voltas de etapa e zerar feitos pela gestão. Escrita só pelas RPCs da 218.';
 
--- 5. Conclusão antecipada e pendências.
+-- 5. Conclusão antecipada e pendências. Leitura: quem vê a escolta pela operação (gestão,
+-- supervisão e central) e o efetivo dela; a view segue a RLS de quem lê (security_invoker).
 CREATE TABLE IF NOT EXISTS public.escolta_conclusoes_antecipadas (
   id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   escolta_id        uuid NOT NULL REFERENCES public.escoltas(id) ON DELETE CASCADE,
@@ -218,7 +227,7 @@ REVOKE ALL ON public.escolta_conclusoes_antecipadas FROM PUBLIC, anon, authentic
 GRANT SELECT ON public.escolta_conclusoes_antecipadas TO authenticated;
 DROP POLICY IF EXISTS escolta_conclusoes_leitura ON public.escolta_conclusoes_antecipadas;
 CREATE POLICY escolta_conclusoes_leitura ON public.escolta_conclusoes_antecipadas FOR SELECT TO authenticated
-  USING ((SELECT public.get_meu_perfil()) = ANY (ARRAY['administrador', 'gestor', 'supervisor'])
+  USING ((SELECT public.get_meu_perfil()) = ANY (ARRAY['administrador', 'gestor', 'supervisor', 'central'])
          OR public.sou_do_efetivo(escolta_id));
 COMMENT ON TABLE public.escolta_conclusoes_antecipadas IS
   'Lote 2026-10 (onda I): escolta concluída pela gestão antes do fim, com a lista do que não foi feito (calculada no servidor). Uma válida por escolta.';

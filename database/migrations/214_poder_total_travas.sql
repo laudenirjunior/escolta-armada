@@ -1,9 +1,16 @@
 -- 214_poder_total_travas.sql
 -- Lote 2026-10, onda I (adendo 01, item 4.3). Idempotente. Bloco 1, depois da 213.
--- Compatível com a master 2b3fff9: a master só faz UPDATE de status e fechamento em escolta
--- iniciada (conferido no código), não grava anulado nem arquivada e grava lancado_por com o
--- próprio usuário; sem arquivadas e sem anulados (nada disso existe antes da 218), os
--- filtros novos não mudam nenhum resultado.
+-- Compatível com a master 2b3fff9. O que a master grava em escolta iniciada (conferido no
+-- código, revisão adversarial I, menor 16): em escoltas, status, data_finalizacao,
+-- observacao_fechamento, checklist_pendente_no_inicio e periodicidade_checkin_min
+-- ([id]/page.tsx:2010), todas colunas livres; em escolta_veiculos, KM de saída e de retorno
+-- (gravarKmViaturas, :1714) e combustível, livres porque placa e escolta não mudam (nessa
+-- condição a 214 libera qualquer coluna da viatura, como a letra da 12.3.3); pontos,
+-- checklists e respostas, fotos, ocorrências, emergências e histórico (INSERT, sem trava de
+-- edição). Não grava anulado nem arquivada e grava lancado_por com o próprio usuário; sem
+-- arquivadas e sem anulados (nada disso existe antes da 218), os filtros novos não mudam
+-- nenhum resultado. A trava de DELETE do item 6 só recusa o que a master nunca apaga
+-- (registro anulado, que só existe depois da 218, e viatura com registro de campo).
 --
 -- Por quê (docs/14, seção 12.3; decisões S7, S8 e S10; 18.8, itens 6 e 7):
 -- 1. validar_transicao_status_escolta ganha um ramo especial, antes do erro, para a volta
@@ -32,6 +39,13 @@
 --    controle só no nome de quem grava (RESTRICTIVE de INSERT, depois do preenchimento da
 --    213.8); apagar escolta só o administrador, em rascunho e sem registro de campo
 --    (RESTRICTIVE de DELETE; decisão 1 do adendo: arquivar, nunca apagar).
+-- 6. Nada é apagado (revisão adversarial I, médio 2; decisão 2 do adendo): trigger BEFORE
+--    DELETE (tr_impedir_apagar_gestao_<tabela>) recusa, para todos os perfis, apagar linha
+--    anulada nas tabelas da 213 (e na de conclusões antecipadas) e apagar viatura da escolta
+--    que tenha qualquer registro de campo, anulado ou não (ponto, checklist, rastreamento,
+--    ocorrência ou emergência; a cascata levaria tudo junto, inclusive depois de um zerar).
+--    Vale também dentro das RPCs (trigger, não policy). Sem usuário final (auth.uid() nulo:
+--    migrations, reversões, SQL Editor e cron) passa, como nas demais travas.
 -- Reversão: 214_poder_total_travas_reverter.sql (depois da 218).
 
 -- 1. Máquina de estados.
@@ -99,7 +113,7 @@ BEGIN
   END IF;
 
   IF NOT v_ok THEN
-    RAISE EXCEPTION 'Transicao de status invalida: % para %', OLD.status, NEW.status
+    RAISE EXCEPTION 'Transição de status inválida: % para %', OLD.status, NEW.status
       USING ERRCODE = 'P0001';
   END IF;
 
@@ -197,7 +211,7 @@ BEGIN
     ) INTO v_tem;
 
     IF NOT v_tem THEN
-      RAISE EXCEPTION 'Nao e possivel concluir o retorno sem registrar o ponto de Transito para o Retorno.'
+      RAISE EXCEPTION 'Não é possível concluir o retorno sem registrar o ponto de Trânsito para o Retorno.'
         USING ERRCODE = 'P0001';
     END IF;
   END IF;
@@ -250,7 +264,7 @@ BEGIN
   --    viaturas do comboio registrando ao mesmo tempo (a segunda vê o ponto da primeira)
   --    e impede ponto de uma etapa que já passou.
   SELECT status INTO v_status FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
-  IF v_status IS NULL THEN RAISE EXCEPTION 'Escolta nao encontrada.'; END IF;
+  IF v_status IS NULL THEN RAISE EXCEPTION 'Escolta não encontrada.'; END IF;
   IF p_status_atual IS NOT NULL AND v_status IS DISTINCT FROM p_status_atual THEN
     RAISE EXCEPTION 'ERRO_SEM_TRANSICAO';
   END IF;
@@ -261,7 +275,7 @@ BEGIN
     IF EXISTS (SELECT 1 FROM jsonb_to_recordset(p_pontos) AS x(escolta_veiculo_id uuid)
                WHERE NOT EXISTS (SELECT 1 FROM public.escolta_veiculos ev
                                  WHERE ev.id = x.escolta_veiculo_id AND ev.escolta_id = p_escolta_id)) THEN
-      RAISE EXCEPTION 'Ponto de controle de viatura que nao pertence a esta escolta.';
+      RAISE EXCEPTION 'Ponto de controle de viatura que não pertence a esta escolta.';
     END IF;
     INSERT INTO public.pontos_controle (escolta_veiculo_id, tipo_ponto_id, data_hora, latitude, longitude,
                                         precisao_metros, sem_sinal_gps, foto_id, lancado_por, observacoes,
@@ -499,7 +513,7 @@ CREATE OR REPLACE FUNCTION public.reservar_aviso_presenca(p_presenca_id uuid) RE
 DECLARE v_perfil text; v_esc uuid; v_n int;
 BEGIN
   SELECT public.get_meu_perfil() INTO v_perfil;
-  IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessao invalida.'; END IF;
+  IF v_perfil IS NULL THEN RAISE EXCEPTION 'Sessão inválida.'; END IF;
   -- Onda I: presença anulada ou de escolta arquivada não vai ao Telegram.
   SELECT p.escolta_id INTO v_esc FROM public.presencas p JOIN public.escoltas e ON e.id = p.escolta_id
    WHERE p.id = p_presenca_id AND p.anulado_em IS NULL AND e.arquivada_em IS NULL;
@@ -543,7 +557,48 @@ CREATE POLICY escoltas_delete_so_rascunho ON public.escoltas AS RESTRICTIVE FOR 
          AND NOT EXISTS (SELECT 1 FROM public.presencas pr WHERE pr.escolta_id = escoltas.id)
          AND NOT EXISTS (SELECT 1 FROM public.atualizacoes_status au WHERE au.escolta_id = escoltas.id));
 
+-- 6. Nada é apagado: linha anulada e viatura com registro de campo.
+CREATE OR REPLACE FUNCTION lote_interno.impedir_apagar_registro() RETURNS trigger
+    LANGUAGE plpgsql SECURITY DEFINER
+    SET search_path TO 'public', 'pg_temp'
+    AS $$
+BEGIN
+  IF auth.uid() IS NULL THEN RETURN OLD; END IF;
+  IF TG_TABLE_NAME = 'escolta_veiculos' THEN
+    IF EXISTS (SELECT 1 FROM public.pontos_controle WHERE escolta_veiculo_id = OLD.id)
+       OR EXISTS (SELECT 1 FROM public.checklists WHERE escolta_veiculo_id = OLD.id)
+       OR EXISTS (SELECT 1 FROM public.rastreamento WHERE escolta_veiculo_id = OLD.id)
+       OR EXISTS (SELECT 1 FROM public.ocorrencias WHERE escolta_veiculo_id = OLD.id)
+       OR EXISTS (SELECT 1 FROM public.emergencias WHERE escolta_veiculo_id = OLD.id) THEN
+      RAISE EXCEPTION 'Esta viatura tem registro de campo (válido ou anulado) e não pode ser apagada: nada é apagado.'
+        USING ERRCODE = '42501';
+    END IF;
+    RETURN OLD;
+  END IF;
+  IF to_jsonb(OLD) ->> 'anulado_em' IS NOT NULL THEN
+    RAISE EXCEPTION 'Registro anulado não pode ser apagado: ele fica como prova do que a gestão desfez.'
+      USING ERRCODE = '42501';
+  END IF;
+  RETURN OLD;
+END;
+$$;
+REVOKE ALL ON FUNCTION lote_interno.impedir_apagar_registro() FROM PUBLIC, anon, authenticated;
+
+DO $$
+DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['pontos_controle', 'checklists', 'ocorrencias', 'emergencias', 'presencas', 'mural_presencas',
+                           'atualizacoes_status', 'rastreamento', 'escolta_status_historico',
+                           'escolta_conclusoes_antecipadas', 'escolta_veiculos']
+  LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS %I ON public.%I', 'tr_impedir_apagar_gestao_' || t, t);
+    EXECUTE format('CREATE TRIGGER %I BEFORE DELETE ON public.%I FOR EACH ROW EXECUTE FUNCTION lote_interno.impedir_apagar_registro()',
+                   'tr_impedir_apagar_gestao_' || t, t);
+  END LOOP;
+END $$;
+
 -- Conferência:
+-- SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'tr_impedir_apagar_gestao_%';           -- 11
 -- SELECT prosrc LIKE '%transicao_especial%' FROM pg_proc WHERE oid = 'public.validar_transicao_status_escolta()'::regprocedure;  -- true
 -- SELECT count(*) FROM pg_trigger WHERE tgname = 'tr_impedir_edicao_escolta_iniciada';     -- 3
 -- SELECT polname FROM pg_policy WHERE polname IN ('escoltas_arquivada_so_admin', 'pontos_insert_autor', 'escoltas_delete_so_rascunho'); -- 3

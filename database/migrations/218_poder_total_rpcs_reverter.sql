@@ -3,14 +3,17 @@
 -- a 213 só depois dele. Tira as RPCs da gestão e as auxiliares do lote_interno, devolve os
 -- corpos anteriores (204 com a 217, 202 e 214) e a restrição única de mural_presencas.
 -- Presenças do mural anuladas que repetem uma válida vão para backup_20261008 antes (senão
--- a restrição única não volta).
+-- a restrição única não volta); voltam pelo 213_poder_total_estrutura_restaurar.sql.
 DROP FUNCTION IF EXISTS public.editar_escolta(uuid, jsonb, jsonb, text);
 DROP FUNCTION IF EXISTS public.pendencias_da_escolta(uuid);
 DROP FUNCTION IF EXISTS public.concluir_escolta_antecipada(uuid, text);
+DROP FUNCTION IF EXISTS public.voltar_etapa_escolta(uuid, text, boolean, jsonb);
+DROP FUNCTION IF EXISTS public.zerar_escolta(uuid, text, boolean, jsonb);
 DROP FUNCTION IF EXISTS public.voltar_etapa_escolta(uuid, text, boolean);
 DROP FUNCTION IF EXISTS public.zerar_escolta(uuid, text, boolean);
 DROP FUNCTION IF EXISTS public.arquivar_escolta(uuid, text);
 DROP FUNCTION IF EXISTS public.recuperar_escolta(uuid, text);
+DROP FUNCTION IF EXISTS lote_interno.executar_reset(uuid, text, text, boolean, jsonb);
 DROP FUNCTION IF EXISTS lote_interno.executar_reset(uuid, text, text, boolean);
 DROP FUNCTION IF EXISTS lote_interno.viatura_tem_registro(uuid);
 DROP FUNCTION IF EXISTS lote_interno.modo_gestao(boolean);
@@ -31,6 +34,10 @@ CREATE SCHEMA IF NOT EXISTS backup_20261008;
 REVOKE ALL ON SCHEMA backup_20261008 FROM PUBLIC, anon, authenticated;
 CREATE TABLE IF NOT EXISTS backup_20261008.mural_presencas_anuladas (linha jsonb NOT NULL, gravado_em timestamptz NOT NULL DEFAULT now());
 REVOKE ALL ON backup_20261008.mural_presencas_anuladas FROM PUBLIC, anon, authenticated;
+-- Uma linha por presença (rodar de novo, ou reverter outra vez depois de reaplicar, não duplica).
+DELETE FROM backup_20261008.mural_presencas_anuladas a USING backup_20261008.mural_presencas_anuladas b
+ WHERE a.linha ->> 'id' = b.linha ->> 'id' AND (a.gravado_em, a.ctid) < (b.gravado_em, b.ctid);
+CREATE UNIQUE INDEX IF NOT EXISTS mural_presencas_anuladas_uk ON backup_20261008.mural_presencas_anuladas ((linha ->> 'id'));
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'mural_presencas_escolta_id_vigilante_id_key'
@@ -38,7 +45,8 @@ BEGIN
     INSERT INTO backup_20261008.mural_presencas_anuladas (linha)
     SELECT to_jsonb(m) FROM public.mural_presencas m
      WHERE m.anulado_em IS NOT NULL
-       AND EXISTS (SELECT 1 FROM public.mural_presencas o WHERE o.escolta_id = m.escolta_id AND o.vigilante_id = m.vigilante_id AND o.id <> m.id);
+       AND EXISTS (SELECT 1 FROM public.mural_presencas o WHERE o.escolta_id = m.escolta_id AND o.vigilante_id = m.vigilante_id AND o.id <> m.id)
+    ON CONFLICT ((linha ->> 'id')) DO UPDATE SET linha = EXCLUDED.linha, gravado_em = now();
     DELETE FROM public.mural_presencas m
      WHERE m.anulado_em IS NOT NULL
        AND EXISTS (SELECT 1 FROM public.mural_presencas o WHERE o.escolta_id = m.escolta_id AND o.vigilante_id = m.vigilante_id AND o.id <> m.id);
@@ -589,7 +597,7 @@ BEGIN
   --    viaturas do comboio registrando ao mesmo tempo (a segunda vê o ponto da primeira)
   --    e impede ponto de uma etapa que já passou.
   SELECT status INTO v_status FROM public.escoltas WHERE id = p_escolta_id FOR UPDATE;
-  IF v_status IS NULL THEN RAISE EXCEPTION 'Escolta nao encontrada.'; END IF;
+  IF v_status IS NULL THEN RAISE EXCEPTION 'Escolta não encontrada.'; END IF;
   IF p_status_atual IS NOT NULL AND v_status IS DISTINCT FROM p_status_atual THEN
     RAISE EXCEPTION 'ERRO_SEM_TRANSICAO';
   END IF;
@@ -600,7 +608,7 @@ BEGIN
     IF EXISTS (SELECT 1 FROM jsonb_to_recordset(p_pontos) AS x(escolta_veiculo_id uuid)
                WHERE NOT EXISTS (SELECT 1 FROM public.escolta_veiculos ev
                                  WHERE ev.id = x.escolta_veiculo_id AND ev.escolta_id = p_escolta_id)) THEN
-      RAISE EXCEPTION 'Ponto de controle de viatura que nao pertence a esta escolta.';
+      RAISE EXCEPTION 'Ponto de controle de viatura que não pertence a esta escolta.';
     END IF;
     INSERT INTO public.pontos_controle (escolta_veiculo_id, tipo_ponto_id, data_hora, latitude, longitude,
                                         precisao_metros, sem_sinal_gps, foto_id, lancado_por, observacoes,
