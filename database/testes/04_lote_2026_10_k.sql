@@ -235,6 +235,18 @@ ROLLBACK;
 
 -- ── 5. Carga: ESC-2026-0001 e 0007 sem mudança, lista de conferência e escoltas já com UF ──
 BEGIN;
+-- No banco recriado do zero elas não existem: nascem aqui (sem UF, com coordenada de São Paulo, que a
+-- carga preencheria se não as excluísse), só dentro desta transação desfeita.
+DO $$
+DECLARE c text; e uuid;
+BEGIN
+  FOREACH c IN ARRAY ARRAY['ESC-2026-0001', 'ESC-2026-0007'] LOOP
+    IF NOT EXISTS (SELECT 1 FROM public.escoltas WHERE codigo_escolta = c) THEN
+      e := qa.nova_escolta(now() - interval '30 days', 'cancelada');
+      UPDATE public.escoltas SET codigo_escolta = c, origem_lat = -23.5505, origem_lng = -46.6333 WHERE id = e;
+    END IF;
+  END LOOP;
+END $$;
 CREATE TEMP TABLE k_antes ON COMMIT DROP AS
   SELECT id, codigo_escolta, to_jsonb(e) AS linha FROM public.escoltas e WHERE codigo_escolta IN ('ESC-2026-0001', 'ESC-2026-0007');
 DO $$
@@ -282,7 +294,7 @@ BEGIN
   SELECT count(*) INTO n_antes FROM k_antes;
   SELECT count(*) INTO n_igual FROM k_antes a JOIN public.escoltas e ON e.id = a.id
    WHERE to_jsonb(e) = a.linha AND e.origem_uf IS NULL AND e.destino_uf IS NULL AND NOT e.uf_estimada;
-  IF n_antes = n_igual THEN
+  IF n_antes = 2 AND n_antes = n_igual THEN
     RAISE NOTICE 'PASSOU: ESC-2026-0001 e ESC-2026-0007 (% no banco) idênticas linha a linha antes e depois da carga, sem UF', n_antes;
   ELSE RAISE NOTICE 'FALHOU: % de % escoltas protegidas iguais depois da carga', n_igual, n_antes; END IF;
   IF NOT EXISTS (SELECT 1 FROM backup_20261008.uf_a_conferir WHERE codigo_escolta IN ('ESC-2026-0001', 'ESC-2026-0007')) THEN
