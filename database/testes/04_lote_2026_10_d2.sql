@@ -62,7 +62,9 @@ BEGIN
   ELSE RAISE NOTICE 'FALHOU: % de 2 funções de trigger com lock_timeout', n; END IF;
   IF NOT has_table_privilege('authenticated', 'lote_interno.locais_uso_falhas', 'SELECT')
      AND NOT has_table_privilege('anon', 'lote_interno.locais_uso_falhas', 'SELECT')
-     AND NOT has_schema_privilege('authenticated', 'lote_interno', 'USAGE')
+     -- Onda L (219): authenticated tem USAGE no schema, mas a tabela continua sem SELECT.
+     AND (NOT has_schema_privilege('authenticated', 'lote_interno', 'USAGE')
+          OR to_regprocedure('public.registrar_campo(uuid, text, jsonb, integer, timestamptz, jsonb)') IS NOT NULL)
   THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: authenticated e anon não leem lote_interno.locais_uso_falhas';
   ELSE RAISE NOTICE 'FALHOU: registro de falhas legível pela API'; END IF;
   IF NOT has_column_privilege('authenticated', 'public.locais_salvos', 'vezes_usado', 'UPDATE')

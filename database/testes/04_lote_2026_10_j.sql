@@ -17,14 +17,20 @@ BEGIN
   SELECT count(*) INTO n FROM pg_proc WHERE pronamespace = 'lote_interno'::regnamespace;
   SELECT string_agg(p.proname, ', ') INTO v_lista FROM pg_proc p
    WHERE p.pronamespace = 'lote_interno'::regnamespace
-     AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE'));
+     AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE'))
+     -- Onda L (219): as duas funções do livro são as únicas com EXECUTE para authenticated
+     -- (conferido no 04_lote_2026_10_l.sql); anon continua sem nenhuma.
+     AND NOT (p.proname IN ('livro_registrar', 'livro_resultado') AND NOT has_function_privilege('anon', p.oid, 'EXECUTE'));
   IF n >= 5 AND v_lista IS NULL THEN
     RAISE NOTICE 'PASSOU: nenhuma das % funções do lote_interno é executável por anon ou authenticated', n;
   ELSE RAISE NOTICE 'FALHOU: lote_interno com % funções; executáveis por anon ou authenticated: %', n, v_lista; END IF;
 
-  IF has_schema_privilege('anon', 'lote_interno', 'USAGE') OR has_schema_privilege('authenticated', 'lote_interno', 'USAGE') THEN
+  -- Onda L (219): authenticated ganha USAGE (a registrar_campo, INVOKER, chama o livro);
+  -- antes da 219, nem anon nem authenticated.
+  IF has_schema_privilege('anon', 'lote_interno', 'USAGE')
+     OR (has_schema_privilege('authenticated', 'lote_interno', 'USAGE') AND to_regprocedure('public.registrar_campo(uuid, text, jsonb, integer, timestamptz, jsonb)') IS NULL) THEN
     RAISE NOTICE 'FALHOU: anon ou authenticated com USAGE no lote_interno';
-  ELSE RAISE NOTICE 'BLOQUEADO CORRETAMENTE: lote_interno sem USAGE para anon e authenticated'; END IF;
+  ELSE RAISE NOTICE 'BLOQUEADO CORRETAMENTE: lote_interno sem USAGE para anon (e para authenticated antes da 219)'; END IF;
 
   -- Observação: ALTER DEFAULT PRIVILEGES por schema não retira o EXECUTE global de PUBLIC
   -- (limite do PostgreSQL); a garantia é o REVOKE explícito em cada função, conferido acima.

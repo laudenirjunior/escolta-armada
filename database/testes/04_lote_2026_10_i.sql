@@ -108,7 +108,9 @@ BEGIN
   ELSE RAISE NOTICE 'FALHOU: % FKs sem ação para usuarios (esperado 13)', n; END IF;
 
   SELECT string_agg(p.proname, ', ') INTO v_lista FROM pg_proc p WHERE p.pronamespace = 'lote_interno'::regnamespace
-     AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE'));
+     AND (has_function_privilege('anon', p.oid, 'EXECUTE') OR has_function_privilege('authenticated', p.oid, 'EXECUTE'))
+     -- Onda L (219): só as duas funções do livro, e só para authenticated (04_lote_2026_10_l.sql).
+     AND NOT (p.proname IN ('livro_registrar', 'livro_resultado') AND NOT has_function_privilege('anon', p.oid, 'EXECUTE'));
   SELECT count(*) INTO n FROM pg_proc WHERE pronamespace = 'lote_interno'::regnamespace;
   IF v_lista IS NULL AND n >= 24 THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: nenhuma das % funções do lote_interno executável por anon ou authenticated', n;
   ELSE RAISE NOTICE 'FALHOU: funções do lote_interno executáveis: %', v_lista; END IF;
