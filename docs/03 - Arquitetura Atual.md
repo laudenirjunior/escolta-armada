@@ -85,6 +85,14 @@ As migrations válidas começam no número 100 e são aplicadas via MCP, registr
 - Só tela (`app/dashboard/escoltas/[id]/page.tsx`), sem banco. O KM inicial e a foto do painel por viatura (estados `kmPartida` e `fotosPartida`, mapas por `escolta_veiculos.id`) são pedidos no Passo 2, num cartão por viatura, e conferidos por `erroPorViaturaPasso2` no avanço do Passo 2 e de novo em `handleWizardSubmit`. O Passo 3 tem só as observações de saída e o resumo do KM e da miniatura da foto do painel (`MiniaturaArquivo`); ao voltar ao Passo 2, `CameraInput` reabre com as fotos já registradas (`iniciais`). As consultas de viaturas do detalhe, da impressão e do Campo ordenam por `criado_em` e `id`, a mesma "primeira viatura" das RPCs.
 - Gravação sem mudança: no Confirmar, `gravarPontosPorViatura` grava um ponto `base_saida` por viatura com a foto e o KM daquela viatura (JSON do ponto) na mesma transação da passagem a `em_andamento` (`registrar_etapa_escolta`), e `gravarKmViaturas` grava `escolta_veiculos.quilometragem_saida` depois. Checklists e as 5 fotos de ângulo continuam só na primeira viatura (S1, pendência 0.2). O diálogo "Saída da Base" fora do wizard não muda (S16).
 
+## Locais salvos: uso e UF (lote 2026-10, onda D2)
+
+- **Migration 215 (bloco 1):** `locais_salvos.vezes_usado` (inteiro, padrão 0) e `locais_salvos.uf` (CHECK de duas letras maiúsculas); os 5 locais da carga da 205 com UF RJ. Atalhos ordenados por `vezes_usado DESC, nome` (`lib/locais.ts`, `carregarLocaisAtivos`, com volta à ordem por nome se a 215 não estiver no banco).
+- **Trigger `tr_contar_uso_local`** (AFTER INSERT OR UPDATE OF origem_endereco, destino_endereco, origem_lat, origem_lng, destino_lat, destino_lng em `escoltas`; `lote_interno.contar_uso_local`, SECURITY DEFINER, sem GRANT): para cada lado que mudou de fato (IS DISTINCT FROM), acha o local por `lote_interno.local_do_endereco` (texto igual ao endereço do local, sozinho ou seguido de ", " e do complemento, como a Nova grava; senão a coordenada mais próxima até 100 m; locais inativos fora) e soma 1 só se o local novo for diferente do anterior (trocar só o complemento não conta). Status, KM, UF e as cargas não contam. Nunca recusa a gravação da escolta: erro interno vira WARNING. Compatível com a master (criação e edição dela testadas na janela do bloco 1).
+- **Quem grava `vezes_usado`:** só a trigger. INSERT e UPDATE de `authenticated` em `locais_salvos` passaram a ser por coluna, sem `vezes_usado`; `locais_salvos_regras` ignora o UPDATE que só muda `vezes_usado` (o uso não grava quem criou a escolta em `atualizado_por`) e devolve para conferência o local ativo cuja UF mudou.
+- **Carga:** `lote_interno.carregar_uso_locais()` conta as escoltas existentes pela mesma regra, só lendo `escoltas` (UPDATE só em `locais_salvos`), e roda só quando a coluna nasce. Reversão: `215_locais_uso_reverter.sql` guarda uso e UF em `backup_20261008.locais_uso`.
+- **App:** `components/endereco/atalhos-locais.tsx` (botões pequenos; um toque preenche endereço, complemento, coordenada e UF), `components/endereco/salvar-endereco-local.tsx` ("Salvar este endereço" ao lado de origem e destino, supervisor ou acima; cria `aguardando_conferencia` com endereço, complemento, coordenada e UF). A UF do atalho fica no estado da Nova (`origem_uf`, `destino_uf`) e só vai ao INSERT quando `escoltas.origem_uf` existir (`escoltaTemUf`, onda K); na edição, a `editar_escolta` já ignora coluna ausente. UF vazia nunca é enviada.
+
 ## Triggers em `escoltas`
 
 | Trigger | Momento | Papel |
@@ -94,6 +102,7 @@ As migrations válidas começam no número 100 e são aplicadas via MCP, registr
 | `tr_exigir_transito_retorno` | BEFORE UPDATE OF status | Exige o ponto de trânsito antes de concluir o retorno |
 | `tr_verificar_checklist_pendente` | BEFORE UPDATE OF status | Marca pendência de checklist |
 | `tr_registrar_historico_status` | AFTER UPDATE OF status | Grava o histórico |
+| `tr_contar_uso_local` (215) | AFTER INSERT OR UPDATE OF endereços e coordenadas | Soma o uso do local salvo de origem e destino |
 
 **Defeito conhecido, não corrigido:** o histórico é gravado em dobro. A trigger insere e o app insere de novo em 12 pontos. São 111 linhas onde deveria haver cerca de 71, com 58 sem autor.
 
