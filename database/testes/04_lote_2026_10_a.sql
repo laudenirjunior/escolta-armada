@@ -208,7 +208,7 @@ BEGIN
   BEGIN
     UPDATE public.escoltas SET metadados = '{"x":1}' WHERE id = current_setting('t.rua')::uuid;
     RAISE NOTICE 'FALHOU: operador alterou metadados';
-  EXCEPTION WHEN raise_exception THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: operador alterando metadados';
+  EXCEPTION WHEN raise_exception OR insufficient_privilege THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: operador alterando metadados';  -- onda I: a 214 recusa antes (42501)
   END;
 END $$;
 ROLLBACK;
