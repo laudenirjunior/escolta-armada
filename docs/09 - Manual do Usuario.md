@@ -415,6 +415,19 @@ A emergência **nunca é bloqueada por falta de GPS**: é um toque, e a central 
 
 `[PRINT P35]`
 
+## B9. Sem internet (outubro de 2026, em implantação)
+
+Quando o aparelho perde a conexão, aparece no topo uma **faixa vermelha fixa**: "Sem conexão." e, se houver, quantos registros estão guardados no aparelho. Com a conexão de volta, a faixa fica âmbar enquanto os registros guardados sobem e **some quando tudo foi enviado**. O Painel mostra o mesmo contador e, se for o caso, "N registros não aceitos; a supervisão foi avisada".
+
+- O **Campo** e o **Painel** abrem sem internet, desde que você já tenha entrado com internet neste aparelho (o primeiro login sempre exige internet). Outras telas mostram "Esta tela precisa de internet. Volte ao Painel".
+- Ao **sair do sistema** com registros guardados, o aplicativo avisa: eles ficam no aparelho e só sobem quando você entrar de novo, neste aparelho, com internet.
+- **iPhone:** o envio só acontece com o aplicativo aberto (o Safari não envia em segundo plano). **Instale o aplicativo na tela de início**: sem isso, o iPhone pode apagar os dados guardados depois de alguns dias sem uso.
+- Registro que ainda está **só no aparelho se perde** se o aparelho for perdido, quebrado ou limpo antes do envio. Procure sinal assim que puder.
+- A hora gravada é a do **relógio do aparelho** no momento da ação; o servidor guarda também a hora em que recebeu.
+- **Teste em aparelho real** (Android e iPhone) é obrigatório antes de depender do modo sem internet.
+
+A gravação dos registros sem internet pelo Campo e pela tela da escolta, a tela de conflitos da supervisão e a emergência sem conexão entram na segunda parte desta entrega; este trecho será completado com elas.
+
 ---
 
 # Anexos
@@ -446,7 +459,7 @@ Rascunho, Agendada, Pré-Início, Em Andamento, Na Origem, Trânsito p/ Destino,
 
 ## Anexo 3: O que o sistema não faz
 
-- **Não funciona sem internet.** Sem fila offline, sem sincronização posterior.
+- **Sem internet, só o essencial.** O Campo e o Painel abrem sem conexão (seção B9); criar e editar escolta, ações da gestão, finalização e login exigem internet.
 - **Não substitui o rádio.**
 - **Não rastreia continuamente.** A posição é gravada nos pontos, check-ins e paradas.
 - **Não há cadastro de equipamentos/ferramentas.** Arma vai em Armamentos; colete, rádio e lanterna são itens de checklist conferidos no pré-início.
