@@ -13,6 +13,8 @@ const CHAVE_PERSISTIR = 'escolta-campo:persistir-pedido'
 export function ehErroDeRede(e: unknown): boolean {
   const m = String((e as { message?: string } | null)?.message ?? e ?? '')
   const n = String((e as { name?: string } | null)?.name ?? '')
+  // SEM_CONEXAO: resposta do service worker sem rede e sem cópia guardada (parte 2).
+  if ((e as { code?: string } | null)?.code === 'SEM_CONEXAO') return true
   return n === 'AuthRetryableFetchError' || n === 'TypeError'
     || /failed to fetch|fetch failed|networkerror|network request failed|load failed|err_internet/i.test(m)
 }

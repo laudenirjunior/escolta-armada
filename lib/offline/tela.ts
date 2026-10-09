@@ -136,6 +136,8 @@ export function fotosDosPendentes(pendentes: RegistroFila[]): Record<string, str
 /** Erro de leitura que é falta de rede (a tela usa a cópia do aparelho, não esvazia). */
 export function erroDeRede(erro: { message?: string; code?: string } | null | undefined): boolean {
   if (!erro) return false
+  // Resposta do service worker sem rede e sem cópia (504 imediato, sem novas tentativas).
+  if (erro.code === 'SEM_CONEXAO') return true
   if (aparelhoSemRede()) return true
   const m = String(erro.message ?? '')
   return !erro.code && /failed to fetch|fetch failed|networkerror|network request failed|load failed|err_internet|typeerror/i.test(m)
