@@ -33,7 +33,8 @@ BEGIN
   RETURN v;
 END $$;
 
--- 1. Estrutura: colunas, CHECK, trigger e funções internas sem GRANT.
+-- 1. Estrutura: colunas, CHECK, triggers, funções internas sem GRANT, lock_timeout, registro
+-- de falhas sem acesso de authenticated e resumo das falhas só para a gestão.
 BEGIN;
 DO $$
 DECLARE n int; t text;
@@ -43,14 +44,27 @@ BEGIN
   IF n = 2 THEN RAISE NOTICE 'PASSOU: locais_salvos tem vezes_usado e uf';
   ELSE RAISE NOTICE 'FALHOU: % de 2 colunas novas', n; END IF;
   SELECT pg_get_triggerdef(oid) INTO t FROM pg_trigger WHERE tgname = 'tr_contar_uso_local' AND tgrelid = 'public.escoltas'::regclass;
-  IF t LIKE '%AFTER INSERT OR UPDATE OF origem_endereco, destino_endereco, origem_lat, origem_lng, destino_lat, destino_lng%' THEN
-    RAISE NOTICE 'PASSOU: trigger de uso só em INSERT e em UPDATE das colunas de endereço';
+  IF t LIKE '%AFTER INSERT OR DELETE OR UPDATE OF origem_endereco, destino_endereco, origem_lat, origem_lng, destino_lat, destino_lng, status ON public.escoltas FOR EACH ROW%' THEN
+    RAISE NOTICE 'PASSOU: trigger de uso das escoltas em INSERT, DELETE e UPDATE das colunas de endereço e do status';
   ELSE RAISE NOTICE 'FALHOU: trigger de uso %', coalesce(t, 'ausente'); END IF;
+  SELECT pg_get_triggerdef(oid) INTO t FROM pg_trigger WHERE tgname = 'tr_recontar_uso_locais' AND tgrelid = 'public.locais_salvos'::regclass;
+  IF t LIKE '%AFTER INSERT OR DELETE OR UPDATE OF nome, endereco, complemento, latitude, longitude, situacao ON public.locais_salvos FOR EACH STATEMENT%' THEN
+    RAISE NOTICE 'PASSOU: trigger por comando em locais_salvos (nome, texto, pino e situação; vezes_usado não a dispara)';
+  ELSE RAISE NOTICE 'FALHOU: trigger de recontagem %', coalesce(t, 'ausente'); END IF;
   SELECT count(*) INTO n FROM pg_proc p WHERE p.pronamespace = 'lote_interno'::regnamespace
-     AND p.proname IN ('contar_uso_local', 'local_do_endereco', 'carregar_uso_locais')
+     AND p.proname IN ('contar_uso_local', 'recontar_uso_locais', 'local_do_endereco', 'contar_escoltas_do_local', 'carregar_uso_locais')
      AND p.prosecdef AND NOT has_function_privilege('anon', p.oid, 'EXECUTE') AND NOT has_function_privilege('authenticated', p.oid, 'EXECUTE');
-  IF n = 3 THEN RAISE NOTICE 'PASSOU: as 3 funções da 215 são SECURITY DEFINER sem EXECUTE para anon e authenticated';
-  ELSE RAISE NOTICE 'FALHOU: % de 3 funções internas corretas', n; END IF;
+  IF n = 5 THEN RAISE NOTICE 'PASSOU: as 5 funções internas da 215 são SECURITY DEFINER sem EXECUTE para anon e authenticated';
+  ELSE RAISE NOTICE 'FALHOU: % de 5 funções internas corretas', n; END IF;
+  SELECT count(*) INTO n FROM pg_proc p WHERE p.pronamespace = 'lote_interno'::regnamespace
+     AND p.proname IN ('contar_uso_local', 'recontar_uso_locais') AND 'lock_timeout=500ms' = ANY (p.proconfig);
+  IF n = 2 THEN RAISE NOTICE 'PASSOU: as duas funções de trigger rodam com lock_timeout de 500 ms';
+  ELSE RAISE NOTICE 'FALHOU: % de 2 funções de trigger com lock_timeout', n; END IF;
+  IF NOT has_table_privilege('authenticated', 'lote_interno.locais_uso_falhas', 'SELECT')
+     AND NOT has_table_privilege('anon', 'lote_interno.locais_uso_falhas', 'SELECT')
+     AND NOT has_schema_privilege('authenticated', 'lote_interno', 'USAGE')
+  THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: authenticated e anon não leem lote_interno.locais_uso_falhas';
+  ELSE RAISE NOTICE 'FALHOU: registro de falhas legível pela API'; END IF;
   IF NOT has_column_privilege('authenticated', 'public.locais_salvos', 'vezes_usado', 'UPDATE')
      AND NOT has_column_privilege('authenticated', 'public.locais_salvos', 'vezes_usado', 'INSERT')
      AND has_column_privilege('authenticated', 'public.locais_salvos', 'uf', 'UPDATE')
@@ -65,6 +79,26 @@ BEGIN
     RAISE NOTICE 'FALHOU: UF minúscula aceita';
   EXCEPTION WHEN check_violation THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: UF fora do formato de duas letras maiúsculas';
   END;
+END $$;
+ROLLBACK;
+BEGIN;
+INSERT INTO lote_interno.locais_uso_falhas (origem, erro, codigo) VALUES ('escoltas', 'falha QA', 'XX000');
+SELECT qa.como('qa_gestor');
+DO $$
+DECLARE r record;
+BEGIN
+  SELECT * INTO r FROM public.locais_uso_falhas_resumo();
+  IF r.total >= 1 AND r.ultima ~ '^\d{2}/\d{2}/\d{4} \d{2}:\d{2}$' THEN
+    RAISE NOTICE 'PASSOU: gestor lê o resumo das falhas da contagem (total %, última em DD/MM/AAAA HH:MM de Brasília)', r.total;
+  ELSE RAISE NOTICE 'FALHOU: resumo das falhas % %', r.total, r.ultima; END IF;
+END $$;
+SELECT pg_temp.pg();
+SELECT qa.como('qa_supervisor');
+DO $$
+BEGIN
+  PERFORM * FROM public.locais_uso_falhas_resumo();
+  RAISE NOTICE 'FALHOU: supervisor leu o resumo das falhas';
+EXCEPTION WHEN insufficient_privilege THEN RAISE NOTICE 'BLOQUEADO CORRETAMENTE: supervisor não lê o resumo das falhas (%)', SQLERRM;
 END $$;
 ROLLBACK;
 
@@ -105,8 +139,8 @@ BEGIN
 END $$;
 ROLLBACK;
 
--- 4. Edição: só a mudança de local conta (IS DISTINCT FROM); mesmo endereço, complemento e
--- outras colunas não contam; a edição pela editar_escolta (onda I) conta o lado mudado.
+-- 4. Edição: só a mudança de local recalcula (IS DISTINCT FROM); mesmo endereço, complemento
+-- do mesmo local e outras colunas não mudam o uso; a editar_escolta (onda I) recalcula o lado mudado.
 BEGIN;
 SELECT pg_temp.locais_qa();
 SELECT qa.como('qa_gestor');
@@ -234,10 +268,13 @@ BEGIN
   IF r.situacao = 'aguardando_conferencia' AND r.vezes_usado = 0 AND r.uf = 'RJ' THEN
     RAISE NOTICE 'PASSOU: supervisor salva o endereço do campo com UF, aguardando conferência e uso 0';
   ELSE RAISE NOTICE 'FALHOU: local do campo % % %', r.situacao, r.vezes_usado, r.uf; END IF;
-  UPDATE public.locais_salvos SET uf = 'TO' WHERE nome = 'QA D2 Base';
-  SELECT situacao INTO r FROM public.locais_salvos WHERE nome = 'QA D2 Base';
-  IF r.situacao = 'ativo' THEN RAISE NOTICE 'PASSOU: regravar a mesma UF de local ativo mantém o local ativo';
-  ELSE RAISE NOTICE 'FALHOU: regravar a mesma UF mudou o local para %', r.situacao; END IF;
+  -- A mesma UF junto com outra coluna (fonte_coordenada): a linha muda, então passa pela
+  -- comparação de UF da locais_salvos_regras (não pelo atalho do UPDATE só de vezes_usado).
+  UPDATE public.locais_salvos SET uf = 'TO', fonte_coordenada = 'Revisada pelo supervisor' WHERE nome = 'QA D2 Base';
+  SELECT situacao, fonte_coordenada, (atualizado_por = public.get_meu_usuario_id()) AS por_mim INTO r FROM public.locais_salvos WHERE nome = 'QA D2 Base';
+  IF r.situacao = 'ativo' AND r.fonte_coordenada = 'Revisada pelo supervisor' AND r.por_mim THEN
+    RAISE NOTICE 'PASSOU: regravar a mesma UF (com outra coluna mudada, pelo caminho completo da regra) mantém o local ativo';
+  ELSE RAISE NOTICE 'FALHOU: regravar a mesma UF: % % %', r.situacao, r.fonte_coordenada, r.por_mim; END IF;
 END $$;
 ROLLBACK;
 BEGIN;
@@ -267,34 +304,110 @@ BEGIN
 END $$;
 ROLLBACK;
 
--- 8. A carga só lê escoltas: nenhuma linha de escoltas muda (ESC-2026-0001 e 0007 incluídas)
--- e o resultado bate com a contagem pela mesma regra. Duas escoltas QA (sem trigger, como
--- as existentes antes da 215) garantem uso a contar também no banco recém-recriado.
+-- 8. Carga conferida contra uma contagem calculada à parte (os números estão escritos aqui,
+-- pela regra lida no docs/03, sem usar as funções da 215): locais e escoltas QA gravados sem
+-- trigger, como os que existiam antes da 215. A carga não muda nenhuma escolta.
+--   e1: Base (texto) e Doca (texto com complemento que a Doca não tem)       -> Base 1, Doca 1
+--   e2: "..., Doca 9" (texto completo da Base Doca 9) e coordenada a 55 m da Base e da
+--       Base Doca 9 (mesmo pino): empate pela coordenada vai ao local sem complemento -> Base Doca 9 1, Base 1
+--   e3: cancelada, Base e Doca                                                  -> nada
+--   e4: "..., Portão 5" (complemento que nenhum local tem) e o inativo Velho    -> Base 1, nada
+--   Esperado: Base 3, Base Doca 9 1, Doca 1, Velho 0 (estava 7 e é zerado).
 BEGIN;
-SELECT qa.nova_escolta(now() + interval '2 days', 'agendada', NULL, 1);
-SELECT qa.nova_escolta(now() + interval '3 days', 'agendada', NULL, 1);
+SET LOCAL session_replication_role = replica;
+SELECT pg_temp.locais_qa();
+INSERT INTO public.locais_salvos (nome, endereco, complemento, latitude, longitude, situacao, uf)
+VALUES ('QA D2 Base Doca 9', 'Rua QA D2, 100, Centro, Palmas', 'Doca 9', -10.1840000, -48.3336000, 'ativo', 'TO');
+UPDATE public.locais_salvos SET vezes_usado = 7 WHERE nome = 'QA D2 Velho';
+SELECT qa.como('qa_gestor');
+SELECT pg_temp.nova('Rua QA D2, 100, Centro, Palmas', -10.1840000, -48.3336000, 'Avenida QA D2, 900, Distrito, Palmas, Doca 7', -10.9, -48.9);
+SELECT pg_temp.nova('Rua QA D2, 100, Centro, Palmas, Doca 9', -10.1840000, -48.3336000, 'Rua Vizinha, 7, Palmas', -10.1835000, -48.3336000);
+SELECT set_config('t.e3', pg_temp.nova('Rua QA D2, 100, Centro, Palmas', -10.1840000, -48.3336000, 'Avenida QA D2, 900, Distrito, Palmas', -10.9, -48.9)::text, true);
+SELECT pg_temp.nova('Rua QA D2, 100, Centro, Palmas, Portão 5', 0, 0, 'Travessa QA D2, 5, Palmas', -10.25, -48.30);
+SELECT pg_temp.pg();
+UPDATE public.escoltas SET status = 'cancelada' WHERE id = current_setting('t.e3')::uuid;
+SET LOCAL session_replication_role = origin;
 SELECT set_config('t.md5', coalesce((SELECT md5(string_agg(e::text, '|' ORDER BY e.id)) FROM public.escoltas e), '-'), true);
 SELECT set_config('t.ref', coalesce((SELECT md5(string_agg(e::text, '|' ORDER BY e.id)) FROM public.escoltas e WHERE codigo_escolta IN ('ESC-2026-0001', 'ESC-2026-0007')), '-'), true);
-UPDATE public.locais_salvos SET vezes_usado = 0;
 SELECT lote_interno.carregar_uso_locais();
 DO $$
-DECLARE n int; esperado int;
+DECLARE r text;
 BEGIN
   IF coalesce((SELECT md5(string_agg(e::text, '|' ORDER BY e.id)) FROM public.escoltas e), '-') = current_setting('t.md5')
      AND coalesce((SELECT md5(string_agg(e::text, '|' ORDER BY e.id)) FROM public.escoltas e WHERE codigo_escolta IN ('ESC-2026-0001', 'ESC-2026-0007')), '-') = current_setting('t.ref')
   THEN RAISE NOTICE 'PASSOU: a carga do uso não muda nenhuma escolta (ESC-2026-0001 e 0007 iguais; % delas neste banco)', (SELECT count(*) FROM public.escoltas WHERE codigo_escolta IN ('ESC-2026-0001', 'ESC-2026-0007'));
   ELSE RAISE NOTICE 'FALHOU: a carga mudou escoltas'; END IF;
-  SELECT count(*) INTO esperado FROM public.escoltas e, LATERAL (VALUES (lote_interno.local_do_endereco(e.origem_endereco, e.origem_lat, e.origem_lng)),
-                                                                        (lote_interno.local_do_endereco(e.destino_endereco, e.destino_lat, e.destino_lng))) v(l)
-   WHERE v.l IS NOT NULL;
-  SELECT sum(vezes_usado) INTO n FROM public.locais_salvos;
-  IF n = esperado AND n > 0 THEN RAISE NOTICE 'PASSOU: carga soma % usos, igual à contagem das escoltas pela mesma regra', n;
-  ELSE RAISE NOTICE 'FALHOU: carga % esperado %', n, esperado; END IF;
+  SELECT string_agg(nome || '=' || vezes_usado, ', ' ORDER BY nome) INTO r FROM public.locais_salvos WHERE nome LIKE 'QA D2 %';
+  IF r = 'QA D2 Base=3, QA D2 Base Doca 9=1, QA D2 Doca=1, QA D2 Velho=0' THEN
+    RAISE NOTICE 'PASSOU: carga igual à contagem calculada à parte (%)', r;
+  ELSE RAISE NOTICE 'FALHOU: carga % (esperado QA D2 Base=3, QA D2 Base Doca 9=1, QA D2 Doca=1, QA D2 Velho=0)', r; END IF;
+END $$;
+ROLLBACK;
+-- O mesmo cenário gravado com as triggers ligadas (como a Nova grava) chega aos mesmos números.
+BEGIN;
+SELECT pg_temp.locais_qa();
+INSERT INTO public.locais_salvos (nome, endereco, complemento, latitude, longitude, situacao, uf)
+VALUES ('QA D2 Base Doca 9', 'Rua QA D2, 100, Centro, Palmas', 'Doca 9', -10.1840000, -48.3336000, 'ativo', 'TO');
+SELECT qa.como('qa_gestor');
+SELECT pg_temp.nova('Rua QA D2, 100, Centro, Palmas', -10.1840000, -48.3336000, 'Avenida QA D2, 900, Distrito, Palmas, Doca 7', -10.9, -48.9);
+SELECT pg_temp.nova('Rua QA D2, 100, Centro, Palmas, Doca 9', -10.1840000, -48.3336000, 'Rua Vizinha, 7, Palmas', -10.1835000, -48.3336000);
+SELECT set_config('t.e3', pg_temp.nova('Rua QA D2, 100, Centro, Palmas', -10.1840000, -48.3336000, 'Avenida QA D2, 900, Distrito, Palmas', -10.9, -48.9)::text, true);
+SELECT pg_temp.nova('Rua QA D2, 100, Centro, Palmas, Portão 5', 0, 0, 'Travessa QA D2, 5, Palmas', -10.25, -48.30);
+SELECT pg_temp.pg();
+UPDATE public.escoltas SET status = 'cancelada' WHERE id = current_setting('t.e3')::uuid;
+DO $$
+DECLARE r text;
+BEGIN
+  SELECT string_agg(nome || '=' || vezes_usado, ', ' ORDER BY nome) INTO r FROM public.locais_salvos WHERE nome LIKE 'QA D2 %';
+  IF r = 'QA D2 Base=3, QA D2 Base Doca 9=1, QA D2 Doca=1, QA D2 Velho=0' THEN
+    RAISE NOTICE 'PASSOU: as triggers chegam aos mesmos números da carga e da contagem à parte (%)', r;
+  ELSE RAISE NOTICE 'FALHOU: triggers % (esperado QA D2 Base=3, QA D2 Base Doca 9=1, QA D2 Doca=1, QA D2 Velho=0)', r; END IF;
 END $$;
 ROLLBACK;
 
--- 9. A trigger nunca recusa a escolta: coordenada zerada (sem coordenada) e texto sem local. (A central não grava
--- escolta no banco: a policy escoltas_insert, anterior ao lote, é só gestão e supervisor.)
+-- 9. A trigger nunca recusa a escolta. Caminho de erro forçado: um CHECK provisório (NOT
+-- VALID, desfeito no ROLLBACK) faz o UPDATE do uso falhar; a escolta é gravada, a falha vai
+-- para lote_interno.locais_uso_falhas (o mesmo bloco de exceção emite o WARNING) e o uso não
+-- muda. O mesmo vale para a recontagem por comando em locais_salvos. Coordenada zerada e
+-- texto sem local também gravam. (A criação de escolta pela central é pendência anterior ao
+-- lote, registrada em portoes.md para decisão do Peçanha; não é testada aqui.)
+BEGIN;
+SELECT pg_temp.locais_qa();
+ALTER TABLE public.locais_salvos ADD CONSTRAINT qa_forca_erro_uso CHECK (vezes_usado < 1) NOT VALID;
+SELECT set_config('t.falhas', (SELECT count(*)::text FROM lote_interno.locais_uso_falhas), true);
+SELECT qa.como('qa_supervisor');
+DO $$
+DECLARE v uuid;
+BEGIN
+  v := pg_temp.nova('Rua QA D2, 100, Centro, Palmas', -10.1840000, -48.3336000, 'Lugar sem local salvo, Palmas', -11.5, -49.5);
+  PERFORM set_config('t.e', v::text, true);
+  IF v IS NOT NULL THEN RAISE NOTICE 'PASSOU: escolta gravada mesmo com erro dentro da trigger de uso';
+  ELSE RAISE NOTICE 'FALHOU: escolta não gravada'; END IF;
+EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'FALHOU: trigger de uso recusou a escolta: %', SQLERRM;
+END $$;
+SELECT pg_temp.pg();
+DO $$
+DECLARE r record;
+BEGIN
+  SELECT * INTO r FROM lote_interno.locais_uso_falhas ORDER BY id DESC LIMIT 1;
+  IF (SELECT count(*) FROM lote_interno.locais_uso_falhas) = current_setting('t.falhas')::int + 1
+     AND r.origem = 'escoltas' AND r.escolta_id = current_setting('t.e')::uuid AND r.codigo = '23514'
+     AND pg_temp.uso('QA D2 Base') = 0 AND EXISTS (SELECT 1 FROM public.escoltas WHERE id = current_setting('t.e')::uuid) THEN
+    RAISE NOTICE 'PASSOU: a falha da trigger foi registrada (escolta, código %) e o uso não mudou', r.codigo;
+  ELSE RAISE NOTICE 'FALHOU: falha não registrada como esperado (% % % uso %)', r.origem, r.escolta_id, r.codigo, pg_temp.uso('QA D2 Base'); END IF;
+END $$;
+DO $$
+DECLARE n int;
+BEGIN
+  UPDATE public.locais_salvos SET nome = 'QA D2 Base renomeada' WHERE nome = 'QA D2 Base';
+  GET DIAGNOSTICS n = ROW_COUNT;
+  IF n = 1 AND (SELECT origem FROM lote_interno.locais_uso_falhas ORDER BY id DESC LIMIT 1) = 'locais_salvos'
+     AND (SELECT count(*) FROM lote_interno.locais_uso_falhas) = current_setting('t.falhas')::int + 2 THEN
+    RAISE NOTICE 'PASSOU: a recontagem por comando falhou sem recusar a edição do local, e a falha foi registrada';
+  ELSE RAISE NOTICE 'FALHOU: recontagem por comando (% linha)', n; END IF;
+EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'FALHOU: a recontagem recusou a edição do local: %', SQLERRM;
+END $$;
+ROLLBACK;
 BEGIN;
 SELECT qa.como('qa_supervisor');
 DO $$
@@ -304,5 +417,74 @@ BEGIN
   IF v IS NOT NULL THEN RAISE NOTICE 'PASSOU: escolta com coordenada zerada e texto sem local gravada com a trigger de uso ligada';
   ELSE RAISE NOTICE 'FALHOU: escolta não gravada'; END IF;
 EXCEPTION WHEN OTHERS THEN RAISE NOTICE 'FALHOU: trigger de uso recusou a escolta: %', SQLERRM;
+END $$;
+ROLLBACK;
+
+-- 10. O uso é o número real: ida e volta da origem numa edição não infla, cancelar desconta
+-- (a máquina de estados não deixa voltar de cancelada) e apagar a escolta desconta.
+BEGIN;
+SELECT pg_temp.locais_qa();
+SELECT qa.como('qa_gestor');
+SELECT set_config('t.e', pg_temp.nova('Rua QA D2, 100, Centro, Palmas', -10.1840000, -48.3336000, 'Lugar sem local salvo, Palmas', -11.5, -49.5)::text, true);
+SELECT pg_temp.pg();
+CREATE FUNCTION pg_temp.par() RETURNS text LANGUAGE sql AS $$ SELECT pg_temp.uso('QA D2 Base') || '/' || pg_temp.uso('QA D2 Doca') $$;
+SELECT set_config('t.passos', pg_temp.par(), true);
+UPDATE public.escoltas SET origem_endereco = 'Avenida QA D2, 900, Distrito, Palmas', origem_lat = -10.9, origem_lng = -48.9 WHERE id = current_setting('t.e')::uuid;
+SELECT set_config('t.passos', current_setting('t.passos') || ' ' || pg_temp.par(), true);
+UPDATE public.escoltas SET origem_endereco = 'Rua QA D2, 100, Centro, Palmas', origem_lat = -10.184, origem_lng = -48.3336 WHERE id = current_setting('t.e')::uuid;
+SELECT set_config('t.passos', current_setting('t.passos') || ' ' || pg_temp.par(), true);
+UPDATE public.escoltas SET status = 'cancelada' WHERE id = current_setting('t.e')::uuid;
+SELECT set_config('t.passos', current_setting('t.passos') || ' ' || pg_temp.par(), true);
+SELECT qa.como('qa_gestor');
+SELECT set_config('t.e2', pg_temp.nova('Lugar sem local salvo, Palmas', -11.5, -49.5, 'Avenida QA D2, 900, Distrito, Palmas', -10.9, -48.9)::text, true);
+SELECT pg_temp.pg();
+SELECT set_config('t.passos', current_setting('t.passos') || ' ' || pg_temp.par(), true);
+DELETE FROM public.escoltas WHERE id = current_setting('t.e2')::uuid;
+SELECT set_config('t.passos', current_setting('t.passos') || ' ' || pg_temp.par(), true);
+DO $$
+BEGIN
+  IF current_setting('t.passos') = '1/0 0/1 1/0 0/0 0/1 0/0' THEN
+    RAISE NOTICE 'PASSOU: Base/Doca ao criar, trocar a origem, voltar (não infla), cancelar (desconta), criar outra e apagá-la: %', current_setting('t.passos');
+  ELSE RAISE NOTICE 'FALHOU: sequência % (esperado 1/0 0/1 1/0 0/0 0/1 0/0)', current_setting('t.passos'); END IF;
+END $$;
+ROLLBACK;
+
+-- 11. JAMEF e "JAMEF Doca 9" no mesmo endereço e pino: o texto com o complemento conta para a
+-- doca, o endereço sem complemento e um complemento que nenhum local tem contam para a JAMEF.
+-- Escolta da doca gravada antes de o local da doca existir passa para ele quando ele nasce.
+BEGIN;
+UPDATE public.locais_salvos SET situacao = 'ativo' WHERE nome = 'JAMEF';
+SELECT lote_interno.carregar_uso_locais();
+SELECT set_config('t.j0', pg_temp.uso('JAMEF')::text, true);
+SELECT qa.como('qa_gestor');
+SELECT pg_temp.nova('Av. Arthur Antônio Sendas, 999, Parque Santana, São João de Meriti, Doca 9', -22.799521, -43.347756, 'Lugar sem local salvo, Palmas', -11.5, -49.5);
+SELECT pg_temp.pg();
+SELECT set_config('t.j1', pg_temp.uso('JAMEF')::text, true);
+INSERT INTO public.locais_salvos (nome, endereco, complemento, latitude, longitude, situacao, uf)
+VALUES ('JAMEF Doca 9', 'Av. Arthur Antônio Sendas, 999, Parque Santana, São João de Meriti', 'Doca 9', -22.799521, -43.347756, 'ativo', 'RJ');
+DO $$
+DECLARE j0 int := current_setting('t.j0')::int;
+BEGIN
+  IF current_setting('t.j1')::int = j0 + 1 AND pg_temp.uso('JAMEF') = j0 AND pg_temp.uso('JAMEF Doca 9') = 1 THEN
+    RAISE NOTICE 'PASSOU: a escolta "..., Doca 9" contava para a JAMEF e passou para "JAMEF Doca 9" quando o local nasceu';
+  ELSE RAISE NOTICE 'FALHOU: JAMEF % -> % -> %, doca %', j0, current_setting('t.j1'), pg_temp.uso('JAMEF'), pg_temp.uso('JAMEF Doca 9'); END IF;
+  IF lote_interno.local_do_endereco('Av. Arthur Antônio Sendas, 999, Parque Santana, São João de Meriti, Doca 9', -22.799521, -43.347756) = (SELECT id FROM public.locais_salvos WHERE nome = 'JAMEF Doca 9')
+     AND lote_interno.local_do_endereco('Av. Arthur Antônio Sendas, 999, Parque Santana, São João de Meriti', -22.799521, -43.347756) = (SELECT id FROM public.locais_salvos WHERE nome = 'JAMEF')
+     AND lote_interno.local_do_endereco('Av. Arthur Antônio Sendas, 999, Parque Santana, São João de Meriti, Portão 5', -22.799521, -43.347756) = (SELECT id FROM public.locais_salvos WHERE nome = 'JAMEF')
+     AND lote_interno.local_do_endereco('Av. Arthur Antônio Sendas, 999, Parque Santana, São João de Meriti, Doca 9', 0, 0) = (SELECT id FROM public.locais_salvos WHERE nome = 'JAMEF Doca 9')
+  THEN RAISE NOTICE 'PASSOU: local_do_endereco: com Doca 9 vai à doca (com e sem coordenada); sem complemento e com Portão 5, à JAMEF';
+  ELSE RAISE NOTICE 'FALHOU: local_do_endereco não separou JAMEF e JAMEF Doca 9'; END IF;
+END $$;
+SELECT qa.como('qa_gestor');
+SELECT pg_temp.nova('Av. Arthur Antônio Sendas, 999, Parque Santana, São João de Meriti', -22.799521, -43.347756, 'Lugar sem local salvo, Palmas', -11.5, -49.5);
+SELECT pg_temp.nova('Av. Arthur Antônio Sendas, 999, Parque Santana, São João de Meriti, Portão 5', -22.799521, -43.347756, 'Lugar sem local salvo, Palmas', -11.5, -49.5);
+SELECT pg_temp.nova('Lugar sem local salvo, Palmas', -11.5, -49.5, 'Av. Arthur Antônio Sendas, 999, Parque Santana, São João de Meriti, Doca 9', -22.799521, -43.347756);
+SELECT pg_temp.pg();
+DO $$
+DECLARE j0 int := current_setting('t.j0')::int;
+BEGIN
+  IF pg_temp.uso('JAMEF') = j0 + 2 AND pg_temp.uso('JAMEF Doca 9') = 2 THEN
+    RAISE NOTICE 'PASSOU: escoltas novas: sem complemento e Portão 5 contam para a JAMEF (+2), Doca 9 no destino conta para a doca (2)';
+  ELSE RAISE NOTICE 'FALHOU: JAMEF % (esperado %), doca % (esperado 2)', pg_temp.uso('JAMEF'), j0 + 2, pg_temp.uso('JAMEF Doca 9'); END IF;
 END $$;
 ROLLBACK;
