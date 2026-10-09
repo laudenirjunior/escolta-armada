@@ -268,18 +268,21 @@ END $$;
 ROLLBACK;
 
 -- 8. A carga só lê escoltas: nenhuma linha de escoltas muda (ESC-2026-0001 e 0007 incluídas)
--- e o resultado bate com a contagem pela mesma regra.
+-- e o resultado bate com a contagem pela mesma regra. Duas escoltas QA (sem trigger, como
+-- as existentes antes da 215) garantem uso a contar também no banco recém-recriado.
 BEGIN;
-SELECT set_config('t.md5', (SELECT md5(string_agg(e::text, '|' ORDER BY e.id)) FROM public.escoltas e), true);
-SELECT set_config('t.ref', (SELECT md5(string_agg(e::text, '|' ORDER BY e.id)) FROM public.escoltas e WHERE codigo_escolta IN ('ESC-2026-0001', 'ESC-2026-0007')), true);
+SELECT qa.nova_escolta(now() + interval '2 days', 'agendada', NULL, 1);
+SELECT qa.nova_escolta(now() + interval '3 days', 'agendada', NULL, 1);
+SELECT set_config('t.md5', coalesce((SELECT md5(string_agg(e::text, '|' ORDER BY e.id)) FROM public.escoltas e), '-'), true);
+SELECT set_config('t.ref', coalesce((SELECT md5(string_agg(e::text, '|' ORDER BY e.id)) FROM public.escoltas e WHERE codigo_escolta IN ('ESC-2026-0001', 'ESC-2026-0007')), '-'), true);
 UPDATE public.locais_salvos SET vezes_usado = 0;
 SELECT lote_interno.carregar_uso_locais();
 DO $$
 DECLARE n int; esperado int;
 BEGIN
-  IF (SELECT md5(string_agg(e::text, '|' ORDER BY e.id)) FROM public.escoltas e) = current_setting('t.md5')
-     AND (SELECT md5(string_agg(e::text, '|' ORDER BY e.id)) FROM public.escoltas e WHERE codigo_escolta IN ('ESC-2026-0001', 'ESC-2026-0007')) IS NOT DISTINCT FROM current_setting('t.ref')
-  THEN RAISE NOTICE 'PASSOU: a carga do uso não muda nenhuma escolta (ESC-2026-0001 e 0007 iguais)';
+  IF coalesce((SELECT md5(string_agg(e::text, '|' ORDER BY e.id)) FROM public.escoltas e), '-') = current_setting('t.md5')
+     AND coalesce((SELECT md5(string_agg(e::text, '|' ORDER BY e.id)) FROM public.escoltas e WHERE codigo_escolta IN ('ESC-2026-0001', 'ESC-2026-0007')), '-') = current_setting('t.ref')
+  THEN RAISE NOTICE 'PASSOU: a carga do uso não muda nenhuma escolta (ESC-2026-0001 e 0007 iguais; % delas neste banco)', (SELECT count(*) FROM public.escoltas WHERE codigo_escolta IN ('ESC-2026-0001', 'ESC-2026-0007'));
   ELSE RAISE NOTICE 'FALHOU: a carga mudou escoltas'; END IF;
   SELECT count(*) INTO esperado FROM public.escoltas e, LATERAL (VALUES (lote_interno.local_do_endereco(e.origem_endereco, e.origem_lat, e.origem_lng)),
                                                                         (lote_interno.local_do_endereco(e.destino_endereco, e.destino_lat, e.destino_lng))) v(l)
