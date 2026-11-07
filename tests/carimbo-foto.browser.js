@@ -44,8 +44,27 @@ async (page) => {
         altura: imagem.height,
         bytes: saida.file.size,
         tipo: saida.file.type,
+        menor: null,
       }
       imagem.close()
+
+      const origemMenor = document.createElement('canvas')
+      origemMenor.width = 800
+      origemMenor.height = 600
+      const ctxMenor = origemMenor.getContext('2d')
+      if (!ctxMenor) throw new Error('Canvas menor indisponível.')
+      ctxMenor.fillStyle = '#53648A'
+      ctxMenor.fillRect(0, 0, origemMenor.width, origemMenor.height)
+      const pngMenor = await new Promise((resolve, reject) =>
+        origemMenor.toBlob((blob) => blob ? resolve(blob) : reject(new Error('PNG menor não gerado.')), 'image/png')
+      )
+      const saidaMenor = await aplicarCarimbo(
+        new File([pngMenor], 'foto-800x600.png', { type: 'image/png' }),
+        { timestamp: '2026-11-06T21:17:00.000Z', gps: null },
+      )
+      const imagemMenor = await createImageBitmap(saidaMenor.file)
+      medicao.menor = { largura: imagemMenor.width, altura: imagemMenor.height }
+      imagemMenor.close()
       return medicao
     } finally {
       URL.revokeObjectURL(urlModulo)
@@ -60,6 +79,9 @@ async (page) => {
     throw new Error(`Saída esperada abaixo de 500 KB; recebido: ${resultado.bytes} bytes.`)
   }
   if (resultado.tipo !== 'image/jpeg') throw new Error(`Tipo esperado: image/jpeg; recebido: ${resultado.tipo}.`)
+  if (resultado.menor?.largura !== 800 || resultado.menor?.altura !== 600) {
+    throw new Error(`Imagem menor não pode ser ampliada; recebido: ${JSON.stringify(resultado.menor)}.`)
+  }
 
   return resultado
 }
