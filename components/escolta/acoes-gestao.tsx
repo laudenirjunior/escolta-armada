@@ -166,7 +166,9 @@ export function AcoesGestao({ escolta, perfil, onAlterado }: Props) {
   )
 }
 
-function DialogoAcao({ acao, escolta, onFechar, onFeito }: {
+// Onda O (B2): exportado para a lista de arquivadas recuperar pela mesma janela de confirmação
+// que o detalhe usa para arquivar (antes era um formulário na linha).
+export function DialogoAcao({ acao, escolta, onFechar, onFeito }: {
   acao: Acao; escolta: Props['escolta']; onFechar: () => void; onFeito: () => void
 }) {
   const [carregando, setCarregando] = useState(acao !== 'arquivar' && acao !== 'recuperar')
