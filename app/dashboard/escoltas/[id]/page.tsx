@@ -65,7 +65,7 @@ import { COLUNAS_ANULACAO, textoAnulado, type Anulacao } from '@/lib/gestao'
 import { novoId, lerSnapshot } from '@/lib/offline/fila'
 import { prepararFoto, MENSAGEM_GUARDADO, type FotoPreparada, type LinhasEnvelope, type EtapaEnvelope } from '@/lib/offline/registro-campo'
 import { aplicarPendentes, lerPendentes } from '@/lib/offline/pendentes'
-import { gpsRapido, obterGpsPreciso, textoPrecisao } from '@/lib/gps'
+import { assinarGps, gpsRapido, iniciarRastreioGps, leituraParaConfirmar, textoPrecisao, type LeituraGps } from '@/lib/gps'
 import { foiCarimbada, marcarCarimbada } from '@/lib/foto-captura'
 import { aplicarCarimbo, reduzirECarimbarImagem } from '@/lib/carimbo-foto'
 import {
@@ -316,6 +316,22 @@ const TIPO_ICON_MAP: Record<string, { color: string; bg: string; label: string }
 }
 
 // ─── CameraInput ─────────────────────────────────────────────────────────────
+
+// ── Onda O (A2): ponto de GPS mostrado nas janelas ─────────────────────────────
+type PontoGps = { lat: number; lng: number; precisao: number; endereco: string; enderecoPronto?: boolean }
+
+/** Distância aproximada em metros (bastante para decidir se o endereço ainda vale). */
+function distanciaM(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const dy = (a.lat - b.lat) * 111_320
+  const dx = (a.lng - b.lng) * 111_320 * Math.cos((a.lat * Math.PI) / 180)
+  return Math.sqrt(dx * dx + dy * dy)
+}
+
+/** Leitura nova vira ponto; perto da anterior (até 50 m), mantém o endereço já achado. */
+function pontoDaLeitura(l: LeituraGps, anterior: PontoGps | null): PontoGps {
+  if (anterior && distanciaM(anterior, l) <= 50) return { ...anterior, lat: l.lat, lng: l.lng, precisao: l.precisao }
+  return { lat: l.lat, lng: l.lng, precisao: l.precisao, endereco: `${l.lat.toFixed(5)}, ${l.lng.toFixed(5)}`, enderecoPronto: false }
+}
 
 function CameraInput({
   onChange,
@@ -819,15 +835,15 @@ export default function EscoltaDetalhePage() {
   // fotos: lista de ate FOTOS_POR_PONTO.max, e nao uma foto unica.
   const [fotosCheckin, setFotosCheckin] = useState<File[]>([])
   const [obsCheckin, setObsCheckin] = useState<string>(TEXTO_PADRAO_PONTO.checkin)
-  const [gpsCheckin, setGpsCheckin] = useState<{ lat: number; lng: number; precisao: number; endereco: string } | null>(null)
+  const [gpsCheckin, setGpsCheckin] = useState<PontoGps | null>(null)
   const [gpsCheckinLoading, setGpsCheckinLoading] = useState(false)
 
   // GPS da Parada
-  const [gpsParada, setGpsParada] = useState<{ lat: number; lng: number; precisao: number; endereco: string } | null>(null)
+  const [gpsParada, setGpsParada] = useState<PontoGps | null>(null)
   const [gpsParadaLoading, setGpsParadaLoading] = useState(false)
 
   // GPS das ações de jornada (Origem / Destino / Retorno) — capturado ao abrir o diálogo
-  const [gpsAcao, setGpsAcao] = useState<{ lat: number; lng: number; precisao: number; endereco: string } | null>(null)
+  const [gpsAcao, setGpsAcao] = useState<PontoGps | null>(null)
   const [gpsAcaoLoading, setGpsAcaoLoading] = useState(false)
 
   // Checklist tracking
@@ -1665,10 +1681,26 @@ export default function EscoltaDetalhePage() {
     }
   }
 
+  // ── Onda O (A2): GPS contínuo ──────────────────────────────────────────────────
+  // Liga na primeira janela de campo (ou no assistente de partida) e fica ligado até sair
+  // da tela: as próximas janelas já abrem com a leitura pronta. Quem só consulta a escolta
+  // não liga o GPS (sem pedido de permissão para a gestão).
+  const pararGpsRef = useRef<(() => void) | null>(null)
+  const ligarGps = () => { if (!pararGpsRef.current) pararGpsRef.current = iniciarRastreioGps() }
+  useEffect(() => () => { pararGpsRef.current?.(); pararGpsRef.current = null }, [])
+  // No assistente de partida o GPS liga logo: até as 7 fotos ficarem prontas, a leitura chegou.
+  useEffect(() => { if (escolta?.status === 'em_pre_inicio') ligarGps() }, [escolta?.status])
+
   // ── Obter GPS local com fallback ─────────────────────────────────────────────
   // Onda M (B3): alta precisão (15 s), depois rede (10 s, cache de 30 s); se a leitura vier
   // pior que 100 m, nova tentativa de até 10 s, gravando a melhor (lib/gps.ts).
-  const obterGPS = (): Promise<{ lat: number; lng: number; precisao: number }> => obterGpsPreciso()
+  // Onda O (A2): no máximo 3 s com a melhor leitura disponível (lib/gps.ts, GPS contínuo).
+  const obterGPS = async (): Promise<{ lat: number; lng: number; precisao: number }> => {
+    ligarGps()
+    const l = await leituraParaConfirmar()
+    if (!l) throw new Error('GPS sem leitura')
+    return l
+  }
 
   /**
    * Guardas de entrada dos handlers da jornada, verificadas antes de qualquer chamada
@@ -2279,10 +2311,10 @@ export default function EscoltaDetalhePage() {
     setViaturaCheckinId(viaturas.length === 1 ? viaturas[0].id : minhaViaturaId ?? '')
     setDialogCheckin(true)
     setGpsCheckinLoading(true)
+    // Onda O (A2): até 3 s; o endereço vem depois, sem segurar o Confirmar.
     try {
-      const { lat, lng, precisao } = await obterGPS()
-      const endereco = await reverseGeocode(lat, lng)
-      setGpsCheckin({ lat, lng, precisao, endereco })
+      const l = await obterGPS()
+      setGpsCheckin(g => pontoDaLeitura(l, g))
     } catch {
       // GPS falhou — usuário pode tentar novamente
     } finally {
@@ -2347,10 +2379,10 @@ export default function EscoltaDetalhePage() {
   const capturarGpsAcao = useCallback(async () => {
     setGpsAcao(null)
     setGpsAcaoLoading(true)
+    // Onda O (A2): até 3 s; o endereço vem depois, sem segurar o Confirmar.
     try {
-      const { lat, lng, precisao } = await obterGPS()
-      const endereco = await reverseGeocode(lat, lng)
-      setGpsAcao({ lat, lng, precisao, endereco })
+      const l = await obterGPS()
+      setGpsAcao(g => pontoDaLeitura(l, g))
     } catch {
       // GPS falhou — operador pode tentar novamente
     } finally {
@@ -2372,6 +2404,34 @@ export default function EscoltaDetalhePage() {
       setGpsAcaoLoading(false)
     }
   }, [dialogStartBase, dialogChegadaOrigem, dialogTransitoDestino, dialogChegadaDestino, dialogTransitoRetorno, dialogIniciarRetorno, dialogChegadaBase, capturarGpsAcao])
+
+  // Onda O (A2): com a janela aberta, leitura melhor que chegar depois troca o ponto.
+  const janelaAcaoAberta = dialogStartBase || dialogChegadaOrigem || dialogTransitoDestino || dialogChegadaDestino ||
+    dialogTransitoRetorno || dialogIniciarRetorno || dialogChegadaBase
+  useEffect(() => {
+    if (!janelaAcaoAberta && !dialogCheckin && !dialogParada) return
+    return assinarGps((l) => {
+      if (janelaAcaoAberta) setGpsAcao(g => pontoDaLeitura(l, g))
+      if (dialogCheckin) setGpsCheckin(g => pontoDaLeitura(l, g))
+      if (dialogParada) setGpsParada(g => pontoDaLeitura(l, g))
+    })
+  }, [janelaAcaoAberta, dialogCheckin, dialogParada])
+  // Endereço do ponto, buscado depois da leitura (não segura o Confirmar).
+  const useEnderecoDoPonto = (ponto: PontoGps | null, definir: React.Dispatch<React.SetStateAction<PontoGps | null>>) => {
+    useEffect(() => {
+      if (!ponto || ponto.enderecoPronto) return
+      let vivo = true
+      const { lat, lng } = ponto
+      reverseGeocode(lat, lng).then((endereco) => {
+        if (vivo) definir(g => (g && g.lat === lat && g.lng === lng ? { ...g, endereco, enderecoPronto: true } : g))
+      }).catch(() => {})
+      return () => { vivo = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [ponto?.lat, ponto?.lng, ponto?.enderecoPronto])
+  }
+  useEnderecoDoPonto(gpsAcao, setGpsAcao)
+  useEnderecoDoPonto(gpsCheckin, setGpsCheckin)
+  useEnderecoDoPonto(gpsParada, setGpsParada)
 
   // Cartão de status do GPS exibido nos diálogos de jornada
   const renderGpsAcao = () => (
@@ -3065,12 +3125,9 @@ export default function EscoltaDetalhePage() {
     setObsParada('')
     setFotosParada([])
     setDialogParada(true)
+    // Onda O (A2): até 3 s; o endereço vem depois.
     obterGPS()
-      .then(async ({ lat, lng, precisao }) => {
-        const endereco = await reverseGeocode(lat, lng)
-        setGpsParada({ lat, lng, precisao, endereco })
-        setGpsParadaLoading(false)
-      })
+      .then((l) => { setGpsParada(g => pontoDaLeitura(l, g)); setGpsParadaLoading(false) })
       .catch(() => setGpsParadaLoading(false))
   }
 
@@ -5187,7 +5244,7 @@ export default function EscoltaDetalhePage() {
               <button onClick={() => setDialogStartBase(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleStartBase}
-                disabled={loading || !fotosCompletas(fotosStartBase)}
+                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosStartBase)}
                 className="btn-gradient w-full sm:w-auto"
               >
                 {loading ? (andamento ? `${andamento}...` : 'Confirmando...') : 'Confirmar Saída'}
@@ -5470,7 +5527,7 @@ export default function EscoltaDetalhePage() {
               <button onClick={() => setDialogChegadaOrigem(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleChegadaOrigem}
-                disabled={loading || !fotosCompletas(fotosOrigem)}
+                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosOrigem)}
                 className="btn-gradient w-full sm:w-auto"
               >
                 {loading ? (andamento ? `${andamento}...` : 'Confirmando...') : 'Confirmar Chegada'}
@@ -5522,7 +5579,7 @@ export default function EscoltaDetalhePage() {
               <button onClick={() => setDialogTransitoDestino(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleIniciarTransitoDestino}
-                disabled={loading || !fotosCompletas(fotosTransitoDestino)}
+                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosTransitoDestino)}
                 className="btn-gradient w-full sm:w-auto"
               >
                 {loading ? (andamento ? `${andamento}...` : 'Iniciando...') : 'Confirmar Trânsito'}
@@ -5579,7 +5636,7 @@ export default function EscoltaDetalhePage() {
               <button onClick={() => setDialogChegadaDestino(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleChegadaDestino}
-                disabled={loading || !fotosCompletas(fotosDestino)}
+                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosDestino)}
                 className="btn-gradient w-full sm:w-auto"
               >
                 {loading ? (andamento ? `${andamento}...` : 'Confirmando...') : 'Confirmar Chegada'}
@@ -5636,7 +5693,7 @@ export default function EscoltaDetalhePage() {
               <button onClick={() => setDialogTransitoRetorno(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleIniciarTransitoRetorno}
-                disabled={loading || !fotosCompletas(fotosTransitoRetorno)}
+                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosTransitoRetorno)}
                 className="btn-gradient w-full sm:w-auto"
               >
                 {loading ? (andamento ? `${andamento}...` : 'Registrando...') : 'Confirmar Trânsito de Retorno'}
@@ -5688,7 +5745,7 @@ export default function EscoltaDetalhePage() {
               <button onClick={() => setDialogIniciarRetorno(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleIniciarRetorno}
-                disabled={loading || !fotosCompletas(fotosRetorno)}
+                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosRetorno)}
                 className="btn-gradient w-full sm:w-auto"
               >
                 {loading ? (andamento ? `${andamento}...` : 'Iniciando...') : 'Confirmar Retorno'}
@@ -5748,7 +5805,7 @@ export default function EscoltaDetalhePage() {
               <button onClick={() => setDialogChegadaBase(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleChegadaBase}
-                disabled={loading || !fotosCompletas(fotosChegadaBase)}
+                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosChegadaBase)}
                 className="btn-gradient w-full sm:w-auto"
               >
                 {loading ? (andamento ? `${andamento}...` : 'Confirmando...') : 'Confirmar Chegada'}

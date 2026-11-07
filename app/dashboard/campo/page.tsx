@@ -38,7 +38,7 @@ import { novoId, salvarSnapshot, lerSnapshot, filaDisponivel } from '@/lib/offli
 import { prepararFoto, MENSAGEM_GUARDADO, type FotoPreparada, type ResultadoRegistroCampo } from '@/lib/offline/registro-campo'
 import { aplicarPendentes, lerPendentes } from '@/lib/offline/pendentes'
 import { salvarEscoltasOffline } from '@/lib/offline/sessao'
-import { obterGpsPreciso, textoPrecisao } from '@/lib/gps'
+import { iniciarRastreioGps, leituraParaConfirmar, textoPrecisao } from '@/lib/gps'
 import {
   aparelhoSemRede, conferirEspacoParaFoto, envelopeLigado, erroDeRede, gravarPeloEnvelope, textoConflito,
   textoErroGravacao, textoRecusado,
@@ -281,8 +281,12 @@ const STATUS_LABELS: Record<string, string> = {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 // Onda M (B3): alta precisão, depois rede; precisão pior que 100 m dispara nova tentativa
 // de até 10 s e fica a melhor leitura (lib/gps.ts).
-function obterGPS(): Promise<{ lat: number; lng: number; precisao: number }> {
-  return obterGpsPreciso()
+// Onda O (A2): no máximo 3 s com a melhor leitura disponível; com a escolta em andamento o
+// GPS fica ligado (lib/gps.ts) e a leitura costuma sair na hora.
+async function obterGPS(): Promise<{ lat: number; lng: number; precisao: number }> {
+  const l = await leituraParaConfirmar()
+  if (!l) throw new Error('GPS sem leitura')
+  return l
 }
 
 /**
@@ -400,6 +404,10 @@ export default function CampoPage() {
   // Onda O (A1): passo atual da gravação ("Lendo o GPS", "Enviando foto 2 de 3"), na faixa de andamento.
   const [andamento, setAndamento] = useState<string | null>(null)
   useEffect(() => { if (!executando) setAndamento(null) }, [executando])
+  // Onda O (A2): GPS contínuo enquanto houver escolta em andamento nesta tela (o Campo é do
+  // pessoal de campo): cada registro sai com a leitura pronta, sem esperar 12 s.
+  const escoltaEmCampo = !!escoltaAtiva && !['agendada', 'rascunho', 'finalizada', 'cancelada'].includes(escoltaAtiva.status)
+  useEffect(() => { if (escoltaEmCampo) return iniciarRastreioGps() }, [escoltaEmCampo])
   const [toast, setToast] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null)
 
   // Accordions
