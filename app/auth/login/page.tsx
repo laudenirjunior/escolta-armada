@@ -9,7 +9,7 @@ const ULTIMO_USUARIO = 'escolta.ultimo_usuario'
 
 function mensagemDeLogin(erro: string): string {
   const normalizado = erro.toLocaleLowerCase('pt-BR')
-  if (normalizado.includes('usuário não encontrado')) {
+  if (normalizado.includes('usuário não encontrado') || normalizado.includes('user not found')) {
     return 'Usuário não encontrado. Confira o nome informado ou fale com o administrador.'
   }
   if (normalizado.includes('invalid login credentials') || normalizado.includes('e-mail ou senha incorretos')) {
@@ -17,6 +17,9 @@ function mensagemDeLogin(erro: string): string {
   }
   if (normalizado.includes('fetch') || normalizado.includes('network') || normalizado.includes('conexão')) {
     return 'Sem internet no momento. Confira a conexão e tente novamente.'
+  }
+  if (normalizado.includes('conta está') || normalizado.includes('conta ainda') || normalizado === 'acesso negado.') {
+    return erro
   }
   return 'O servidor não conseguiu concluir o login. Aguarde um momento e tente novamente.'
 }
