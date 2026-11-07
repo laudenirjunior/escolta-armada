@@ -912,16 +912,23 @@ function FormularioEscolta() {
   // ── Helpers de viatura ────────────────────────────────────────────────────
   const updV = (id: string, p: Partial<ViaturaForm>) =>
     setViaturas(vs => vs.map(v => v.uid === id ? { ...v, ...p } : v))
+  // Onda O (M5): com um único vigilante na viatura, ele já é o comandante (a validação
+  // exige comandante em viatura com gente; no teste de 07/11 era preciso marcar à mão).
+  const comComandante = (membros: MembroForm[]): MembroForm[] =>
+    membros.length === 1 && membros[0].papel_na_escolta !== 'comandante'
+      ? [{ ...membros[0], papel_na_escolta: 'comandante' }]
+      : membros
   const addM  = (vid: string) =>
-    setViaturas(vs => vs.map(v => v.uid === vid ? { ...v, membros: [...v.membros, novoMembro()] } : v))
+    setViaturas(vs => vs.map(v => v.uid === vid ? { ...v, membros: comComandante([...v.membros, novoMembro()]) } : v))
   const updM  = (vid: string, mid: string, p: Partial<MembroForm>) =>
     setViaturas(vs => vs.map(v =>
-      v.uid === vid ? { ...v, membros: v.membros.map(m => m.uid === mid ? { ...m, ...p } : m) } : v
+      v.uid === vid ? { ...v, membros: comComandante(v.membros.map(m => m.uid === mid ? { ...m, ...p } : m)) } : v
     ))
   const rmM   = (vid: string, mid: string) =>
     setViaturas(vs => vs.map(v =>
-      v.uid === vid ? { ...v, membros: v.membros.filter(m => m.uid !== mid) } : v
+      v.uid === vid ? { ...v, membros: comComandante(v.membros.filter(m => m.uid !== mid)) } : v
     ))
+
 
   const cliente = clientes.find(c => c.id === dados.cliente_id)
   const dtLabel = dados.data_prevista
