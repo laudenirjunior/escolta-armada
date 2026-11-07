@@ -5,9 +5,8 @@
  *
  * Saíram de app/dashboard/escoltas/[id]/page.tsx sem mudança de comportamento: CameraInput
  * (câmera ao vivo e seletor de arquivo, com redução e carimbo da onda M), a miniatura do
- * arquivo local, as fotos e o KM por viatura. A página carrega este módulo sob demanda e,
- * com internet, pede o carregamento antecipado assim que abre, para o service worker guardar
- * o pedaço de código no cache e as telas continuarem funcionando sem internet (onda L).
+ * arquivo local, as fotos e o KM por viatura. Import estático: carregar sob demanda quebrava
+ * a tela sem internet quando o pedaço de código não estava no cache (testes L1, L3 e L4).
  */
 import { useEffect, useRef, useState } from 'react'
 import { AlertCircle, Camera, CheckCircle2, Truck } from 'lucide-react'

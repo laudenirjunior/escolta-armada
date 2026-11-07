@@ -111,15 +111,6 @@ function DashboardLayoutInterno({ children, auth }: { children: React.ReactNode;
   // Lote 2026-10 (onda J): o contador por inserções em 5 tabelas saiu. Sino e item Avisos
   // mostram as não lidas da Central (AvisosProvider), e o sino não zera ao clicar.
 
-  // Onda N: as entradas de foto e KM da tela de detalhe são carregadas sob demanda. Com
-  // internet, qualquer tela do painel já busca esse pedaço de código, para o service worker
-  // guardá-lo e a tela da escolta abrir sem internet mesmo se nunca tiver sido aberta online.
-  useEffect(() => {
-    if (typeof navigator === 'undefined' || navigator.onLine === false) return
-    const t = window.setTimeout(() => { import('@/components/escolta/detalhe/entradas').catch(() => {}) }, 1500)
-    return () => window.clearTimeout(t)
-  }, [])
-
   useEffect(() => {
     if (!loading && !isAuthenticated) router.push('/auth/login')
     if (!loading && isAuthenticated && precisaTrocarSenha) router.push('/auth/trocar-senha')

@@ -16,8 +16,7 @@ import { textoInterestadual } from '@/lib/uf-endereco'
 import { useAuth } from '@/hooks/useAuth'
 import { formatarDataHora, formatarPlaca } from '@/utils/formatters'
 import { TextAreaWithTools } from '@/components/ui/textarea-with-tools'
-import dynamic from 'next/dynamic'
-import type { FotosPorViatura, KmPorViatura } from '@/components/escolta/detalhe/entradas'
+import { CameraInput, MiniaturaArquivo, FotosViaturasInput, KmViaturasInput, type FotosPorViatura, type KmPorViatura } from '@/components/escolta/detalhe/entradas'
 import { SugestoesTexto } from '@/components/ui/sugestoes-texto'
 import {
   PODE_AVANCAR_ESCOLTA,
@@ -315,16 +314,8 @@ const TIPO_ICON_MAP: Record<string, { color: string; bg: string; label: string }
 }
 
 // ─── Entradas de foto e KM (onda N: components/escolta/detalhe/entradas.tsx) ──
-// Carregadas sob demanda; a página pede o carregamento antecipado ao abrir com internet
-// (ver o efeito precarregarEntradas), para o pedaço de código entrar no cache do service worker.
-const carregarEntradas = () => import('@/components/escolta/detalhe/entradas')
-const CameraInput = dynamic(() => carregarEntradas().then(m => m.CameraInput), { ssr: false, loading: () => <EntradaCarregando /> })
-const MiniaturaArquivo = dynamic(() => carregarEntradas().then(m => m.MiniaturaArquivo), { ssr: false })
-const FotosViaturasInput = dynamic(() => carregarEntradas().then(m => m.FotosViaturasInput), { ssr: false, loading: () => <EntradaCarregando /> })
-const KmViaturasInput = dynamic(() => carregarEntradas().then(m => m.KmViaturasInput), { ssr: false, loading: () => <EntradaCarregando /> })
-function EntradaCarregando() {
-  return <div style={{ height: '42px', backgroundColor: '#F5F7FA', border: '1.5px dashed #D6DAE5' }} aria-busy="true" />
-}
+// Onda N: estático (a primeira versão era sob demanda e quebrava a tela sem internet quando o
+// pedaço de código não estava no cache do service worker; L1, L3 e L4).
 /** Onda N: mesma frase do aviso das entradas, para o wizard sem viatura vinculada. */
 const ERRO_SEM_VIATURA_WIZARD = 'Escolta sem viatura vinculada. Vincule a viatura na aba Veículos antes de continuar.'
 /** Rotulo curto da viatura, para titulo de secao e mensagem de erro. */
@@ -373,11 +364,6 @@ export default function EscoltaDetalhePage() {
   const router = useRouter()
   const params = useParams()
   const id = params.id as string
-  // Onda N: com internet, as entradas de foto e KM (carregadas sob demanda) são buscadas logo
-  // que a tela abre, para o service worker guardá-las e o wizard abrir também sem internet.
-  useEffect(() => {
-    if (typeof navigator === 'undefined' || navigator.onLine !== false) carregarEntradas().catch(() => {})
-  }, [])
   const { user, authUserId } = useAuth()
   const supabase = createClient()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
