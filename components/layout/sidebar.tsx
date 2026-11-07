@@ -1,8 +1,8 @@
 'use client'
 
-import { type ReactNode, createContext, useContext, useState } from 'react'
+import { type ReactNode, createContext, useContext, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { ChevronLeft, Menu, X } from 'lucide-react'
+import { ChevronDown, ChevronLeft, Menu, X } from 'lucide-react'
 
 const CollapsedCtx = createContext(false)
 
@@ -194,28 +194,65 @@ export function SidebarContent({ children }: { children: ReactNode }) {
 
 // ── SidebarSection ────────────────────────────────────────────────────────────
 
-export function SidebarSection({ label, children }: { label: string; children: ReactNode }) {
+// Onda O (M10): seções recolhíveis. O administrador via 19 itens de uma vez; agora Operações
+// abre aberta e Gestão, Análise e Sistema começam recolhidas. A escolha fica no aparelho
+// (localStorage); a seção com a tela aberta agora sempre aparece aberta. Nenhum item saiu.
+const CHAVE_SECOES = 'escolta-menu-secoes'
+
+function lerSecoes(): Record<string, boolean> {
+  try { return JSON.parse(window.localStorage.getItem(CHAVE_SECOES) ?? '{}') ?? {} } catch { return {} }
+}
+
+export function SidebarSection({ label, children, recolhivel = false, abertaPorPadrao = true, contemAtivo = false }: {
+  label: string
+  children: ReactNode
+  recolhivel?: boolean
+  abertaPorPadrao?: boolean
+  contemAtivo?: boolean
+}) {
   const collapsed = useContext(CollapsedCtx)
+  const [aberta, setAberta] = useState(abertaPorPadrao)
+  useEffect(() => {
+    if (!recolhivel) return
+    const salvo = lerSecoes()[label]
+    if (typeof salvo === 'boolean') setAberta(salvo)
+  }, [label, recolhivel])
+  const alternar = () => {
+    const nova = !aberta
+    setAberta(nova)
+    try { window.localStorage.setItem(CHAVE_SECOES, JSON.stringify({ ...lerSecoes(), [label]: nova })) } catch { /* sem armazenamento: só nesta visita */ }
+  }
+  const mostrar = collapsed || !recolhivel || aberta || contemAtivo
+  const titulo = (
+    <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.22em', color: '#ABB5C9', margin: 0, flex: 1, textAlign: 'left' }}>
+      {label}
+    </p>
+  )
+  const estilo: React.CSSProperties = {
+    margin: '16px 0 4px',
+    background: 'linear-gradient(90deg, rgba(83,100,138,0.22), transparent)',
+    borderBottom: '1px solid rgba(83,100,138,0.28)',
+    padding: '7px 24px',
+    display: 'flex', alignItems: 'center', gap: '8px', width: '100%',
+  }
   return (
-    <div style={{ marginBottom: '8px' }}>
+    <div style={{ marginBottom: '8px' }} data-secao-menu={label}>
       {collapsed
         ? <div style={{ margin: '12px 16px 8px', height: '1px', backgroundColor: 'rgba(255,255,255,0.08)' }} />
-        : (
-          <div style={{
-            margin: '16px 0 4px',
-            background: 'linear-gradient(90deg, rgba(83,100,138,0.22), transparent)',
-            borderBottom: '1px solid rgba(83,100,138,0.28)',
-            padding: '7px 24px',
-            display: 'flex', alignItems: 'center', gap: '8px',
-          }}>
+        : recolhivel ? (
+          <button type="button" onClick={alternar} aria-expanded={mostrar} style={{ ...estilo, cursor: 'pointer', border: 'none', borderBottom: estilo.borderBottom }}>
             <div style={{ width: '3px', height: '3px', backgroundColor: '#53648A', borderRadius: '50%', flexShrink: 0 }} />
-            <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.22em', color: '#ABB5C9', margin: 0 }}>
-              {label}
-            </p>
+            {titulo}
+            <ChevronDown size={12} style={{ color: '#ABB5C9', transform: mostrar ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.15s' }} />
+          </button>
+        ) : (
+          <div style={estilo}>
+            <div style={{ width: '3px', height: '3px', backgroundColor: '#53648A', borderRadius: '50%', flexShrink: 0 }} />
+            {titulo}
           </div>
         )
       }
-      {children}
+      {mostrar && children}
     </div>
   )
 }

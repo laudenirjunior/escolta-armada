@@ -144,7 +144,10 @@ function DashboardLayoutInterno({ children, auth }: { children: React.ReactNode;
         const visible = group.items.filter(i => perfil && i.perfis.includes(perfil))
         if (!visible.length) return null
         return (
-          <SidebarSection key={group.section} label={group.section}>
+          <SidebarSection key={group.section} label={group.section}
+            recolhivel={visible.length > 0 && group.section !== 'Operações'}
+            abertaPorPadrao={group.section === 'Operações'}
+            contemAtivo={visible.some(i => isActive(i.href))}>
             {visible.map(item => (
               <SidebarItem key={item.href} href={item.href} icon={item.icon} isActive={isActive(item.href)}>
                 {item.label}
