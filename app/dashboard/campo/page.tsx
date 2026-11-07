@@ -15,7 +15,8 @@ import {
   FOTOS_POR_PONTO,
   rotuloStatus,
 } from '@/lib/fluxo-escolta'
-import { TEXTO_PADRAO_ETAPA, TEXTO_PADRAO_PONTO, PLACEHOLDER, ehTextoPadrao } from '@/lib/textos-padrao'
+import { TEXTO_PADRAO_ETAPA, TEXTO_PADRAO_PONTO, PLACEHOLDER, ehTextoPadrao, CATEGORIAS_EMERGENCIA, CATEGORIAS_OCORRENCIA, comCategoria, relatoAlemDaCategoria } from '@/lib/textos-padrao'
+import { SugestoesTexto } from '@/components/ui/sugestoes-texto'
 import { serializarObservacao } from '@/lib/pontos-controle'
 import { aplicarCarimbo, linhasDoCarimbo } from '@/lib/carimbo-foto'
 import { useAuth } from '@/hooks/useAuth'
@@ -425,6 +426,8 @@ export default function CampoPage() {
 
   // Emergência
   const [emergConfirm, setEmergConfirm] = useState(false)
+  // Onda M (D9): categoria opcional da emergência (vai na observação e no Telegram).
+  const [emergCategoria, setEmergCategoria] = useState<string | null>(null)
   // Onda L (16.3.8): emergência guardada sem conexão (ninguém foi avisado): tela vermelha.
   const [emergenciaSemConexao, setEmergenciaSemConexao] = useState<{ telefone: string | null } | null>(null)
   // Ids das escoltas cujo detalhe o SW já foi pedido para guardar (evita pedir a cada minuto).
@@ -1566,7 +1569,8 @@ export default function CampoPage() {
 
   // ── Registrar ocorrência ──────────────────────────────────────────────────
   const registrarOcorrencia = async () => {
-    if (!tipoOcId || !descOcorrencia.trim()) {
+    // Onda M (D9): a categoria marcada por toque não conta como descrição.
+    if (!tipoOcId || !relatoAlemDaCategoria(descOcorrencia)) {
       showToast('erro', 'Preencha tipo e descrição.')
       return
     }
@@ -1848,13 +1852,15 @@ export default function CampoPage() {
         longitude: gps?.lng ?? null,
         sem_sinal_gps: !gps,
         status: 'aberta',
+        // Onda M (D9): só quando o operador marcou a categoria; sem ela, a linha é a de antes.
+        ...(emergCategoria ? { observacao: `Categoria: ${emergCategoria}` } : {}),
       }
       const corpoTelegram: Record<string, unknown> = {
         tipo: 'emergencia',
         titulo: 'EMERGÊNCIA ACIONADA',
-        descricao: gps
+        descricao: (emergCategoria ? `Categoria: ${emergCategoria}. ` : '') + (gps
           ? `Posição: ${gps.lat.toFixed(6)}, ${gps.lng.toFixed(6)} (precisão ${Math.round(gps.precisao)} m)`
-          : 'SEM SINAL DE GPS. Posição não capturada no acionamento.',
+          : 'SEM SINAL DE GPS. Posição não capturada no acionamento.'),
         escolta_id: escoltaAtiva.id,
         escolta_codigo: escoltaAtiva.codigo_escolta,
         cliente: escoltaAtiva.cliente?.nome_cliente,
@@ -2089,7 +2095,9 @@ export default function CampoPage() {
           onLimparFotoOc={limparFotoOcorrencia}
           onConfirmarOcorrencia={registrarOcorrencia}
           emergConfirm={emergConfirm}
-          onEmergIniciar={() => setEmergConfirm(true)}
+          emergCategoria={emergCategoria}
+          onEmergCategoria={setEmergCategoria}
+          onEmergIniciar={() => { setEmergCategoria(null); setEmergConfirm(true) }}
           onEmergCancelar={() => setEmergConfirm(false)}
           onEmergConfirmar={acionarEmergencia}
           executando={executando}
@@ -2672,6 +2680,7 @@ export default function CampoPage() {
                       </div>
                       {/* Ocorrencia nunca abre preenchida: ela existe justamente porque
                           algo saiu do previsto. O texto orienta, nao preenche. */}
+                      <SugestoesTexto className="mb-2" titulo="Categoria (toque para marcar; depois descreva o fato)" sugestoes={CATEGORIAS_OCORRENCIA} onInserir={(c) => setDescOcorrencia(d => comCategoria(d, c))} />
                       <textarea
                         rows={4}
                         value={descOcorrencia}
@@ -2701,7 +2710,7 @@ export default function CampoPage() {
 
                     <button
                       onClick={registrarOcorrencia}
-                      disabled={executando || !tipoOcId || !descOcorrencia.trim()}
+                      disabled={executando || !tipoOcId || !relatoAlemDaCategoria(descOcorrencia)}
                       className="btn-primary w-full flex items-center justify-center gap-2 disabled:opacity-50"
                     >
                       {executando ? 'Registrando...' : 'Registrar Ocorrência'}
@@ -2717,7 +2726,7 @@ export default function CampoPage() {
             <div className="pt-1">
               {!emergConfirm ? (
                 <button
-                  onClick={() => setEmergConfirm(true)}
+                  onClick={() => { setEmergCategoria(null); setEmergConfirm(true) }}
                   className="w-full rounded flex items-center justify-center gap-3 transition-all active:scale-[0.98]"
                   style={{ backgroundColor: '#FEF0EE', border: '2px solid #F5C4BF', minHeight: '64px' }}
                 >
@@ -2733,6 +2742,12 @@ export default function CampoPage() {
                     <p className="text-base font-black" style={{ color: '#B83832' }}>Confirmar Emergência?</p>
                     <p className="text-xs mt-1" style={{ color: '#C9706A' }}>A central será notificada imediatamente. Use apenas em situação real.</p>
                   </div>
+                  <SugestoesTexto
+                    titulo={emergCategoria ? `Categoria: ${emergCategoria} (opcional)` : 'Categoria (opcional, não precisa para confirmar)'}
+                    sugestoes={CATEGORIAS_EMERGENCIA}
+                    onInserir={(c) => setEmergCategoria(atual => atual === c ? null : c)}
+                    disabled={executando}
+                  />
                   <div className="flex gap-3">
                     <button
                       onClick={() => setEmergConfirm(false)}

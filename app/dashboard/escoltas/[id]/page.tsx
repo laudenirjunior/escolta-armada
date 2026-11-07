@@ -16,6 +16,7 @@ import { textoInterestadual } from '@/lib/uf-endereco'
 import { useAuth } from '@/hooks/useAuth'
 import { formatarDataHora, formatarPlaca } from '@/utils/formatters'
 import { TextAreaWithTools } from '@/components/ui/textarea-with-tools'
+import { SugestoesTexto } from '@/components/ui/sugestoes-texto'
 import {
   PODE_AVANCAR_ESCOLTA,
   PODE_CANCELAR_ESCOLTA,
@@ -40,6 +41,12 @@ import {
   TEXTO_PADRAO_PONTO,
   TEXTO_PADRAO_MATERIAIS,
   SUGESTAO_PARADA,
+  SUGESTOES_WIZARD,
+  SUGESTOES_PARADA,
+  SUGESTOES_CANCELAMENTO,
+  SUGESTOES_REAGENDAMENTO,
+  SUGESTOES_RELATORIO_FINAL,
+  juntarSugestao,
   PLACEHOLDER,
   ehTextoPadrao,
   comporObservacao,
@@ -58,7 +65,7 @@ import { prepararFoto, MENSAGEM_GUARDADO, type FotoPreparada, type LinhasEnvelop
 import { aplicarPendentes, lerPendentes } from '@/lib/offline/pendentes'
 import { gpsRapido, obterGpsPreciso, textoPrecisao } from '@/lib/gps'
 import { foiCarimbada, marcarCarimbada } from '@/lib/foto-captura'
-import { aplicarCarimbo } from '@/lib/carimbo-foto'
+import { aplicarCarimbo, reduzirECarimbarImagem } from '@/lib/carimbo-foto'
 import {
   FOTO_SEM_CONEXAO, aparelhoSemRede, conferirEspacoParaFoto, envelopeLigado, erroDeRede, fotosDosPendentes,
   gravarPeloEnvelope, horaDaCaptura, textoConflito, textoErroGravacao, textoRecusado, urlsDosPendentes,
@@ -325,7 +332,6 @@ function CameraInput({
   const [stream, setStream] = useState<MediaStream | null>(null)
   const [erro, setErro] = useState<string | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const handleFileInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -381,38 +387,31 @@ function CameraInput({
     }
   }, [stream])
 
-  const capturar = () => {
-    if (!videoRef.current || !canvasRef.current) return
+  const capturar = async () => {
+    if (!videoRef.current) return
     const v = videoRef.current
-    const c = canvasRef.current
-    c.width = v.videoWidth
-    c.height = v.videoHeight
-    const ctx = c.getContext('2d')
-    if (!ctx) return
-    ctx.drawImage(v, 0, 0)
     const agora = new Date()
-    const ts = agora.toLocaleDateString('pt-BR') + ' ' + agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-    const fs = Math.max(14, Math.floor(c.width * 0.022))
-    ctx.font = `bold ${fs}px monospace`
-    const tw = ctx.measureText(ts).width + 20
-    ctx.fillStyle = 'rgba(0,0,0,0.55)'
-    ctx.fillRect(8, c.height - fs * 2.2, tw, fs * 1.8)
-    ctx.fillStyle = '#FFFFFF'
-    ctx.fillText(ts, 16, c.height - fs * 0.5)
-    c.toBlob(async (blob) => {
-      if (!blob) return
-      // Onda L (S12): sem espaço no aparelho, a captura é bloqueada com aviso.
-      try { await conferirEspacoParaFoto(blob.size) } catch (err) {
-        setErro(textoErroGravacao(err, 'O espaço do aparelho acabou.'))
-        return
-      }
-      const tsStr = agora.toISOString().replace(/[:.]/g, '-').slice(0, 19)
-      const file = new File([blob], `${prefixoNome}_${tsStr}.jpg`, { type: 'image/jpeg' })
-      const novas = [...fotos, { file, url: URL.createObjectURL(blob) }]
-      setFotos(novas)
-      onChange(novas.map(f => f.file))
-      if (novas.length >= max) fechar()
-    }, 'image/jpeg', 0.92)
+    // Onda M (D7): o vídeo ao vivo passa pela mesma redução e pelo mesmo carimbo do seletor de
+    // arquivo e do Campo (lado maior de 1600 px, JPEG 0,7, data, hora e coordenada).
+    const gps = await gpsRapido()
+    const r = await reduzirECarimbarImagem(v, v.videoWidth, v.videoHeight, { timestamp: agora.toISOString(), gps })
+    if (!r.blob) {
+      setErro('Não foi possível capturar a foto. Tente de novo ou use o seletor de arquivo.')
+      return
+    }
+    const blob = r.blob
+    // Onda L (S12): sem espaço no aparelho, a captura é bloqueada com aviso.
+    try { await conferirEspacoParaFoto(blob.size) } catch (err) {
+      setErro(textoErroGravacao(err, 'O espaço do aparelho acabou.'))
+      return
+    }
+    const tsStr = agora.toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    const file = new File([blob], `${prefixoNome}_${tsStr}.jpg`, { type: 'image/jpeg' })
+    if (r.carimbado) marcarCarimbada(file)
+    const novas = [...fotos, { file, url: URL.createObjectURL(blob) }]
+    setFotos(novas)
+    onChange(novas.map(f => f.file))
+    if (novas.length >= max) fechar()
   }
 
   const remover = (idx: number) => {
@@ -503,7 +502,6 @@ function CameraInput({
                 {stream ? `Foto ${fotos.length + 1} de ${max} — Enquadre e capture` : 'Iniciando câmera...'}
               </p>
               <video ref={videoRef} playsInline autoPlay muted style={{ width: '100%', maxWidth: '480px', maxHeight: '60vh', objectFit: 'cover', backgroundColor: '#111' }} />
-              <canvas ref={canvasRef} style={{ display: 'none' }} />
               <div style={{ display: 'flex', gap: '0.75rem', width: '100%', maxWidth: '480px' }}>
                 <button type="button" onClick={capturar} disabled={!stream}
                   style={{ flex: 1, height: '48px', backgroundColor: stream ? '#1E7C52' : '#333', color: '#fff', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.12em', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
@@ -3277,6 +3275,7 @@ export default function EscoltaDetalhePage() {
                   textareaClassName="input-light resize-none text-xs"
                   contextoAI="Relatório de entrega e conformidade de materiais de escolta armada"
                 />
+                <SugestoesTexto className="mt-2" titulo="Sugestões (toque para inserir e edite)" sugestoes={SUGESTOES_WIZARD.materiais} onInserir={(f) => setObsMateriais(v => juntarSugestao(v, f))} />
               </div>
 
               <div className="flex justify-end pt-3 border-t">
@@ -3390,6 +3389,7 @@ export default function EscoltaDetalhePage() {
                   textareaClassName="input-light resize-none text-xs"
                   contextoAI="Inspeção de viatura para escolta armada"
                 />
+                <SugestoesTexto className="mt-2" titulo="Sugestões (toque para inserir e edite)" sugestoes={SUGESTOES_WIZARD.viatura} onInserir={(f) => setObsViatura(v => juntarSugestao(v, f))} />
               </div>
 
               {/* Onda H (lote 2026-10): KM inicial e foto do painel, um cartão por viatura. */}
@@ -3513,6 +3513,7 @@ export default function EscoltaDetalhePage() {
                   textareaClassName="input-light resize-none text-xs"
                   contextoAI="Observações gerais de saída para escolta armada"
                 />
+                <SugestoesTexto className="mt-2" titulo="Sugestões (toque para inserir e edite)" sugestoes={SUGESTOES_WIZARD.partida} onInserir={(f) => setObsPartida(v => juntarSugestao(v, f))} />
               </div>
 
               <div className="flex flex-col-reverse sm:flex-row justify-between gap-2 pt-3 border-t">
@@ -4997,6 +4998,7 @@ export default function EscoltaDetalhePage() {
                       textareaClassName="input-light resize-none"
                       contextoAI="Motivo de cancelamento de escolta armada"
                     />
+                    <SugestoesTexto className="mt-2" titulo="Sugestões (toque para inserir e edite)" sugestoes={SUGESTOES_CANCELAMENTO} onInserir={(f) => setMotivoCancelamento(v => juntarSugestao(v, f))} />
                   </div>
                 </>
               )}
@@ -5041,6 +5043,7 @@ export default function EscoltaDetalhePage() {
                       textareaClassName="input-light resize-none"
                       contextoAI="Motivo de reagendamento de escolta armada"
                     />
+                    <SugestoesTexto className="mt-2" titulo="Sugestões (toque para inserir e edite)" sugestoes={SUGESTOES_REAGENDAMENTO} onInserir={(f) => setMotivoReagendamento(v => juntarSugestao(v, f))} />
                   </div>
                 </>
               )}
@@ -5317,17 +5320,7 @@ export default function EscoltaDetalhePage() {
 
               <div>
                 <label className="block text-xs font-semibold mb-1.5 text-[#5A6A80]">Justificativa da Parada *</label>
-                {/* Sugestao por clique, nunca valor inicial: aqui a unica barreira e o campo nao estar vazio. */}
-                {SUGESTAO_PARADA[tipoParada] && (
-                  <button
-                    type="button"
-                    onClick={() => setObsParada(SUGESTAO_PARADA[tipoParada])}
-                    className="text-left w-full mb-1.5 px-2.5 py-1.5"
-                    style={{ fontSize: '11px', color: '#53648A', backgroundColor: '#F5F7FA', border: '1px dashed #D6DAE5' }}
-                  >
-                    Usar sugestão: {SUGESTAO_PARADA[tipoParada]}
-                  </button>
-                )}
+                {/* Onda M (D9): sugestões por toque logo abaixo do campo; nunca valor inicial. */}
                 <TextAreaWithTools
                   value={obsParada}
                   onChange={(v) => setObsParada(v)}
@@ -5336,6 +5329,7 @@ export default function EscoltaDetalhePage() {
                   textareaClassName="input-light resize-none"
                   contextoAI="Justificativa de parada em escolta armada"
                 />
+                <SugestoesTexto className="mt-2" titulo="Sugestões (toque para inserir e edite)" sugestoes={[SUGESTAO_PARADA[tipoParada], ...SUGESTOES_PARADA].filter(Boolean)} onInserir={(f) => setObsParada(v => juntarSugestao(v, f))} />
               </div>
             </div>
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
@@ -5830,6 +5824,7 @@ export default function EscoltaDetalhePage() {
                   textareaClassName="input-light resize-none"
                   contextoAI="Relatório diário da operação de escolta armada"
                 />
+                <SugestoesTexto className="mt-2" titulo="Trechos sugeridos (toque para inserir e complete com o que aconteceu)" sugestoes={SUGESTOES_RELATORIO_FINAL} onInserir={(f) => setRelatorioFinal(v => juntarSugestao(v, f))} />
               </div>
             </div>
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>

@@ -21,6 +21,8 @@ import {
   FileText, Map as MapIcon, Octagon, Radio, Shield, X, Zap,
 } from 'lucide-react'
 import { FOTOS_POR_PONTO } from '@/lib/fluxo-escolta'
+import { SugestoesTexto } from '@/components/ui/sugestoes-texto'
+import { CATEGORIAS_EMERGENCIA, CATEGORIAS_OCORRENCIA, comCategoria, relatoAlemDaCategoria } from '@/lib/textos-padrao'
 import { TOTAL_ETAPAS, type AcaoDetalhe, type ProximaAcao } from '@/lib/proximo-passo-operador'
 import { EstouNaBase } from './estou-na-base'
 import { AvisosMural } from '@/components/escolta/avisos-mural'
@@ -130,6 +132,9 @@ export interface PainelGuiadoProps {
   onConfirmarOcorrencia: () => void
 
   emergConfirm: boolean
+  /** Onda M (D9): categoria opcional da emergência; nunca atrasa nem bloqueia o CONFIRMAR. */
+  emergCategoria?: string | null
+  onEmergCategoria?: (c: string | null) => void
   onEmergIniciar: () => void
   onEmergCancelar: () => void
   onEmergConfirmar: () => void
@@ -527,7 +532,8 @@ export function PainelGuiado(p: PainelGuiadoProps) {
   if (p.painel === 'ocorrencia') {
     const faltas = faltando([
       [!!p.tipoOcId, 'escolher o tipo'],
-      [!!p.descOc.trim(), 'descrever o que aconteceu'],
+      // Onda M (D9): a categoria inserida por toque não conta como relato.
+      [!!relatoAlemDaCategoria(p.descOc), 'descrever o que aconteceu'],
     ])
     return (
       <div className="max-w-xl mx-auto space-y-4 pb-4">
@@ -543,6 +549,7 @@ export function PainelGuiado(p: PainelGuiadoProps) {
         <Cartao>
           <Rotulo>2. O que aconteceu (obrigatório)</Rotulo>
           {/* Ocorrencia nunca abre preenchida: existe porque algo fugiu do previsto. */}
+          <SugestoesTexto className="mb-2" titulo="Categoria (toque para marcar; depois descreva o fato)" sugestoes={CATEGORIAS_OCORRENCIA} onInserir={(c) => p.onDescOc(comCategoria(p.descOc, c))} />
           <textarea rows={4} value={p.descOc} onChange={(e) => p.onDescOc(e.target.value)} placeholder={p.placeholderOc} className="input-light w-full resize-none" style={{ fontSize: '16px' }} />
         </Cartao>
         <Cartao>
@@ -711,6 +718,14 @@ export function PainelGuiado(p: PainelGuiadoProps) {
           <div className="p-4 space-y-3" style={{ backgroundColor: COR.vermelhoFundo, border: `2px solid ${COR.vermelho}`, borderRadius: '4px' }}>
             <p className="text-center font-black" style={{ fontSize: '19px', color: COR.vermelho }}>Confirmar Emergência?</p>
             <p className="text-center" style={{ fontSize: '15px', color: COR.texto }}>A central será avisada agora. Use só em situação real.</p>
+            {p.onEmergCategoria && (
+              <SugestoesTexto
+                titulo={p.emergCategoria ? `Categoria: ${p.emergCategoria} (opcional)` : 'Categoria (opcional, não precisa para confirmar)'}
+                sugestoes={CATEGORIAS_EMERGENCIA}
+                onInserir={(c) => p.onEmergCategoria?.(p.emergCategoria === c ? null : c)}
+                disabled={p.executando}
+              />
+            )}
             <div className="flex gap-2">
               <button type="button" onClick={p.onEmergCancelar} className="flex-1 font-bold" style={{ minHeight: '56px', fontSize: '16px', backgroundColor: '#fff', border: `1.5px solid ${COR.borda}`, borderRadius: '4px', color: COR.texto }}>
                 Cancelar

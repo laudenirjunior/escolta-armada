@@ -18,8 +18,15 @@
  * 3. CATEGORIAS orientam ocorrencia e emergencia sem criar relato. O que aconteceu
  *    continua sendo escrito por quem presenciou o fato.
  *
- * PLACEHOLDER e apenas dica visual. CAMPOS_SEM_TEXTO_PADRAO registra as excecoes que
- * nunca recebem valor automatico. As duas telas, detalhe e campo, leem daqui.
+ * PLACEHOLDER e apenas dica visual, nunca valor. Os campos obrigatorios (wizard de
+ * pre-inicio, parada, cancelamento, reagendamento e relatorio final) tem como unica
+ * barreira `if (!campo.trim())`: um texto de fabrica no valor deles anularia essa
+ * validacao e liberaria a jornada sem uma linha digitada. Por isso as SUGESTOES so
+ * entram por toque (onda M, D9), e a categoria da ocorrencia nao conta como relato
+ * (relatoAlemDaCategoria). CAMPOS_SEM_TEXTO_PADRAO registra as excecoes que nunca
+ * recebem valor automatico. As duas telas, detalhe e campo, leem daqui; a frase nunca
+ * e escrita duas vezes. A excecao conhecida e TEXTO_PADRAO_MATERIAIS (pedido de
+ * Pecanha em 10/09, custo explicado abaixo).
  */
 
 import { STATUS } from './fluxo-escolta'
@@ -272,4 +279,28 @@ export function ehTextoPadrao(texto: string | null | undefined, padrao: string |
 export function comporObservacao(...partes: (string | null | undefined)[]): string | null {
   const limpas = partes.map((p) => (p ?? '').trim()).filter(Boolean)
   return limpas.length ? limpas.join(' · ') : null
+}
+
+/**
+ * Onda M (D9): junta a frase da sugestão ao que já foi escrito. Campo vazio recebe a frase;
+ * com texto, a frase entra no fim, separada por espaço. Nunca apaga o que o operador digitou.
+ */
+export function juntarSugestao(atual: string, frase: string): string {
+  const a = atual.trim()
+  return a ? `${a} ${frase}` : frase
+}
+
+/**
+ * Categoria da ocorrência (D9): entra como prefixo "Categoria: X. " e é trocada, não somada,
+ * se outra for escolhida. A categoria sozinha não conta como relato: o botão de registrar
+ * confere relatoAlemDaCategoria, que precisa ter texto escrito por quem viu o fato.
+ */
+const PREFIXO_CATEGORIA = /^\s*Categoria: [^.\n]*\.\s*/
+
+export function comCategoria(atual: string, categoria: string): string {
+  return `Categoria: ${categoria}. ${atual.replace(PREFIXO_CATEGORIA, '')}`
+}
+
+export function relatoAlemDaCategoria(texto: string): string {
+  return texto.replace(PREFIXO_CATEGORIA, '').trim()
 }
