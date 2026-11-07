@@ -76,6 +76,7 @@ import {
 } from '@/lib/offline/tela'
 import { emParalelo, FOTOS_EM_PARALELO } from '@/lib/offline/envio'
 import { FaixaAndamento } from '@/components/ui/faixa-andamento'
+import { ALTURA_MAX_MINIATURA, MiniaturaAmpliavel } from '@/components/ui/miniatura-ampliavel'
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -526,10 +527,12 @@ function CameraInput({
         onChange={handleFileInput}
       />
       {fotos.length > 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: '6px', marginBottom: '6px' }}>
+        // Onda O (M7): miniaturas de até 160 px (antes a prévia ocupava a largura toda e, no
+        // computador, a tela inteira); toque amplia.
+        <div data-previa-fotos style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, minmax(0, ${ALTURA_MAX_MINIATURA}px))`, gap: '6px', marginBottom: '6px' }}>
           {fotos.map((f, idx) => (
-            <div key={idx} style={{ position: 'relative', aspectRatio: '1' }}>
-              <img src={f.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            <div key={idx} style={{ position: 'relative', aspectRatio: '1', maxHeight: ALTURA_MAX_MINIATURA }}>
+              <MiniaturaAmpliavel src={f.url} alt={`Foto ${idx + 1}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               <button type="button" onClick={() => remover(idx)}
                 style={{ position: 'absolute', top: 2, right: 2, backgroundColor: '#B83832', color: '#fff', width: '16px', height: '16px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none', cursor: 'pointer', lineHeight: 1 }}>
                 ×

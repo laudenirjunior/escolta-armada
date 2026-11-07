@@ -45,6 +45,7 @@ import {
 } from '@/lib/offline/tela'
 import { EmergenciaSemConexao } from '@/components/offline/emergencia-sem-conexao'
 import { FaixaAndamento } from '@/components/ui/faixa-andamento'
+import { MiniaturaAmpliavel } from '@/components/ui/miniatura-ampliavel'
 
 const supabase = createClient()
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -334,8 +335,7 @@ function FotoCapture({
 
       {captura ? (
         <div className="relative rounded overflow-hidden border border-[#E2E8EC]">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={captura.preview} alt="foto" className="w-full h-44 object-cover" />
+          <MiniaturaAmpliavel src={captura.preview} alt="foto" className="w-full h-40 object-cover" />
           {/* Carimbo data/hora/GPS */}
           <div className="absolute bottom-0 left-0 right-0 bg-black/65 px-3 py-2">
             <p className="text-white font-mono text-[11px] leading-tight">
@@ -373,8 +373,7 @@ function FotoMiniatura({
 }) {
   return (
     <div className="relative rounded overflow-hidden border border-[#E2E8EC]">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={captura.preview} alt="foto" className="w-full h-28 object-cover" />
+      <MiniaturaAmpliavel src={captura.preview} alt="foto" className="w-full h-28 object-cover" />
       <div className="absolute bottom-0 left-0 right-0 bg-black/65 px-2 py-1">
         <p className="text-white font-mono text-[9px] leading-tight break-all">
           {formatarCarimbo(captura.timestamp, captura.gps)}
@@ -2603,8 +2602,7 @@ export default function CampoPage() {
                                 {/* Foto do item não conforme */}
                                 {item.captura ? (
                                   <div className="relative rounded overflow-hidden border" style={{ borderColor: '#E2E8EC' }}>
-                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img src={item.captura.preview} alt="foto item" className="w-full h-28 object-cover" />
+                                    <MiniaturaAmpliavel src={item.captura.preview} alt="foto item" className="w-full h-28 object-cover" />
                                     <div className="absolute bottom-0 left-0 right-0 px-2 py-1.5" style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
                                       {/* Mesmo texto do carimbo desenhado na imagem. Antes era
                                           `new Date()`, o horario do render, que avancava a cada
