@@ -1792,7 +1792,7 @@ export default function EscoltaDetalhePage() {
 
   const conferirEtapa = async (escoltaId: string, statusEsperado: string) => {
     // Onda L (16.3.10): sem rede, pula; a conferência fica no servidor (conflito, nunca descarte).
-    if (gravacaoRef.current?.semRede) return
+    if (gravacaoRef.current?.semRede || gravacaoRef.current?.pularConferencia) return
     const { data, error } = await sb.from('escoltas').select('status').eq('id', escoltaId).maybeSingle()
     if (error && gravacaoRef.current && erroDeRede(error)) return
     if (error) throw new Error(error.message)
@@ -1845,13 +1845,15 @@ export default function EscoltaDetalhePage() {
     statusEsperado: string | null
     quando: string
     semRede: boolean
+    /** Onda O (M3): a etapa anterior ficou guardada no aparelho; a conferência fica no servidor. */
+    pularConferencia?: boolean
   } | null>(null)
 
-  const iniciarGravacao = async () => {
+  const iniciarGravacao = async (opcoes: { pularConferencia?: boolean } = {}) => {
     gravacaoRef.current = null
     const env = await envelopeLigado()
     if (env.usar) {
-      gravacaoRef.current = { fotos: [], linhas: {}, etapa: null, statusEsperado: null, quando: new Date().toISOString(), semRede: aparelhoSemRede() }
+      gravacaoRef.current = { fotos: [], linhas: {}, etapa: null, statusEsperado: null, quando: new Date().toISOString(), semRede: aparelhoSemRede(), pularConferencia: opcoes.pularConferencia }
     }
   }
 
@@ -1889,10 +1891,10 @@ export default function EscoltaDetalhePage() {
    * vez, depois de aplicado, com as duas horas se foi feito sem conexão). Guardado,
    * conflito e recusado ficam no aviso da tela.
    */
-  const fecharGravacao = async (params: Parameters<typeof notificarTelegram>[0]) => {
+  const fecharGravacao = async (params: Parameters<typeof notificarTelegram>[0]): Promise<'aplicado' | 'guardado' | 'conflito' | 'recusado'> => {
     const g = gravacaoRef.current
     gravacaoRef.current = null
-    if (!g) { notificarTelegram(params); setAndamento('Atualizando a tela'); return }
+    if (!g) { notificarTelegram(params); setAndamento('Atualizando a tela'); return 'aplicado' }
     const efetivos = viaturas.flatMap(v => v.efetivo)
       .map(e => `${e.vigilante?.nome_completo ?? '—'}${e.papel_na_escolta ? ` (${e.papel_na_escolta})` : ''}`)
     const placas = viaturas.map((v) => v.veiculo?.placa).filter((p): p is string => Boolean(p))
@@ -1926,10 +1928,11 @@ export default function EscoltaDetalhePage() {
       },
     }, setAndamento)
     setAndamento('Atualizando a tela')
-    if (r.modo === 'guardado') setAvisoOffline({ tipo: 'guardado', texto: MENSAGEM_GUARDADO })
-    else if (r.modo === 'recusado') setAvisoOffline({ tipo: 'erro', texto: textoRecusado(r.erro) })
-    else if (r.resultado === 'conflito') setAvisoOffline({ tipo: 'erro', texto: textoConflito(r.motivo) })
-    else setAvisoOffline(null)
+    if (r.modo === 'guardado') { setAvisoOffline({ tipo: 'guardado', texto: MENSAGEM_GUARDADO }); return 'guardado' }
+    if (r.modo === 'recusado') { setAvisoOffline({ tipo: 'erro', texto: textoRecusado(r.erro) }); return 'recusado' }
+    if (r.resultado === 'conflito') { setAvisoOffline({ tipo: 'erro', texto: textoConflito(r.motivo) }); return 'conflito' }
+    setAvisoOffline(null)
+    return 'aplicado'
   }
 
   // ── Upload de Foto ───────────────────────────────────────────────────────────
@@ -2704,49 +2707,7 @@ export default function EscoltaDetalhePage() {
   // ── 5. Iniciar Retorno ───────────────────────────────────────────────────────
   // ── ETAPA NOVA: Trânsito para o Retorno (no_destino -> em_transito_retorno) ──
   // Sem este ponto registrado, a trigger do banco recusa a conclusão do retorno.
-  const handleIniciarTransitoRetorno = async () => {
-    if (!escolta) return
-    if (!validarPreRequisitos()) return
-    const faltamFotos = erroFotosFaltando(fotosTransitoRetorno, 'do trânsito de retorno')
-    if (faltamFotos) { setErro(faltamFotos); return }
-    setLoading(true)
-    setErro(null)
-    try {
-      await iniciarGravacao()
-      const pos = await obterPosicaoPonto()
-
-      const fotoPrincipal = await gravarPontosPorViatura({
-        escoltaId: escolta.id,
-        statusEsperado: escolta.status,
-        fotos: fotosTransitoRetorno,
-        prefixo: 'transito_retorno',
-        tipoPontoId: TIPO_PONTO_IDS.TRANSITO_RETORNO,
-        tipo: 'transito_retorno',
-        tipoLabel: 'Trânsito para o Retorno',
-        observacao: obsTransitoRetorno,
-        pos,
-        transicao: { statusNovo: 'em_transito_retorno', observacao: comporObservacao(obsTransitoRetorno) ?? 'Trânsito de retorno iniciado.' },
-      })
-
-      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
-
-      await fecharGravacao({
-        titulo: 'Trânsito de Retorno Iniciado',
-        status_atual: 'Trânsito p/ Retorno',
-        descricao: descricaoTelegram(obsTransitoRetorno, TEXTO_PADRAO_PONTO.transitoRetorno),
-        fotoId: fotoPrincipal,
-      })
-
-      setDialogTransitoRetorno(false)
-      setObsTransitoRetorno(TEXTO_PADRAO_PONTO.transitoRetorno)
-      setFotosTransitoRetorno({})
-      setAvisoSemGps(pos.sem_sinal_gps)
-      carregar()
-    } catch (err) {
-      setErro(err instanceof Error ? err.message : 'Erro ao iniciar o trânsito de retorno.')
-      setLoading(false)
-    }
-  }
+  // Onda O (M3): o trânsito de retorno sozinho saiu; a janela grava as duas etapas (handleRetornoUmToque).
 
   const handleIniciarRetorno = async () => {
     if (!escolta) return
@@ -2790,6 +2751,82 @@ export default function EscoltaDetalhePage() {
     } catch (err) {
       setErro(err instanceof Error ? err.message : 'Erro ao iniciar retorno.')
       setLoading(false)
+    }
+  }
+
+  // ── Onda O (M3): retorno em um toque ─────────────────────────────────────────
+  // "Trânsito de retorno" e "Retorno" eram duas etapas quase iguais. Sem mexer na máquina de
+  // estados nem no banco: um botão grava as duas transições em sequência (no_destino ->
+  // em_transito_retorno -> retornando), pela mesma gravação de sempre, com a mesma foto e a
+  // mesma observação. Se a primeira não for aplicada (conflito ou recusa), a segunda não sai;
+  // se só ficou guardada no aparelho, a segunda entra na fila logo atrás dela.
+  const handleRetornoUmToque = async () => {
+    if (!escolta) return
+    if (!validarPreRequisitos()) return
+    const faltamFotos = erroFotosFaltando(fotosTransitoRetorno, 'do retorno')
+    if (faltamFotos) { setErro(faltamFotos); return }
+    setLoading(true)
+    setErro(null)
+    try {
+      await iniciarGravacao()
+      const pos = await obterPosicaoPonto()
+      const obs = obsTransitoRetorno
+      setAndamento('Retorno, parte 1 de 2')
+      const foto1 = await gravarPontosPorViatura({
+        escoltaId: escolta.id,
+        statusEsperado: escolta.status,
+        fotos: fotosTransitoRetorno,
+        prefixo: 'transito_retorno',
+        tipoPontoId: TIPO_PONTO_IDS.TRANSITO_RETORNO,
+        tipo: 'transito_retorno',
+        tipoLabel: 'Trânsito para o Retorno',
+        observacao: obs,
+        pos,
+        transicao: { statusNovo: 'em_transito_retorno', observacao: comporObservacao(obs) ?? 'Trânsito de retorno iniciado.' },
+      })
+      const r1 = await fecharGravacao({
+        titulo: 'Trânsito de Retorno Iniciado',
+        status_atual: 'Trânsito p/ Retorno',
+        descricao: descricaoTelegram(obs, TEXTO_PADRAO_PONTO.transitoRetorno),
+        fotoId: foto1,
+      })
+      if (r1 === 'conflito' || r1 === 'recusado') {
+        setDialogTransitoRetorno(false)
+        carregar()
+        return
+      }
+
+      await iniciarGravacao({ pularConferencia: r1 === 'guardado' })
+      setAndamento('Retorno, parte 2 de 2')
+      const foto2 = await gravarPontosPorViatura({
+        escoltaId: escolta.id,
+        statusEsperado: 'em_transito_retorno',
+        fotos: fotosTransitoRetorno,
+        prefixo: 'retorno',
+        tipoPontoId: TIPO_PONTO_IDS.RETORNO,
+        tipo: 'retorno',
+        tipoLabel: 'Retorno',
+        observacao: obs,
+        pos,
+        transicao: { statusNovo: 'retornando', observacao: comporObservacao(obs) ?? 'Retorno iniciado.' },
+      })
+      await fecharGravacao({
+        titulo: 'Retorno Iniciado',
+        status_atual: 'Em Retorno',
+        descricao: descricaoTelegram(obs, TEXTO_PADRAO_PONTO.retorno),
+        fotoId: foto2,
+      })
+
+      setDialogTransitoRetorno(false)
+      setObsTransitoRetorno(TEXTO_PADRAO_PONTO.transitoRetorno)
+      setFotosTransitoRetorno({})
+      setAvisoSemGps(pos.sem_sinal_gps)
+      carregar()
+    } catch (err) {
+      setErro(err instanceof Error ? err.message : 'Erro ao iniciar o retorno.')
+      setLoading(false)
+      // A primeira parte pode ter sido gravada: a tela relê e mostra a etapa certa.
+      carregar()
     }
   }
 
@@ -4104,7 +4141,7 @@ export default function EscoltaDetalhePage() {
                 style={{ backgroundColor: '#53648A', boxShadow: '0 2px 8px rgba(83,100,138,0.25)' }}
                 onMouseEnter={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#3F4E6D'}
                 onMouseLeave={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#53648A'}>
-                <RotateCcw size={13} /> Iniciar Trânsito de Retorno
+                <RotateCcw size={13} /> Iniciar retorno
               </button>
             )}
 
@@ -5658,15 +5695,15 @@ export default function EscoltaDetalhePage() {
         <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
           <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden rounded-t-2xl sm:rounded-2xl" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
-              <h2 className="font-bold text-base text-[#0E1A33]">Iniciar Trânsito de Retorno</h2>
+              <h2 className="font-bold text-base text-[#0E1A33]">Iniciar retorno</h2>
             </div>
             <div className="px-6 py-5 space-y-4">
               {erro && (
                 <p className="text-xs p-3 rounded" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
               )}
               <p className="text-sm text-[#5A6A80]">
-                Registrar a saída do destino rumo à base. Este ponto é obrigatório: sem ele
-                não é possível concluir o retorno.
+                Registra a saída do destino e o início do retorno à base num toque só, com a
+                mesma foto e a mesma observação.
               </p>
 
               {renderGpsAcao()}
@@ -5698,11 +5735,11 @@ export default function EscoltaDetalhePage() {
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => setDialogTransitoRetorno(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
-                onClick={handleIniciarTransitoRetorno}
+                onClick={handleRetornoUmToque}
                 disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosTransitoRetorno)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? (andamento ? `${andamento}...` : 'Registrando...') : 'Confirmar Trânsito de Retorno'}
+                {loading ? (andamento ? `${andamento}...` : 'Registrando...') : 'Iniciar retorno'}
               </button>
             </div>
           </div>
