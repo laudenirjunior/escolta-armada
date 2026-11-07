@@ -22,7 +22,6 @@ import {
   PODE_CANCELAR_ESCOLTA,
   PODE_VER_FINANCEIRO,
   PODE_ALTERAR_PERIODICIDADE,
-  temPermissao,
 } from '@/lib/permissions'
 import { podeOperarEscolta } from '@/lib/acesso-escolta'
 import { minutosAteCheckin as calcularMinutosAteCheckin, inicioOperacaoEm, linhaCheckin, registrarCheckin, TIPO_CHECKIN, periodicidadePadraoDoCliente } from '@/lib/checkin'
