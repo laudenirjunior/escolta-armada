@@ -20,7 +20,7 @@ import {
   FOTO_AVULSA, VERSAO_FILA,
   type AvisoPosEnvio, type FotoFila, type GpsAcao, type RegistroFila, type TipoRegistro,
 } from './fila.ts'
-import { classificarErro, desvioDoRelogio, enviarFila, type ClienteOffline } from './envio.ts'
+import { aoConcluirRegistro, classificarErro, desvioDoRelogio, emParalelo, enviarFila, FOTOS_EM_PARALELO, type ClienteOffline } from './envio.ts'
 
 export const MENSAGEM_GUARDADO = 'Guardado no aparelho. Será enviado quando houver sinal.'
 
@@ -133,6 +133,8 @@ export interface ContextoRegistro {
   /** Quanto esperar pela resposta com sinal antes de dizer "guardado" (padrão 30 s). */
   esperarMs?: number
   fetch?: typeof fetch
+  /** Onda O (A1): andamento do caminho sem fila (sem IndexedDB). Com fila, vem pelo estado do envio. */
+  aoProgredir?: (p: { fase: 'fotos' | 'registro'; fotosFeitas: number; fotosTotal: number }) => void
 }
 
 export type ResultadoRegistroCampo =
@@ -185,10 +187,16 @@ export async function registrarCampo(ctx: ContextoRegistro, e: EntradaRegistroCa
     // Onda M (revisão adversarial da onda L, achado 4): as fotos sobem ANTES do envelope, como
     // no caminho da fila. Se uma foto falhar, nada é aplicado no banco (o objeto já enviado fica
     // no bucket com caminho determinístico e é reaproveitado se o operador tentar de novo).
-    for (const f of e.fotos ?? []) {
+    // Onda O (A1): até 3 fotos em paralelo, com o andamento para a tela.
+    const fotos = e.fotos ?? []
+    let feitas = 0
+    ctx.aoProgredir?.({ fase: 'fotos', fotosFeitas: 0, fotosTotal: fotos.length })
+    await emParalelo(fotos, FOTOS_EM_PARALELO, async (f) => {
       const up = await ctx.supabase.storage.from('fotos').upload(f.caminho, f.blob, { upsert: false, contentType: f.tipoMime })
       if (up.error && !/already exists|duplicate/i.test(up.error.message)) throw new Error(`Falha ao enviar a foto: ${up.error.message}`)
-    }
+      ctx.aoProgredir?.({ fase: 'fotos', fotosFeitas: ++feitas, fotosTotal: fotos.length })
+    })
+    ctx.aoProgredir?.({ fase: 'registro', fotosFeitas: fotos.length, fotosTotal: fotos.length })
     const r = await ctx.supabase.rpc('registrar_campo', {
       p_client_id: clientId, p_tipo: e.tipo, p_payload: payload, p_versao_gestao: e.versaoGestao,
       p_data_hora_acao: e.dataHoraAcao ?? agora, p_relogio: relogio,
@@ -215,11 +223,13 @@ export async function registrarCampo(ctx: ContextoRegistro, e: EntradaRegistroCa
 
   if (!online()) return { modo: 'guardado', clientId, mensagem: MENSAGEM_GUARDADO }
 
-  // Com sinal: envia a fila na ordem (os anteriores primeiro) e espera este.
+  // Com sinal: envia a fila na ordem (os anteriores primeiro) e espera ESTE registro (onda O, A1:
+  // não espera o resto da fila nem o Telegram, que seguem em segundo plano), até o limite.
   const limite = ctx.esperarMs ?? 30_000
   let relogio_: ReturnType<typeof setTimeout> | undefined
   await Promise.race([
     enviarFila({ supabase: ctx.supabase, authUserId: ctx.authUserId, online, fetch: ctx.fetch }, { esperarTrava: true, ignorarEspera: true }).catch(() => null),
+    aoConcluirRegistro(clientId),
     new Promise(resolve => { relogio_ = setTimeout(resolve, limite) }),
   ])
   if (relogio_) clearTimeout(relogio_)

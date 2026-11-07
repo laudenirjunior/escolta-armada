@@ -72,6 +72,8 @@ import {
   FOTO_SEM_CONEXAO, aparelhoSemRede, conferirEspacoParaFoto, envelopeLigado, erroDeRede, fotosDosPendentes,
   gravarPeloEnvelope, horaDaCaptura, textoConflito, textoErroGravacao, textoRecusado, urlsDosPendentes,
 } from '@/lib/offline/tela'
+import { emParalelo, FOTOS_EM_PARALELO } from '@/lib/offline/envio'
+import { FaixaAndamento } from '@/components/ui/faixa-andamento'
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -739,6 +741,10 @@ export default function EscoltaDetalhePage() {
   const [ocorrencias, setOcorrencias] = useState<OcorrenciaItem[]>([])
   const [timeline, setTimeline] = useState<TimelineItem[]>([])
   const [loading, setLoading] = useState(true)
+  // Onda O (A1): o que a gravação está fazendo agora ("Enviando foto 3 de 7"), para a tela
+  // nunca ficar parada só com "Iniciando...". Zera quando a tela é liberada.
+  const [andamento, setAndamento] = useState<string | null>(null)
+  useEffect(() => { if (!loading) setAndamento(null) }, [loading])
   const [tab, setTab] = useState<Tab>('geral')
   const [selectedPhoto, setSelectedPhoto] = useState<{ url: string; titulo: string } | null>(null)
   const [selectedTimelineItem, setSelectedTimelineItem] = useState<TimelineItem | null>(null)
@@ -1461,17 +1467,17 @@ export default function EscoltaDetalhePage() {
       // iniciar a escolta assim mesmo.
       const pos = await obterPosicaoPonto()
 
-      // 1. Upload Fotos
-      const fotoMatId = await uploadFoto(fotoMateriais, 'wizard_materiais', pos.latitude, pos.longitude, pos.precisao_metros, TIPO_FOTO_IDS.CHECKLIST_MATERIAL)
-
-      // Upload das 5 fotos obrigatórias da viatura
+      // 1. Upload Fotos (onda O, A1: a dos materiais e as 5 da viatura juntas, até 3 por vez)
+      const envios: Array<{ chave: string; file: File; prefixo: string; tipoId: string }> = [
+        { chave: 'materiais', file: fotoMateriais, prefixo: 'wizard_materiais', tipoId: TIPO_FOTO_IDS.CHECKLIST_MATERIAL },
+        ...FOTOS_VIATURA_DEF.flatMap(def => fotosViatura[def.key]
+          ? [{ chave: def.key, file: fotosViatura[def.key] as File, prefixo: `wizard_viatura_${def.key}`, tipoId: def.tipoId }]
+          : []),
+      ]
+      const idsEnviados = await enviarFotosComAndamento(envios, (e) => uploadFoto(e.file, e.prefixo, pos.latitude, pos.longitude, pos.precisao_metros, e.tipoId))
+      const fotoMatId = idsEnviados[0]
       const fotosViaturaIds: Record<string, string | null> = {}
-      for (const def of FOTOS_VIATURA_DEF) {
-        const file = fotosViatura[def.key]
-        if (file) {
-          fotosViaturaIds[def.key] = await uploadFoto(file, `wizard_viatura_${def.key}`, pos.latitude, pos.longitude, pos.precisao_metros, def.tipoId)
-        }
-      }
+      envios.forEach((e, i) => { if (i > 0) fotosViaturaIds[e.chave] = idsEnviados[i] })
 
       // 2. Salvar Checklist Materiais
       // LACUNA DECLARADA: os dois checklists de partida (materiais e viatura, com as 5
@@ -1734,6 +1740,7 @@ export default function EscoltaDetalhePage() {
     if (gpsAcao) {
       return { latitude: gpsAcao.lat, longitude: gpsAcao.lng, precisao_metros: gpsAcao.precisao, sem_sinal_gps: false }
     }
+    setAndamento('Lendo o GPS')
     try {
       const { lat, lng, precisao } = await obterGPS()
       return { latitude: lat, longitude: lng, precisao_metros: precisao, sem_sinal_gps: false }
@@ -1804,7 +1811,7 @@ export default function EscoltaDetalhePage() {
   const fecharGravacao = async (params: Parameters<typeof notificarTelegram>[0]) => {
     const g = gravacaoRef.current
     gravacaoRef.current = null
-    if (!g) { notificarTelegram(params); return }
+    if (!g) { notificarTelegram(params); setAndamento('Atualizando a tela'); return }
     const efetivos = viaturas.flatMap(v => v.efetivo)
       .map(e => `${e.vigilante?.nome_completo ?? '—'}${e.papel_na_escolta ? ` (${e.papel_na_escolta})` : ''}`)
     const placas = viaturas.map((v) => v.veiculo?.placa).filter((p): p is string => Boolean(p))
@@ -1836,7 +1843,8 @@ export default function EscoltaDetalhePage() {
         fotoCaminho: params.fotoId ? g.fotos.find(f => f.id === params.fotoId)?.caminho ?? null : null,
         soSeAvancou: !!g.etapa,
       },
-    })
+    }, setAndamento)
+    setAndamento('Atualizando a tela')
     if (r.modo === 'guardado') setAvisoOffline({ tipo: 'guardado', texto: MENSAGEM_GUARDADO })
     else if (r.modo === 'recusado') setAvisoOffline({ tipo: 'erro', texto: textoRecusado(r.erro) })
     else if (r.resultado === 'conflito') setAvisoOffline({ tipo: 'erro', texto: textoConflito(r.motivo) })
@@ -1857,7 +1865,8 @@ export default function EscoltaDetalhePage() {
       return f.id
     }
     const ext = file.name.split('.').pop() ?? 'jpg'
-    const path = `${prefix}/${escolta!.id}/${Date.now()}.${ext}`
+    // Onda O (A1): fotos sobem em paralelo; o sufixo evita dois nomes iguais no mesmo milissegundo.
+    const path = `${prefix}/${escolta!.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
     const { error: upErr } = await sb.storage.from('fotos').upload(path, file)
     if (upErr) throw new Error(`Erro no upload da foto: ${upErr.message}`)
 
@@ -1881,6 +1890,23 @@ export default function EscoltaDetalhePage() {
   }
 
   /**
+   * Onda O (A1): sobe uma lista de fotos com no máximo 3 em paralelo, publicando
+   * "Enviando foto k de n" no caminho direto. Pelo envelope a "subida" é só preparar a linha
+   * (a fila sobe depois, com o próprio andamento), então não mostra nada aqui.
+   */
+  const enviarFotosComAndamento = async <T,>(itens: T[], subir: (item: T) => Promise<string | null>): Promise<(string | null)[]> => {
+    const direto = !gravacaoRef.current
+    let feitas = 0
+    if (direto && itens.length > 0) setAndamento(`Enviando foto 1 de ${itens.length}`)
+    return emParalelo(itens, FOTOS_EM_PARALELO, async (item) => {
+      const id = await subir(item)
+      feitas++
+      if (direto) setAndamento(feitas < itens.length ? `Enviando foto ${feitas + 1} de ${itens.length}` : 'Gravando no sistema')
+      return id
+    })
+  }
+
+  /**
    * Sobe as fotos de um ponto de controle e devolve os ids na ordem.
    * A regra e FOTOS_POR_PONTO (onda M: 1 a 3 por ponto). O bloqueio do minimo
    * fica em cada handler, porque a mensagem de erro precisa citar o ponto.
@@ -1892,11 +1918,9 @@ export default function EscoltaDetalhePage() {
     lng: number | null,
     prec: number | null,
   ): Promise<string[]> => {
-    const ids: string[] = []
-    for (const file of files.slice(0, FOTOS_POR_PONTO.max)) {
-      const id = await uploadFoto(file, prefix, lat, lng, prec)
-      if (id) ids.push(id)
-    }
+    // Onda O (A1): até 3 fotos em paralelo, mantendo a ordem dos ids.
+    const ids = (await enviarFotosComAndamento(files.slice(0, FOTOS_POR_PONTO.max), (file) => uploadFoto(file, prefix, lat, lng, prec)))
+      .filter((id): id is string => !!id)
     if (ids.length < FOTOS_POR_PONTO.min) {
       throw new Error('Nenhuma foto pôde ser enviada. Verifique a conexão e tente novamente.')
     }
@@ -2935,15 +2959,15 @@ export default function EscoltaDetalhePage() {
       const pos = await obterPosicaoPonto()
       const { latitude: lat, longitude: lng, precisao_metros: precisao } = pos
 
-      // Upload das 5 fotos obrigatórias da viatura (entrega)
+      // Upload das 5 fotos obrigatórias da viatura (entrega). Onda O (A1): até 3 por vez.
       const fotosViatFinalIds: Record<string, string | null> = {}
-      for (const def of FOTOS_VIATURA_DEF) {
-        const file = fotosViaturaFinal[def.key]
-        if (file) {
-          fotosViatFinalIds[def.key] = await uploadFoto(file, `final_viatura_${def.key}`, lat, lng, precisao, def.tipoId)
-        }
-      }
+      const defsComFoto = FOTOS_VIATURA_DEF.filter(def => fotosViaturaFinal[def.key])
+      const idsFinal = await enviarFotosComAndamento(defsComFoto, (def) =>
+        uploadFoto(fotosViaturaFinal[def.key] as File, `final_viatura_${def.key}`, lat, lng, precisao, def.tipoId))
+      defsComFoto.forEach((def, i) => { fotosViatFinalIds[def.key] = idsFinal[i] })
+      setAndamento('Gravando a finalização')
 
+      let avisoChecklistEntrega: string | null = null
       // 1. Criar registro de checklist de entrega de viatura
       // LACUNA DECLARADA: com duas viaturas, o checklist de entrega e as 5 fotos de
       // angulo continuam cobrindo apenas a PRIMEIRA viatura. A segunda e entregue sem
@@ -2966,30 +2990,31 @@ export default function EscoltaDetalhePage() {
           pneus: 'lat_esq', oleo_agua: 'painel', farois: 'frente',
           armamentos: 'painel', limpeza: 'traseira',
         }
-        for (const item of ITENS_CHECKLIST_ENTREGA) {
-          const resp = checklistFinal[item.key]
-          const fotoKey = fotoKeyPorItemFinal[item.key] ?? 'frente'
-          await sb.from('checklist_respostas').insert({
-            checklist_id: cl.id,
-            descricao_item: item.label,
-            conforme: resp.resposta === true,
-            observacao: resp.obs.trim() || null,
-            foto_id: fotosViatFinalIds[fotoKey] ?? null,
-          })
-        }
-
-        // Registro fotográfico dos 5 ângulos
-        for (const def of FOTOS_VIATURA_DEF) {
-          if (fotosViatFinalIds[def.key]) {
-            await sb.from('checklist_respostas').insert({
+        // Onda O (A1): as respostas e o registro fotográfico dos 5 ângulos num insert só (as
+        // mesmas linhas de antes, na mesma ordem), em vez de dez idas ao banco.
+        const respostas = [
+          ...ITENS_CHECKLIST_ENTREGA.map((item) => {
+            const resp = checklistFinal[item.key]
+            const fotoKey = fotoKeyPorItemFinal[item.key] ?? 'frente'
+            return {
               checklist_id: cl.id,
-              descricao_item: `Foto entrega — ${def.label}`,
-              conforme: true,
-              observacao: null,
-              foto_id: fotosViatFinalIds[def.key],
-            })
-          }
-        }
+              descricao_item: item.label,
+              conforme: resp.resposta === true,
+              observacao: resp.obs.trim() || null,
+              foto_id: fotosViatFinalIds[fotoKey] ?? null,
+            }
+          }),
+          ...FOTOS_VIATURA_DEF.filter(def => fotosViatFinalIds[def.key]).map((def) => ({
+            checklist_id: cl.id,
+            descricao_item: `Foto entrega — ${def.label}`,
+            conforme: true,
+            observacao: null,
+            foto_id: fotosViatFinalIds[def.key],
+          })),
+        ]
+        // Como antes, a falha das respostas não impede a finalização; agora ela é avisada.
+        const { error: respErr } = await sb.from('checklist_respostas').insert(respostas)
+        if (respErr) avisoChecklistEntrega = `Escolta finalizada, mas o checklist de entrega não foi gravado por completo (${respErr.message}). Avise a central.`
       }
 
       // 2. Atualizar status da escolta para finalizada
@@ -3012,13 +3037,15 @@ export default function EscoltaDetalhePage() {
 
       // 4. Enviar relatório executivo completo ao Telegram
       enviarRelatorioFinalTelegram()
+      setAndamento('Atualizando a tela')
 
       setDialogFinalizacao(false)
       setRelatorioFinal('')
       setFotosViaturaFinal(Object.fromEntries(FOTOS_VIATURA_DEF.map(f => [f.key, null])))
       setChecklistFinal(Object.fromEntries(ITENS_CHECKLIST_ENTREGA.map(i => [i.key, { resposta: null, obs: '' }])))
       setAvisoSemGps(pos.sem_sinal_gps)
-      carregar()
+      await carregar()
+      if (avisoChecklistEntrega) setErro(avisoChecklistEntrega)
     } catch (err) {
       setErro(err instanceof Error ? err.message : 'Erro ao finalizar escolta.')
       setLoading(false)
@@ -3546,7 +3573,7 @@ export default function EscoltaDetalhePage() {
                   disabled={loading}
                   className="btn-gradient px-6 w-full sm:w-auto"
                 >
-                  {loading ? 'Iniciando...' : 'Confirmar e Iniciar Escolta'}
+                  {loading ? (andamento ? `${andamento}...` : 'Iniciando...') : 'Confirmar e Iniciar Escolta'}
                 </button>
               </div>
             </div>
@@ -4919,6 +4946,9 @@ export default function EscoltaDetalhePage() {
         )
       })()}
 
+      {/* Onda O (A1): andamento da gravação por cima de tudo, perto do polegar. */}
+      <FaixaAndamento texto={loading ? andamento : null} />
+
       {/* ── Dialog: Avançar Status ── */}
       {dialogAvanco && (
         <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
@@ -5160,7 +5190,7 @@ export default function EscoltaDetalhePage() {
                 disabled={loading || !fotosCompletas(fotosStartBase)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? 'Confirmando...' : 'Confirmar Saída'}
+                {loading ? (andamento ? `${andamento}...` : 'Confirmando...') : 'Confirmar Saída'}
               </button>
             </div>
           </div>
@@ -5271,7 +5301,7 @@ export default function EscoltaDetalhePage() {
                 className="h-11 sm:h-9 px-5 font-black text-[10px] uppercase tracking-widest text-white active:scale-95 transition-all disabled:opacity-50 w-full sm:w-auto"
                 style={{ backgroundColor: '#1E7C52' }}
               >
-                {loading ? 'Registrando...' : 'Confirmar Check-in'}
+                {loading ? (andamento ? `${andamento}...` : 'Registrando...') : 'Confirmar Check-in'}
               </button>
             </div>
           </div>
@@ -5359,7 +5389,7 @@ export default function EscoltaDetalhePage() {
                 disabled={loading || fotosParada.length < FOTOS_POR_PONTO.min || !obsParada.trim()}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? 'Gravando...' : 'Registrar Parada'}
+                {loading ? (andamento ? `${andamento}...` : 'Gravando...') : 'Registrar Parada'}
               </button>
             </div>
           </div>
@@ -5443,7 +5473,7 @@ export default function EscoltaDetalhePage() {
                 disabled={loading || !fotosCompletas(fotosOrigem)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? 'Confirmando...' : 'Confirmar Chegada'}
+                {loading ? (andamento ? `${andamento}...` : 'Confirmando...') : 'Confirmar Chegada'}
               </button>
             </div>
           </div>
@@ -5495,7 +5525,7 @@ export default function EscoltaDetalhePage() {
                 disabled={loading || !fotosCompletas(fotosTransitoDestino)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? 'Iniciando...' : 'Confirmar Trânsito'}
+                {loading ? (andamento ? `${andamento}...` : 'Iniciando...') : 'Confirmar Trânsito'}
               </button>
             </div>
           </div>
@@ -5552,7 +5582,7 @@ export default function EscoltaDetalhePage() {
                 disabled={loading || !fotosCompletas(fotosDestino)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? 'Confirmando...' : 'Confirmar Chegada'}
+                {loading ? (andamento ? `${andamento}...` : 'Confirmando...') : 'Confirmar Chegada'}
               </button>
             </div>
           </div>
@@ -5609,7 +5639,7 @@ export default function EscoltaDetalhePage() {
                 disabled={loading || !fotosCompletas(fotosTransitoRetorno)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? 'Registrando...' : 'Confirmar Trânsito de Retorno'}
+                {loading ? (andamento ? `${andamento}...` : 'Registrando...') : 'Confirmar Trânsito de Retorno'}
               </button>
             </div>
           </div>
@@ -5661,7 +5691,7 @@ export default function EscoltaDetalhePage() {
                 disabled={loading || !fotosCompletas(fotosRetorno)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? 'Iniciando...' : 'Confirmar Retorno'}
+                {loading ? (andamento ? `${andamento}...` : 'Iniciando...') : 'Confirmar Retorno'}
               </button>
             </div>
           </div>
@@ -5721,7 +5751,7 @@ export default function EscoltaDetalhePage() {
                 disabled={loading || !fotosCompletas(fotosChegadaBase)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? 'Confirmando...' : 'Confirmar Chegada'}
+                {loading ? (andamento ? `${andamento}...` : 'Confirmando...') : 'Confirmar Chegada'}
               </button>
             </div>
           </div>
@@ -5854,7 +5884,7 @@ export default function EscoltaDetalhePage() {
                 disabled={loading}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? 'Finalizando...' : 'Finalizar Operação'}
+                {loading ? (andamento ? `${andamento}...` : 'Finalizando...') : 'Finalizar Operação'}
               </button>
             </div>
           </div>

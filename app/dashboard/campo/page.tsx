@@ -44,6 +44,7 @@ import {
   textoErroGravacao, textoRecusado,
 } from '@/lib/offline/tela'
 import { EmergenciaSemConexao } from '@/components/offline/emergencia-sem-conexao'
+import { FaixaAndamento } from '@/components/ui/faixa-andamento'
 
 const supabase = createClient()
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -396,6 +397,9 @@ export default function CampoPage() {
   const [tiposOcorrencia, setTiposOcorrencia] = useState<TipoOcorrencia[]>([])
   const [loading, setLoading] = useState(true)
   const [executando, setExecutando] = useState(false)
+  // Onda O (A1): passo atual da gravação ("Lendo o GPS", "Enviando foto 2 de 3"), na faixa de andamento.
+  const [andamento, setAndamento] = useState<string | null>(null)
+  useEffect(() => { if (!executando) setAndamento(null) }, [executando])
   const [toast, setToast] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null)
 
   // Accordions
@@ -1368,7 +1372,7 @@ export default function CampoPage() {
           },
           // Telegram de hoje, mandado uma vez depois de aplicado e só se a etapa avançou.
           aviso: { corpo: await corpoTelegram(), fotoCaminho: fotosEnvelope[0]?.caminho ?? null, soSeAvancou: true },
-        })
+        }, setAndamento)
         if (fechouSemAplicar(r, avisos)) {
           limparFotosCheckpoint()
           setObsAvanco('')
@@ -1524,7 +1528,7 @@ export default function CampoPage() {
           fotos,
           dataHoraAcao: linhaChecklist.data_conclusao,
           linhas: { checklists: [{ id: clId, ...linhaChecklist }], checklist_respostas: respostas },
-        })
+        }, setAndamento)
         setPainelAberto(null)
         setChecklistItems(its => its.map(i => ({ ...i, resposta: null, observacao: '', captura: null })))
         if (r.modo === 'guardado') showToast('ok', MENSAGEM_GUARDADO)
@@ -1626,7 +1630,7 @@ export default function CampoPage() {
           gps: gps ? { lat: gps.lat, lng: gps.lng, precisao: gps.precisao } : null,
           linhas: { ocorrencias: [{ id: novoId(), ...linhaOcorrencia, foto_id: foto?.id ?? null }] },
           aviso: { corpo: await corpoTelegram(), fotoCaminho: foto?.caminho ?? null },
-        })
+        }, setAndamento)
         if (r.modo !== 'guardado' && fechouSemAplicar(r)) {
           setTipoOcId('')
           setDescOcorrencia('')
@@ -1769,7 +1773,7 @@ export default function CampoPage() {
             }],
           },
           aviso: { corpo: corpoTelegram, fotoCaminho: fotos[0]?.caminho ?? null },
-        })
+        }, setAndamento)
         setFotosCheckin(fs => { fs.forEach(f => URL.revokeObjectURL(f.preview)); return [] })
         setObsCheckin(TEXTO_PADRAO_PONTO.checkin)
         setViaturaAlvoId(viaturaDoUsuario)
@@ -1884,7 +1888,7 @@ export default function CampoPage() {
             gps,
             linhas: { emergencias: [{ id: novoId(), ...linhaEmergencia }] },
             aviso: { corpo: corpoTelegram },
-          })
+          }, setAndamento)
         } catch (e) {
           setEmergConfirm(false)
           setEmergenciaSemConexao({ telefone: env.telefoneCentral })
@@ -2035,6 +2039,7 @@ export default function CampoPage() {
       <div className="pb-4 px-1 md:px-0">
         {/* No Modo Guiado o aviso de sucesso e a tela de confirmacao; erro continua no toast. */}
         <Toast msg={toast?.tipo === 'erro' ? toast : null} />
+        <FaixaAndamento texto={executando ? andamento : null} />
         {emergenciaSemConexao && (
           <EmergenciaSemConexao telefone={emergenciaSemConexao.telefone} onFechar={() => setEmergenciaSemConexao(null)} />
         )}
@@ -2117,6 +2122,7 @@ export default function CampoPage() {
   return (
     <div className="max-w-xl mx-auto space-y-4 pb-12 px-4 md:px-0">
       <Toast msg={toast} />
+      <FaixaAndamento texto={executando ? andamento : null} />
       {emergenciaSemConexao && (
         <EmergenciaSemConexao telefone={emergenciaSemConexao.telefone} onFechar={() => setEmergenciaSemConexao(null)} />
       )}

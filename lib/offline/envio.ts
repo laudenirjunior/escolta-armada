@@ -78,11 +78,56 @@ export interface EstadoEnvio {
   atualizacaoEmAndamento: boolean
   ultimoErro: string | null
   proximaTentativaEm: number | null
+  /**
+   * Onda O (A1): andamento do registro que está subindo agora, para a tela mostrar
+   * "Enviando foto 3 de 7" e "Gravando etapa" em vez de um "Iniciando..." parado.
+   */
+  progresso: ProgressoEnvio | null
 }
+
+export interface ProgressoEnvio { clientId: string; fase: 'fotos' | 'registro'; fotosFeitas: number; fotosTotal: number }
 
 const ESTADO_INICIAL: EstadoEnvio = {
   authUserId: null, online: true, enviando: false, pendentes: 0, conflitos: 0, recusados: 0,
-  precisaLogin: false, atualizacaoEmAndamento: false, ultimoErro: null, proximaTentativaEm: null,
+  precisaLogin: false, atualizacaoEmAndamento: false, ultimoErro: null, proximaTentativaEm: null, progresso: null,
+}
+
+/** Onda O (A1): fotos sobem em paralelo, no máximo 3 por vez (rede de celular). */
+export const FOTOS_EM_PARALELO = 3
+
+/**
+ * Roda `fn` para cada item com no máximo `limite` em andamento, na ordem de início, e devolve os
+ * resultados na ordem dos itens. Sem dependência do app (usado na fila e nas telas).
+ */
+export async function emParalelo<T, R>(itens: T[], limite: number, fn: (item: T, i: number) => Promise<R>): Promise<R[]> {
+  const saida: R[] = new Array(itens.length)
+  let proximo = 0
+  const trabalhador = async () => {
+    while (proximo < itens.length) {
+      const i = proximo++
+      saida[i] = await fn(itens[i], i)
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, limite), itens.length) }, trabalhador))
+  return saida
+}
+
+// ── Aviso de conclusão por registro (onda O, A1) ─────────────────────────────────────
+// A tela que gravou espera só o PRÓPRIO registro ser aplicado (ou virar conflito ou recusa),
+// não a fila inteira nem o Telegram, que seguem em segundo plano.
+const esperandoConclusao = new Map<string, Array<() => void>>()
+export function aoConcluirRegistro(clientId: string): Promise<void> {
+  return new Promise(resolve => {
+    const lista = esperandoConclusao.get(clientId) ?? []
+    lista.push(resolve)
+    esperandoConclusao.set(clientId, lista)
+  })
+}
+function avisarConclusao(clientId: string): void {
+  const lista = esperandoConclusao.get(clientId)
+  if (!lista) return
+  esperandoConclusao.delete(clientId)
+  for (const fn of lista) { try { fn() } catch { /* nada */ } }
 }
 let estado: EstadoEnvio = { ...ESTADO_INICIAL }
 const ouvintes = new Set<(e: EstadoEnvio) => void>()
@@ -328,20 +373,33 @@ async function enviarUm(deps: DependenciasEnvio, reg: RegistroFila): Promise<Res
   const { supabase } = deps
   await atualizarRegistro(reg.client_id, { estado: 'enviando', tentativas: (reg.tentativas ?? 0) + 1 })
 
-  // 1. Fotos (caminho determinístico; "já existe" é sucesso).
-  for (const fotoId of reg.fotos ?? []) {
+  // 1. Fotos (caminho determinístico; "já existe" é sucesso). Onda O (A1): até 3 em paralelo,
+  // com o andamento publicado para a tela. Qualquer falha deixa o registro pendente e o
+  // envelope não é chamado (as que subiram ficam marcadas e não sobem de novo).
+  const idsFotos = reg.fotos ?? []
+  let feitas = 0
+  const progresso = (fase: ProgressoEnvio['fase']) =>
+    mudar({ progresso: { clientId: reg.client_id, fase, fotosFeitas: feitas, fotosTotal: idsFotos.length } })
+  progresso('fotos')
+  const erros = await emParalelo(idsFotos, FOTOS_EM_PARALELO, async (fotoId): Promise<ErroSupabase | null> => {
     const f = await lerFoto(fotoId)
-    if (!f || f.estado === 'subida') continue
+    if (!f || f.estado === 'subida') { feitas++; progresso('fotos'); return null }
     const up = await supabase.storage.from('fotos').upload(f.caminho, f.blob, { upsert: false, contentType: f.tipo_mime || 'image/jpeg' })
-    if (up.error && !objetoJaExiste(up.error)) {
-      const classe = classificarErro(up.error, Number(up.error.statusCode ?? up.error.status) || undefined)
-      await atualizarRegistro(reg.client_id, { estado: 'pendente', ultimo_erro: `Foto: ${up.error.message}` })
-      return classe === 'recusado' ? 'temporario' : classe
-    }
+    if (up.error && !objetoJaExiste(up.error)) return up.error
     await marcarFotoSubida(fotoId)
+    feitas++; progresso('fotos')
+    return null
+  })
+  const erroFoto = erros.find((e): e is ErroSupabase => !!e)
+  if (erroFoto) {
+    const classe = classificarErro(erroFoto, Number(erroFoto.statusCode ?? erroFoto.status) || undefined)
+    await atualizarRegistro(reg.client_id, { estado: 'pendente', ultimo_erro: `Foto: ${erroFoto.message}` })
+    mudar({ progresso: null })
+    return classe === 'recusado' ? 'temporario' : classe
   }
 
   // 2. O envelope.
+  progresso('registro')
   const resp = await supabase.rpc('registrar_campo', {
     p_client_id: reg.client_id,
     p_tipo: reg.tipo,
@@ -355,9 +413,11 @@ async function enviarUm(deps: DependenciasEnvio, reg: RegistroFila): Promise<Res
     if (classe === 'recusado') {
       await atualizarRegistro(reg.client_id, { estado: 'recusado', ultimo_erro: resp.error.message, enviado_em: new Date().toISOString() })
       await apagarFotosSubidas(reg.client_id)
+      mudar({ progresso: null }); avisarConclusao(reg.client_id)
       return 'recusado'
     }
     await atualizarRegistro(reg.client_id, { estado: 'pendente', ultimo_erro: resp.error.message })
+    mudar({ progresso: null })
     return classe
   }
   const d = (resp.data ?? {}) as { resultado?: string; motivo?: string | null; recebido_em?: string | null; texto_offline?: string | null; duplicado?: boolean }
@@ -367,6 +427,8 @@ async function enviarUm(deps: DependenciasEnvio, reg: RegistroFila): Promise<Res
       data_hora_acao: reg.data_hora_acao, recebido_em: d.recebido_em ?? null, resultado: 'aplicado',
       texto_offline: d.texto_offline ?? null, resposta: (resp.data ?? null) as Record<string, unknown> | null,
     })
+    // Onda O (A1): a tela que gravou já pode seguir; o Telegram vem logo depois, na fila.
+    mudar({ progresso: null }); avisarConclusao(reg.client_id)
     const avancou = (d as { resposta?: { avancou?: boolean } | null }).resposta?.avancou === true
     if (reg.aviso && (!reg.aviso.soSeAvancou || avancou)) {
       await avisarTelegram(deps, reg.client_id, reg.aviso, d.texto_offline ?? null, reg.data_hora_acao)
@@ -379,6 +441,7 @@ async function enviarUm(deps: DependenciasEnvio, reg: RegistroFila): Promise<Res
     ultimo_erro: d.motivo ?? null, enviado_em: new Date().toISOString(),
   })
   await apagarFotosSubidas(reg.client_id)
+  mudar({ progresso: null }); avisarConclusao(reg.client_id)
   return 'conflito'
 }
 
