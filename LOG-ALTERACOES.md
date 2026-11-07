@@ -8,6 +8,23 @@ Branch de trabalho: `master` (producao serve master; ver a entrada de 19/08 sobr
 
 ---
 
+## 2026-11-07 - Onda N (estrutura), parte 1: rotas órfãs e entradas da tela de detalhe
+
+Branch `melhoria/2026-11-onda-n-estrutura`, sobre a onda M. Fica para depois do piloto; não entra no roteiro de subida da onda M.
+
+### O que mudou
+
+1. Rotas órfãs `/dashboard/veiculos` e `/dashboard/vigilantes` retiradas: conferidas campo a campo contra a aba Cadastros, sem nada único e sem menu ou link para elas. `/dashboard/clientes` (upload do logo) e `/dashboard/configuracoes/telegram-test` (teste do modelo de cada tipo de mensagem e da foto) ficam.
+2. Entradas de foto e de KM da tela de detalhe (CameraInput, miniatura, fotos e KM por viatura) em `components/escolta/detalhe/entradas.tsx`, sem mudar comportamento.
+3. Carga sob demanda dessas entradas: tentada e retirada. Com o pedaço de código fora do cache do service worker, a tela da escolta quebrava sem internet (L1, L3 e L4 falharam, inclusive com pré-carga pelo layout). Ficou o import estático.
+4. Item 1 do plano (um escritor por etapa, `lib/etapas.ts`) não feito: ver docs/12, item 6.10.
+
+### Como foi verificado
+
+type-check 0 erros; lint 0 erros e 25 avisos; build sem erro (homologação, porta 3102). Banco sem mudança. Suíte fase4-e2e.sh contra a onda N: L1 a L9, jornadas pelo Painel e pelo detalhe e os testes da onda M passaram (terceira tentativa para L1, L3 e L4). As janelas da master (i, d2 e k) falharam depois da meia-noite na tela da master `2b3fff9`, que não tem código da onda N; o mesmo cenário passou na rodada da onda M às 22h5x. Reconfirmar de dia.
+
+---
+
 ## 2026-11-06 - Onda M (leveza): fotos leves, login do operador, sugestões de texto e endereço depois do envio
 
 Branch `melhoria/2026-11-onda-m-leveza`, sobre a onda L (`2bc7724`). Não vai para a `master` sem o Peçanha (roteiro em `/opt/operacao/escolta-1106/ENTREGA/ROTEIRO-PARA-SUBIR.md` e no cofre). Executada pelo Claude Code da VPS, com o Codex em paralelo (branch `melhoria/2026-11-onda-m-codex`, mesclada depois de revisada), pelo comando de 06/11/2026 do Peçanha.
