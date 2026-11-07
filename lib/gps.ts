@@ -78,8 +78,15 @@ export function textoPrecisao(precisao: number | null | undefined): string {
  */
 export function gpsRapido(geo: Geo | undefined = typeof navigator !== 'undefined' ? navigator.geolocation : undefined): Promise<LeituraGps | null> {
   if (!geo) return Promise.resolve(null)
-  // Onda O (A2): com o GPS contínuo ligado, a leitura de até 5 s atrás sai na hora.
-  if (atual && Date.now() - atual.em <= 5_000) return Promise.resolve({ lat: atual.lat, lng: atual.lng, precisao: atual.precisao })
+  // Onda O (A2): leitura de até 5 s sai na hora; com o GPS contínuo ligado, a última leitura
+  // (até 60 s) é a posição atual, porque a observação só avisa quando a posição muda. Sem isto
+  // a foto esperava até 4 s por uma leitura nova com o aparelho parado (achado no h_wizard).
+  if (atual) {
+    const idade = Date.now() - atual.em
+    if (idade <= 5_000 || (idObservacao !== null && idade <= IDADE_MAXIMA_GPS_MS)) {
+      return Promise.resolve({ lat: atual.lat, lng: atual.lng, precisao: atual.precisao })
+    }
+  }
   // Revisão cruzada (2.7): leitura de no máximo 5 s atrás. Sem leitura nova, o carimbo diz
   // "SEM SINAL DE GPS", mais honesto que uma coordenada de um minuto antes.
   return lerUmaVez(geo, false, 4000, 5_000).catch(() => null)
