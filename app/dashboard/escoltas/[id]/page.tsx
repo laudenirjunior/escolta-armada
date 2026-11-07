@@ -3285,6 +3285,12 @@ export default function EscoltaDetalhePage() {
   }
 
   const perfil = (user?.perfil?.codigo ?? '') as any
+  // Onda O (M1): textos que dependem de a operação ter começado e de haver comandante.
+  const operacaoIniciada = !['rascunho', 'agendada', 'em_pre_inicio', 'cancelada'].includes(escolta.status)
+  const temComandante = viaturas.some(v => v.efetivo.some(e => e.papel_na_escolta === 'comandante'))
+  const textoAgendadaPara = escolta.data_hora_prevista
+    ? `Agendada para ${new Date(escolta.data_hora_prevista).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', '')}`
+    : 'Agendada, sem data prevista'
   // Acoes operacionais: quem esta no efetivo desta escolta, qualquer perfil, ou a
   // gestao. Antes o Painel de Acoes aparecia para qualquer um que abrisse a escolta,
   // com botoes que a RLS recusaria.
@@ -3695,7 +3701,8 @@ export default function EscoltaDetalhePage() {
       )}
 
       {/* ── Retorno ao Painel Operacional Guiado ── */}
-      {(voltaCampo || (modoGuiado && (vinculadoAEscolta || temPermissao(perfil, PODE_PODER_TOTAL)))) && (
+      {/* Onda O (M1): só para o operador no modo guiado ou quando a tela veio do Painel. */}
+      {(voltaCampo || (modoGuiado && perfil === 'operador')) && (
         <button
           type="button"
           onClick={() => router.push('/dashboard/campo')}
@@ -3707,7 +3714,8 @@ export default function EscoltaDetalhePage() {
       )}
 
       {/* ── Painel de Designação de Responsabilidade ── */}
-      {['rascunho', 'agendada'].includes(escolta.status) && !arquivada && (
+      {/* Onda O (M1): só quando ainda não há comandante escalado. */}
+      {['rascunho', 'agendada'].includes(escolta.status) && !arquivada && !temComandante && (
         <div className="card-light p-5 space-y-4 border-l-4 border-amber-500">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
@@ -3869,12 +3877,21 @@ export default function EscoltaDetalhePage() {
             {/* Duração da operação */}
             <div className="flex items-center gap-2 mt-3">
               <Clock size={11} style={{ color: '#A8B8C2' }} />
-              <span style={{ fontSize: '10px', color: '#A8B8C2', fontWeight: 700, letterSpacing: '0.05em' }}>
-                {isFinalizado ? 'Duração total:' : 'Em operação há:'}
-              </span>
-              <span style={{ fontSize: '10px', color: '#0E1A33', fontWeight: 900, letterSpacing: '0.05em' }}>
-                {calcDuracao(escolta.criado_em, escolta.data_finalizacao ?? undefined)}
-              </span>
+              {/* Onda O (M1): "Em operação há" só depois do início; antes, a data prevista. */}
+              {operacaoIniciada || isFinalizado ? (
+                <>
+                  <span style={{ fontSize: '10px', color: '#A8B8C2', fontWeight: 700, letterSpacing: '0.05em' }}>
+                    {isFinalizado ? 'Duração total:' : 'Em operação há:'}
+                  </span>
+                  <span style={{ fontSize: '10px', color: '#0E1A33', fontWeight: 900, letterSpacing: '0.05em' }}>
+                    {calcDuracao(inicioOperacao ?? escolta.criado_em, escolta.data_finalizacao ?? undefined)}
+                  </span>
+                </>
+              ) : (
+                <span data-teste="agendada-para" style={{ fontSize: '10px', color: '#0E1A33', fontWeight: 900, letterSpacing: '0.05em' }}>
+                  {textoAgendadaPara}
+                </span>
+              )}
             </div>
 
             {/* Paradas registradas */}
@@ -3917,7 +3934,9 @@ export default function EscoltaDetalhePage() {
             <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>
               Painel de Ações do Operador
             </h3>
-            <span className="badge-info">Operação em Andamento</span>
+            {operacaoIniciada
+              ? <span className="badge-info">Operação em Andamento</span>
+              : <span className="badge-neutral" data-teste="agendada-para-badge">{textoAgendadaPara}</span>}
           </div>
 
           {avisoKm && (
