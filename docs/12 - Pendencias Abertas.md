@@ -18,7 +18,7 @@ Publicado em 29/09/2026 (commits `b5baa89` a `2b3fff9`). Estes itens foram deixa
 | 0.4 | **Alerta de check-in enviado por cada navegador aberto** | Limite antigo. O `CheckinAlertProvider` roda no navegador de cada usuário logado, e a trava contra repetição é por aba. Cada sessão aberta manda o próprio aviso ao Telegram. Correção: travar o envio no servidor, por coluna ou tabela de último alerta |
 | 0.5 | **Opção A da chave: supervisor define quem pode desligar o Modo Guiado** | Não implementada por decisão de 29/09 (opção B em uso). Exige migration: hoje o próprio usuário consegue gravar a própria linha de `usuarios`, então a trava em `metadados` seria contornável. O código já lê `metadados.modo_guiado.pode_desligar` e, se vier `false`, força o modo ligado |
 | 0.6 | **Ajustes a partir do uso real** | Coletar com os operadores o que ficou confuso (textos, ordem das telas, tamanho dos botões) e ajustar em branch própria, com teste no preview antes da master |
-| 0.7 | **Check-in pelo Campo sem endereço** | O check-in do Painel Guiado grava coordenada, mas não o endereço textual (reverse geocode do Mapbox), que a tela de detalhe grava. O mapa não rotula esse ponto. Mesma lacuna do item 5 da pendência de endereço dos pontos do Campo |
+| 0.7 | **Check-in pelo Campo sem endereço** (resolvido na onda M, 06/11/2026: o servidor preenche depois do envio, pela 220 e pela rota /api/pontos/endereco; ver seção 6) | O check-in do Painel Guiado grava coordenada, mas não o endereço textual (reverse geocode do Mapbox), que a tela de detalhe grava. O mapa não rotula esse ponto. Mesma lacuna do item 5 da pendência de endereço dos pontos do Campo |
 
 ---
 
@@ -38,7 +38,7 @@ Publicado em 29/09/2026 (commits `b5baa89` a `2b3fff9`). Estes itens foram deixa
 
 | # | Pendência | Situação |
 |---|---|---|
-| 2.1 | **`carimbo_aplicado` na tela de detalhe** | Resolvido no Campo em 10/09, com `lib/carimbo-foto.ts`. Falta a tela de detalhe: ela grava `false` fixo mesmo quando carimba, no caminho de vídeo ao vivo, e não carimba nada no caminho de seletor de arquivo. Corrigir exige passar a informação do `CameraInput` até o `uploadFoto`, atravessando um arquivo de 5 mil linhas |
+| 2.1 | **`carimbo_aplicado` na tela de detalhe** (resolvido na onda M, 06/11/2026: o CameraInput carimba e reduz nos dois caminhos e a coluna grava o resultado real, lib/foto-captura.ts) | Resolvido no Campo em 10/09, com `lib/carimbo-foto.ts`. Falta a tela de detalhe: ela grava `false` fixo mesmo quando carimba, no caminho de vídeo ao vivo, e não carimba nada no caminho de seletor de arquivo. Corrigir exige passar a informação do `CameraInput` até o `uploadFoto`, atravessando um arquivo de 5 mil linhas |
 | 2.2 | **Bucket `fotos` é público para leitura** | Foto operacional com GPS acessível por URL a quem tiver o link. Fechar exige trocar `getPublicUrl` por URL assinada em 9 pontos e enviar os bytes ao Telegram em `multipart`, porque o `sendPhoto` busca a URL anonimamente |
 | 2.3 | **Storage sem backup** | Os dumps em `database/backups/` guardam só os metadados da foto: caminho, GPS, data e hora. As 72 imagens apagadas em 10/09 não voltam |
 
@@ -86,3 +86,23 @@ Atenção para uma limitação do PostgREST: ele não executa DDL. Backup em sch
 ---
 
 *Ao resolver um item, mover a explicação para o `LOG-ALTERACOES.md` e apagar a linha daqui.*
+
+---
+
+## 6. Onda M (leveza), 06/11/2026: o que ficou em aberto
+
+Branch `melhoria/2026-11-onda-m-leveza`, sobre a onda L. Detalhe no [`../LOG-ALTERACOES.md`](../LOG-ALTERACOES.md), entrada de 06/11/2026.
+
+| # | Pendência | Situação |
+|---|---|---|
+| 6.1 | **M1: medir as APIs da Mapbox (v5, v6 e Search Box)** | Não medido: a VPS não tem caminho autorizado para o token da Mapbox (fica nas variáveis da Vercel). Pela decisão D5, sem ganho comprovado a busca continua na v5 com o pino. Medir com o token num ambiente autorizado, com os endereços da tabela 3.4 da nota de 03/10 e os pontos da JAMEF |
+| 6.2 | **Revisão adversarial da onda L, achado 2** | A reserva do Telegram de um registro enviado sem conexão é consumida antes da entrega; se o /api/telegram falhar, o aviso daquele registro se perde (o registro está gravado). Correção: envio pelo servidor com confirmação, ou reserva em duas etapas |
+| 6.3 | **Revisão da onda L, achado 3** | Foto que sumiu do aparelho antes do envio (limpeza parcial do armazenamento) é ignorada e o registro sobe sem o objeto no bucket. Decidir: recusar o registro (perde a etapa) ou aplicar com a foto marcada como ausente |
+| 6.4 | **Revisão da onda L, achado 5** | Erro permanente do Storage (403) é tratado como temporário e prende a fila. Separar falha permanente de transitória e mandar o registro para "recusados" com o motivo |
+| 6.5 | **Revisão da onda L, achado 1 (baixo)** | `lote_interno.livro_registrar` e `livro_resultado` têm EXECUTE para authenticated; não são alcançáveis pela API porque o PostgREST só expõe `public` e `graphql_public` (teste l_api: 404). Nunca acrescentar `lote_interno` aos schemas expostos do projeto |
+| 6.6 | **Mensagem "usuário não encontrado" separada de "senha errada"** | O Supabase responde igual para os dois casos (proteção contra descoberta de contas); a tela diz "Usuário não encontrado ou senha incorreta". Só dá para separar consultando a existência do usuário antes, o que abriria descoberta de contas |
+| 6.7 | **Teste em aparelho real** | Fotos reduzidas, GPS com nova tentativa e endereço depois do envio foram testados no Chromium da homologação. Repetir no Android e no iPhone do piloto (roteiro do manual, B9) |
+| 6.8 | **package-lock.json fora de sincronia com o npm 11** | `npm ci` falha (@emnapi/core e @emnapi/runtime). A Vercel usa o próprio npm; conferir o build do preview. Sincronizar com `npm install` numa branch própria |
+| 6.9 | **Limite da rota de endereço por instância (revisão cruzada 2.5)** | `dentroDoLimite` guarda o contador na memória do processo: na Vercel, cada instância tem o seu. O custo fica limitado (só pontos sem endereço, visíveis pela RLS de quem chama, gravados uma vez), mas um limite por usuário no banco seria o correto |
+| 6.10 | **Onda N, item 1: um escritor por etapa (lib/etapas.ts)** | Não feito nesta execução. Desde as ondas F e L a etapa já é gravada numa transação única no servidor (`registrar_etapa_escolta` e o envelope `registrar_campo`); falta unificar o código do cliente (Campo e detalhe montam os argumentos cada um a seu modo) e levar às demais viaturas os registros que ainda vão só na primeira (0.2). Refatoração grande, para depois do piloto |
+
