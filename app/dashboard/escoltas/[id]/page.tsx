@@ -35,6 +35,8 @@ import {
   JORNADA_ETAPAS as ETAPAS_JORNADA,
   FOTOS_POR_PONTO,
   exigeDialogoDedicado,
+  mostrarChecklistPendente,
+  preInicioConcluido,
 } from '@/lib/fluxo-escolta'
 import {
   TEXTO_PADRAO_ETAPA,
@@ -3748,7 +3750,7 @@ export default function EscoltaDetalhePage() {
                         {escolta.codigo_escolta ?? 'Sem código'}
                       </span>
                       <span className={si.cls}>{si.label}</span>
-                      {escolta.checklist_pendente_no_inicio && (
+                      {mostrarChecklistPendente(escolta, loading ? undefined : preInicioConcluido(checklists)) && (
                         <span className="badge-warning">Checklist pendente</span>
                       )}
                       <PendenciasConclusao escoltaId={escolta.id} modo="faixa" chave={escolta.status} />

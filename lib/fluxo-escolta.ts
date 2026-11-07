@@ -232,3 +232,29 @@ export function rotuloStatus(status: string): string {
 export function exigeDialogoDedicado(statusDestino: string): boolean {
   return statusDestino in TIPO_PONTO_POR_STATUS || statusDestino === STATUS.FINALIZADA
 }
+
+/**
+ * Onda O (A4): quando mostrar a etiqueta "Checklist pendente".
+ *
+ * A coluna checklist_pendente_no_inicio nasce verdadeira na criação e nada a desliga (a
+ * trigger verificar_checklist_pendente só liga), então a etiqueta aparecia até em escolta
+ * finalizada com o pré-início completo (ESC-2026-0001, teste de 07/11). Regra da tela:
+ * nunca em finalizada ou cancelada; antes do início, enquanto a coluna disser; depois do
+ * início, só se o checklist do pré-início (materiais e viatura, concluídos e não anulados)
+ * não existir. `preInicioFeito` indefinido = não conferido: não mostra.
+ */
+export function mostrarChecklistPendente(
+  e: { status: string; checklist_pendente_no_inicio?: boolean | null },
+  preInicioFeito?: boolean,
+): boolean {
+  if (!e.checklist_pendente_no_inicio) return false
+  if (STATUS_TERMINAIS.includes(e.status)) return false
+  if (([STATUS.RASCUNHO, STATUS.AGENDADA, STATUS.EM_PRE_INICIO] as string[]).includes(e.status)) return true
+  return preInicioFeito === false
+}
+
+/** Onda O (A4): o pré-início está feito se há checklist de materiais e de viatura concluídos. */
+export function preInicioConcluido(checklists: Array<{ tipo: string | null; concluido?: boolean | null; anulado_em?: string | null }>): boolean {
+  const validos = checklists.filter(c => c.concluido !== false && !c.anulado_em)
+  return validos.some(c => c.tipo === 'material') && validos.some(c => c.tipo === 'viatura')
+}
