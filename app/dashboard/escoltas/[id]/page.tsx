@@ -56,7 +56,9 @@ import { COLUNAS_ANULACAO, textoAnulado, type Anulacao } from '@/lib/gestao'
 import { novoId, lerSnapshot } from '@/lib/offline/fila'
 import { prepararFoto, MENSAGEM_GUARDADO, type FotoPreparada, type LinhasEnvelope, type EtapaEnvelope } from '@/lib/offline/registro-campo'
 import { aplicarPendentes, lerPendentes } from '@/lib/offline/pendentes'
-import { obterGpsPreciso, textoPrecisao } from '@/lib/gps'
+import { gpsRapido, obterGpsPreciso, textoPrecisao } from '@/lib/gps'
+import { foiCarimbada, marcarCarimbada } from '@/lib/foto-captura'
+import { aplicarCarimbo } from '@/lib/carimbo-foto'
 import {
   FOTO_SEM_CONEXAO, aparelhoSemRede, conferirEspacoParaFoto, envelopeLigado, erroDeRede, fotosDosPendentes,
   gravarPeloEnvelope, horaDaCaptura, textoConflito, textoErroGravacao, textoRecusado, urlsDosPendentes,
@@ -336,12 +338,18 @@ function CameraInput({
       return
     }
     const agora = new Date()
+    e.target.value = ''
+    // Onda M (D7 e docs/12 item 2.1): o seletor de arquivo passa pelo mesmo carimbo do Campo,
+    // que já reduz (lado maior de 1600 px, JPEG 0,7). Falha do carimbo é declarada: a foto
+    // vale como veio e o banco grava carimbo_aplicado = false.
+    const gps = await gpsRapido()
+    const r = await aplicarCarimbo(file, { timestamp: agora.toISOString(), gps })
     const tsStr = agora.toISOString().replace(/[:.]/g, '-').slice(0, 19)
-    const namedFile = new File([file], `${prefixoNome}_${tsStr}.jpg`, { type: 'image/jpeg' })
-    const novas = [...fotos, { file: namedFile, url: URL.createObjectURL(file) }]
+    const namedFile = new File([r.file], `${prefixoNome}_${tsStr}.jpg`, { type: 'image/jpeg' })
+    if (r.carimbado) marcarCarimbada(namedFile)
+    const novas = [...fotos, { file: namedFile, url: URL.createObjectURL(namedFile) }]
     setFotos(novas)
     onChange(novas.map(f => f.file))
-    e.target.value = ''
   }
 
   const abrirCamera = async () => {
@@ -1822,7 +1830,7 @@ export default function EscoltaDetalhePage() {
     if (g) {
       const f = prepararFoto(escolta!.id, {
         blob: file, tipoFotoId, dataHoraCaptura: horaDaCaptura(file),
-        gps: lat != null && lng != null ? { lat, lng, precisao: prec } : null, carimbado: false, criadoPor: user?.id ?? null,
+        gps: lat != null && lng != null ? { lat, lng, precisao: prec } : null, carimbado: foiCarimbada(file), criadoPor: user?.id ?? null,
       })
       g.fotos.push(f)
       return f.id
@@ -1838,10 +1846,10 @@ export default function EscoltaDetalhePage() {
       latitude: lat,
       longitude: lng,
       precisao_metros: prec,
-      // Onda L (16.3.11): hora da captura, não a do upload. O carimbo continua não aplicado
-      // nesta tela (a coluna diz a verdade).
+      // Onda L (16.3.11): hora da captura, não a do upload. Onda M: carimbo_aplicado diz se o
+      // arquivo saiu do carimbo do CameraInput (lib/foto-captura.ts).
       data_hora_captura: horaDaCaptura(file),
-      carimbo_aplicado: false,
+      carimbo_aplicado: foiCarimbada(file),
       enviada_telegram: false,
       sincronizada: true,
       criado_por: user?.id ?? null,

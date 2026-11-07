@@ -70,3 +70,13 @@ export function textoPrecisao(precisao: number | null | undefined): string {
   const m = Math.round(precisao)
   return m > PRECISAO_BOA_M ? `GPS impreciso: ±${m} m` : `GPS ±${m} m`
 }
+
+/**
+ * Leitura rápida para o carimbo da foto na tela de detalhe (onda M): aceita leitura de até
+ * 60 s e espera no máximo 4 s. Sem sinal, devolve null e o carimbo diz "SEM SINAL DE GPS".
+ * A coordenada gravada no ponto continua sendo a do registro (obterGpsPreciso).
+ */
+export function gpsRapido(geo: Geo | undefined = typeof navigator !== 'undefined' ? navigator.geolocation : undefined): Promise<LeituraGps | null> {
+  if (!geo) return Promise.resolve(null)
+  return lerUmaVez(geo, false, 4000, 60_000).catch(() => null)
+}

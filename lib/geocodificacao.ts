@@ -6,13 +6,18 @@
  * Sem token, sem rede ou sem resultado, devolve null e o ponto fica só com a coordenada.
  */
 export async function enderecoPorExtenso(lat: number, lng: number, timeoutMs = 4000): Promise<string | null> {
-  const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN
+  // Onda M: no servidor (rota /api/pontos/endereco) valem também MAPBOX_TOKEN e MAPBOX_API_BASE,
+  // lidas na hora (não entram no pacote do navegador). MAPBOX_API_BASE existe só para a
+  // homologação apontar para uma Mapbox falsa, como TELEGRAM_API_BASE no Telegram.
+  const noServidor = typeof window === 'undefined'
+  const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN || (noServidor ? process.env.MAPBOX_TOKEN : undefined)
+  const base = (noServidor && process.env.MAPBOX_API_BASE) || 'https://api.mapbox.com'
   if (!token) return null
   const controle = new AbortController()
   const t = setTimeout(() => controle.abort(), timeoutMs)
   try {
     const res = await fetch(
-      `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${token}&language=pt&types=address,neighborhood,place&limit=1`,
+      `${base}/geocoding/v5/mapbox.places/${lng},${lat}.json?access_token=${token}&language=pt&types=address,neighborhood,place&limit=1`,
       { signal: controle.signal },
     )
     if (!res.ok) return null
