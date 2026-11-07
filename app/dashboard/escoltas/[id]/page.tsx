@@ -76,6 +76,7 @@ import {
 } from '@/lib/offline/tela'
 import { emParalelo, FOTOS_EM_PARALELO } from '@/lib/offline/envio'
 import { FaixaAndamento } from '@/components/ui/faixa-andamento'
+import { ErroJuntoAoBotao, levarAoCampo } from '@/components/ui/erro-junto'
 import { ALTURA_MAX_MINIATURA, MiniaturaAmpliavel } from '@/components/ui/miniatura-ampliavel'
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
@@ -552,7 +553,7 @@ function CameraInput({
         </div>
       )}
       {fotos.length === 0 && (
-        <button type="button" onClick={abrirCamera}
+        <button type="button" onClick={abrirCamera} data-campo-fotos data-vazio="true"
           className="flex items-center justify-center gap-2 w-full font-black uppercase tracking-widest text-white transition-all active:scale-[0.98]"
           style={{ height: '42px', backgroundColor: '#1A294A', fontSize: '10px', letterSpacing: '0.12em' }}
           onMouseEnter={e => { (e.currentTarget as HTMLElement).style.backgroundColor = '#253562' }}
@@ -842,6 +843,8 @@ export default function EscoltaDetalhePage() {
   const [novaHoraReagendamento, setNovaHoraReagendamento] = useState('08:00')
   const [cancelando, setCancelando] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
+  // Onda O (M9): com erro de validação, a janela rola até o campo com problema.
+  useEffect(() => { if (erro) requestAnimationFrame(() => levarAoCampo(erro)) }, [erro])
   // Aviso proprio, e nao `erro`: carregar() zera `erro` no recarregamento seguinte, e a
   // ausencia de posicao precisa continuar visivel depois que o dialogo fecha.
   const [avisoSemGps, setAvisoSemGps] = useState(false)
@@ -3180,7 +3183,7 @@ export default function EscoltaDetalhePage() {
       setChecklistFinal(Object.fromEntries(ITENS_CHECKLIST_ENTREGA.map(i => [i.key, { resposta: null, obs: '' }])))
       setAvisoSemGps(pos.sem_sinal_gps)
       await carregar()
-      if (avisoChecklistEntrega) setErro(avisoChecklistEntrega)
+      if (avisoChecklistEntrega) setAvisoOffline({ tipo: 'erro', texto: avisoChecklistEntrega })
     } catch (err) {
       setErro(err instanceof Error ? err.message : 'Erro ao finalizar escolta.')
       setLoading(false)
@@ -3414,9 +3417,6 @@ export default function EscoltaDetalhePage() {
 
         {/* Wizard content */}
         <div className="card-light p-6 space-y-5">
-          {erro && (
-            <p className="text-xs p-3 rounded" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-          )}
 
           {/* STEP 1: MATERIAIS */}
           {wizardStep === 1 && (
@@ -3461,6 +3461,7 @@ export default function EscoltaDetalhePage() {
                 <SugestoesTexto className="mt-2" titulo="Sugestões (toque para inserir e edite)" sugestoes={SUGESTOES_WIZARD.materiais} onInserir={(f) => setObsMateriais(v => juntarSugestao(v, f))} />
               </div>
 
+              <ErroJuntoAoBotao texto={erro} />
               <div className="flex justify-end pt-3 border-t">
                 <button
                   type="button"
@@ -3643,6 +3644,7 @@ export default function EscoltaDetalhePage() {
                 </div>
               </div>
 
+              <ErroJuntoAoBotao texto={erro} />
               <div className="flex flex-col-reverse sm:flex-row justify-between gap-2 pt-3 border-t">
                 <button type="button" onClick={() => { setErro(null); setWizardStep(1) }} className="btn-outline px-5 w-full sm:w-auto">
                   Voltar
@@ -3701,6 +3703,7 @@ export default function EscoltaDetalhePage() {
                 <SugestoesTexto className="mt-2" titulo="Sugestões (toque para inserir e edite)" sugestoes={SUGESTOES_WIZARD.partida} onInserir={(f) => setObsPartida(v => juntarSugestao(v, f))} />
               </div>
 
+              <ErroJuntoAoBotao texto={erro} />
               <div className="flex flex-col-reverse sm:flex-row justify-between gap-2 pt-3 border-t">
                 <button type="button" onClick={() => { setErro(null); setWizardStep(2) }} className="btn-outline px-5 w-full sm:w-auto">
                   Voltar
@@ -5176,9 +5179,6 @@ export default function EscoltaDetalhePage() {
             </div>
 
             <div className="px-6 py-5 space-y-4">
-              {erro && (
-                <p className="text-xs p-3" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
 
               {/* ABA: Cancelar */}
               {abaDialogCancelar === 'cancelar' && (
@@ -5250,6 +5250,7 @@ export default function EscoltaDetalhePage() {
               )}
             </div>
 
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row sm:justify-between items-stretch sm:items-center gap-2" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button
                 onClick={() => { setDialogCancelar(false); setErro(null); setAbaDialogCancelar('cancelar') }}
@@ -5286,9 +5287,6 @@ export default function EscoltaDetalhePage() {
               <h2 className="font-bold text-base text-[#0E1A33]">Iniciar Operação (Saída da Base)</h2>
             </div>
             <div className="px-6 py-5 space-y-4">
-              {erro && (
-                <p className="text-xs p-3" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
               <div className="flex items-center gap-2 p-3" style={{ backgroundColor: '#F5F7FA' }}>
                 <Clock size={13} style={{ color: '#53648A', flexShrink: 0 }} />
                 <div>
@@ -5334,6 +5332,7 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => setDialogStartBase(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
@@ -5365,9 +5364,6 @@ export default function EscoltaDetalhePage() {
             </div>
 
             <div className="px-6 py-5 space-y-4 overflow-y-auto" style={{ maxHeight: '75vh' }}>
-              {erro && (
-                <p className="text-xs p-3" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
 
               {/* GPS Status */}
               <QuadroLocalizacao ponto={gpsCheckin} carregando={gpsCheckinLoading} exigeGps onTentar={() => {
@@ -5415,6 +5411,7 @@ export default function EscoltaDetalhePage() {
               </div>
             </div>
 
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => { setDialogCheckin(false); setErro(null) }} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
@@ -5438,9 +5435,6 @@ export default function EscoltaDetalhePage() {
               <h2 className="font-bold text-base text-[#0E1A33]">Registrar parada</h2>
             </div>
             <div className="px-6 py-5 space-y-4">
-              {erro && (
-                <p className="text-xs p-3" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
               <div className="flex items-center gap-2 p-3" style={{ backgroundColor: '#F5F7FA' }}>
                 <Clock size={13} style={{ color: '#53648A', flexShrink: 0 }} />
                 <div>
@@ -5487,6 +5481,7 @@ export default function EscoltaDetalhePage() {
                 <SugestoesTexto className="mt-2" titulo="Sugestões (toque para inserir e edite)" sugestoes={[SUGESTAO_PARADA[tipoParada], ...SUGESTOES_PARADA].filter(Boolean)} onInserir={(f) => setObsParada(v => juntarSugestao(v, f))} />
               </div>
             </div>
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => { setDialogParada(false); setGpsParada(null); setGpsParadaLoading(false) }} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
@@ -5509,9 +5504,6 @@ export default function EscoltaDetalhePage() {
               <h2 className="font-bold text-base text-[#0E1A33]">Confirmar Chegada na Origem</h2>
             </div>
             <div className="px-6 py-5 space-y-4">
-              {erro && (
-                <p className="text-xs p-3" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
               <div className="flex items-center gap-2 p-3" style={{ backgroundColor: '#F5F7FA' }}>
                 <Clock size={13} style={{ color: '#53648A', flexShrink: 0 }} />
                 <div>
@@ -5571,6 +5563,7 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => setDialogChegadaOrigem(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
@@ -5593,9 +5586,6 @@ export default function EscoltaDetalhePage() {
               <h2 className="font-bold text-base text-[#0E1A33]">Iniciar Trânsito ao Destino</h2>
             </div>
             <div className="px-6 py-5 space-y-4">
-              {erro && (
-                <p className="text-xs p-3" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
               <p className="text-sm text-[#5A6A80]">
                 Confirmar que a equipe deixou a origem e iniciou a rota rumo ao destino.
               </p>
@@ -5623,6 +5613,7 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => setDialogTransitoDestino(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
@@ -5645,9 +5636,6 @@ export default function EscoltaDetalhePage() {
               <h2 className="font-bold text-base text-[#0E1A33]">Confirmar Chegada no Destino</h2>
             </div>
             <div className="px-6 py-5 space-y-4">
-              {erro && (
-                <p className="text-xs p-3" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
               <div className="flex items-center gap-2 p-3" style={{ backgroundColor: '#F5F7FA' }}>
                 <Clock size={13} style={{ color: '#53648A', flexShrink: 0 }} />
                 <div>
@@ -5680,6 +5668,7 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => setDialogChegadaDestino(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
@@ -5703,9 +5692,6 @@ export default function EscoltaDetalhePage() {
               <h2 className="font-bold text-base text-[#0E1A33]">Iniciar retorno</h2>
             </div>
             <div className="px-6 py-5 space-y-4">
-              {erro && (
-                <p className="text-xs p-3 rounded" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
               <p className="text-sm text-[#5A6A80]">
                 Registra a saída do destino e o início do retorno à base num toque só, com a
                 mesma foto e a mesma observação.
@@ -5737,6 +5723,7 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => setDialogTransitoRetorno(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
@@ -5758,9 +5745,6 @@ export default function EscoltaDetalhePage() {
               <h2 className="font-bold text-base text-[#0E1A33]">Iniciar Retorno da Escolta</h2>
             </div>
             <div className="px-6 py-5 space-y-4">
-              {erro && (
-                <p className="text-xs p-3 rounded" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
               <p className="text-sm text-[#5A6A80]">
                 Confirmar que a equipe iniciou a rota de regresso à base operacional.
               </p>
@@ -5789,6 +5773,7 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => setDialogIniciarRetorno(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
@@ -5811,9 +5796,6 @@ export default function EscoltaDetalhePage() {
               <h2 className="font-bold text-base text-[#0E1A33]">Confirmar Chegada na Base (Retorno)</h2>
             </div>
             <div className="px-6 py-5 space-y-4">
-              {erro && (
-                <p className="text-xs p-3 rounded" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
 
               {renderGpsAcao()}
 
@@ -5849,6 +5831,7 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => setDialogChegadaBase(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
@@ -5871,9 +5854,6 @@ export default function EscoltaDetalhePage() {
               <h2 className="font-bold text-base text-[#0E1A33]">Finalizar Escolta e Relatório Diário</h2>
             </div>
             <div className="px-6 py-5 space-y-4 max-h-[70vh] overflow-y-auto">
-              {erro && (
-                <p className="text-xs p-3 rounded" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
               
               {/* Fotos obrigatórias — entrega de viatura */}
               <div>
@@ -5982,6 +5962,7 @@ export default function EscoltaDetalhePage() {
                 <SugestoesTexto className="mt-2" titulo="Trechos sugeridos (toque para inserir e complete com o que aconteceu)" sugestoes={SUGESTOES_RELATORIO_FINAL} onInserir={(f) => setRelatorioFinal(v => juntarSugestao(v, f))} />
               </div>
             </div>
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => setDialogFinalizacao(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
