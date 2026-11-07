@@ -76,6 +76,7 @@ import {
 } from '@/lib/offline/tela'
 import { emParalelo, FOTOS_EM_PARALELO } from '@/lib/offline/envio'
 import { FaixaAndamento } from '@/components/ui/faixa-andamento'
+import { RegistrarOcorrenciaGestao } from '@/components/escolta/registrar-ocorrencia-gestao'
 import { ErroJuntoAoBotao, levarAoCampo } from '@/components/ui/erro-junto'
 import { ALTURA_MAX_MINIATURA, MiniaturaAmpliavel } from '@/components/ui/miniatura-ampliavel'
 
@@ -842,6 +843,7 @@ export default function EscoltaDetalhePage() {
   const [novaDataReagendamento, setNovaDataReagendamento] = useState('')
   const [novaHoraReagendamento, setNovaHoraReagendamento] = useState('08:00')
   const [cancelando, setCancelando] = useState(false)
+  const [dialogOcorrenciaGestao, setDialogOcorrenciaGestao] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
   // Onda O (M9): com erro de validação, a janela rola até o campo com problema.
   useEffect(() => { if (erro) requestAnimationFrame(() => levarAoCampo(erro)) }, [erro])
@@ -3341,6 +3343,9 @@ export default function EscoltaDetalhePage() {
   // Onda I: escolta arquivada não tem ação de campo nem de status (o banco recusa): só Recuperar.
   const arquivada = !!escolta.arquivada_em
   const podeOperar = podeOperarEscolta(perfil, vinculadoAEscolta) && !arquivada
+  // Onda O (B3): mesmos perfis da RLS de ocorrencias (gestão) ou quem opera a escolta.
+  const podeRegistrarOcorrencia = !arquivada && escolta.status !== 'cancelada' &&
+    (['administrador', 'gestor', 'supervisor', 'central'].includes(perfil) || podeOperar)
   const isSupervisorOrOperador = ['supervisor', 'operador'].includes(perfil)
   const isUnstarted = ['rascunho', 'agendada', 'em_pre_inicio'].includes(escolta.status)
 
@@ -4683,6 +4688,16 @@ export default function EscoltaDetalhePage() {
       {/* ── TAB: Ocorrências ── */}
       {tab === 'ocorrencias' && (
         <div className="space-y-3">
+          {/* Onda O (B3): a gestão registra ocorrência por aqui (antes só pelo Campo). */}
+          {podeRegistrarOcorrencia && (
+            <div className="flex justify-end">
+              <button type="button" onClick={() => setDialogOcorrenciaGestao(true)} data-teste="abrir-ocorrencia-gestao"
+                className="h-10 px-4 font-black text-[10px] uppercase tracking-widest flex items-center gap-2 text-white"
+                style={{ backgroundColor: '#A07212' }}>
+                <AlertTriangle size={13} /> Registrar ocorrência
+              </button>
+            </div>
+          )}
           {ocorrencias.length === 0 ? (
             <div className="card-light p-12 text-center">
               <AlertCircle size={24} className="mx-auto mb-2" style={{ color: '#C8D5DC' }} />
@@ -5099,6 +5114,19 @@ export default function EscoltaDetalhePage() {
           </div>
         )
       })()}
+
+      {dialogOcorrenciaGestao && (
+        <RegistrarOcorrenciaGestao
+          escoltaId={escolta.id}
+          escoltaVeiculoId={viaturas[0]?.id ?? null}
+          usuarioId={user?.id ?? null}
+          onFechar={() => setDialogOcorrenciaGestao(false)}
+          onRegistrada={(tipo, descricao) => {
+            setDialogOcorrenciaGestao(false)
+            notificarTelegram({ tipo: 'ocorrencia', titulo: `Ocorrência: ${tipo}`, descricao })
+            carregar()
+          }} />
+      )}
 
       {/* Onda O (A1): andamento da gravação por cima de tudo, perto do polegar. */}
       <FaixaAndamento texto={loading ? andamento : null} />
