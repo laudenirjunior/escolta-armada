@@ -5,24 +5,21 @@
  * adequada aquela atividade, alteravel pelo operador. Isso vale para os campos de
  * rotina, e a distincao importa mais do que parece.
  *
- * DUAS FAMILIAS, POR UM MOTIVO DE SEGURANCA OPERACIONAL
+ * TRES FAMILIAS, POR UM MOTIVO DE SEGURANCA OPERACIONAL
  *
  * 1. TEXTO_PADRAO_* entra como VALOR INICIAL. Sao campos de rotina, sem validacao
  *    por tras, cujo conteudo esperado e mesmo "sem alteracoes". Pre-preencher poupa
  *    digitacao na estrada e nao esconde nada.
  *
- * 2. PLACEHOLDER entra como DICA, nunca como valor. Sao os campos cuja unica barreira
- *    e `if (!campo.trim())`. Por um texto de fabrica no valor deles anularia essa
- *    validacao e liberaria a jornada inteira sem uma linha digitada: o wizard de
- *    pre-inicio, a parada, o cancelamento, o reagendamento e o relatorio final
- *    passariam a ser confirmaveis no automatico. Ali o texto orienta, nao preenche.
+ * 2. SUGESTOES entram apenas depois de um toque do operador e continuam editaveis.
+ *    Sao atalhos para campos obrigatorios, nunca valor inicial. O componente de
+ *    sugestoes nao confirma nem libera o campo sozinho.
  *
- * 3. CAMPOS_SEM_TEXTO_PADRAO sao os que nao recebem nem sugestao no valor, porque
- *    existem justamente para registrar o que fugiu do previsto. Ocorrencia,
- *    emergencia, cancelamento e item de checklist nao conforme. Um texto pronto ali
- *    facilita registro falso exatamente onde o registro precisa ser verdadeiro.
+ * 3. CATEGORIAS orientam ocorrencia e emergencia sem criar relato. O que aconteceu
+ *    continua sendo escrito por quem presenciou o fato.
  *
- * As duas telas, detalhe e campo, leem daqui. A frase nunca e escrita duas vezes.
+ * PLACEHOLDER e apenas dica visual. CAMPOS_SEM_TEXTO_PADRAO registra as excecoes que
+ * nunca recebem valor automatico. As duas telas, detalhe e campo, leem daqui.
  */
 
 import { STATUS } from './fluxo-escolta'
@@ -78,6 +75,69 @@ export const SUGESTAO_PARADA: Record<string, string> = {
   inspecao: 'Inspeção visual da carga realizada. Lacres íntegros, sem alterações.',
   aguardando: 'Aguardando autorização para prosseguir. Sem alterações.',
 }
+
+/** Sugestões de um toque para os três passos do pré-início. */
+export const SUGESTOES_WIZARD = {
+  materiais: [
+    'Materiais e equipamentos conferidos, sem alterações.',
+    'Materiais conferidos. A não conformidade encontrada está descrita no campo.',
+  ],
+  viatura: [
+    'Viatura conferida, sem avarias aparentes e com documentação regular.',
+    'Viatura conferida. A avaria ou pendência encontrada está descrita no campo.',
+  ],
+  partida: [
+    'Rota principal e alternativa conferidas. Condições favoráveis para a saída.',
+    'Rota conferida. A condição de tráfego ou segurança relevante está descrita no campo.',
+  ],
+} as const
+
+/** Sugestões gerais para parada quando o tipo escolhido não possui frase própria. */
+export const SUGESTOES_PARADA = [
+  'Parada iniciada no local informado. Equipe e carga permanecem seguras.',
+  'Parada concluída sem alterações. Deslocamento retomado.',
+  'Parada solicitada pelo cliente. Motivo e autorização registrados no campo.',
+] as const
+
+export const SUGESTOES_CANCELAMENTO = [
+  'Cancelamento determinado pelo cliente. Motivo e horário registrados no campo.',
+  'Cancelamento determinado pela central. Motivo e horário registrados no campo.',
+  'Cancelamento por condição de segurança. Situação e responsável registrados no campo.',
+] as const
+
+export const SUGESTOES_REAGENDAMENTO = [
+  'Reagendamento solicitado pelo cliente. Nova data e autorização registradas no campo.',
+  'Reagendamento determinado pela central. Nova data e motivo registrados no campo.',
+  'Reagendamento por indisponibilidade operacional. Motivo registrado no campo.',
+] as const
+
+/** Trechos opcionais, nunca um relatório completo nem valor inicial. */
+export const SUGESTOES_RELATORIO_FINAL = [
+  'Carga entregue sem ressalvas no destino informado.',
+  'Equipe retornou à base sem intercorrências após a entrega.',
+  'As ocorrências e providências adotadas estão detalhadas no histórico da escolta.',
+] as const
+
+/** Categorias ajudam a classificar; não descrevem o fato ocorrido. */
+export const CATEGORIAS_OCORRENCIA = [
+  'Acidente de trânsito',
+  'Ameaça ou tentativa de abordagem',
+  'Avaria ou violação da carga',
+  'Desvio ou bloqueio de rota',
+  'Falha mecânica',
+  'Fiscalização ou documentação',
+  'Outra ocorrência',
+] as const
+
+/** Emergência recebe só categoria. O acionamento nunca ganha relato automático. */
+export const CATEGORIAS_EMERGENCIA = [
+  'Risco imediato à equipe',
+  'Tentativa de roubo ou abordagem',
+  'Acidente com vítima',
+  'Pane em local inseguro',
+  'Perda de contato com a central',
+  'Outra emergência',
+] as const
 
 /**
  * Texto modelo do checklist de materiais do wizard de pre-inicio.
