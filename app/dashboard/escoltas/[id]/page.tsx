@@ -22,7 +22,6 @@ import {
   PODE_CANCELAR_ESCOLTA,
   PODE_VER_FINANCEIRO,
   PODE_ALTERAR_PERIODICIDADE,
-  PODE_PODER_TOTAL,
   temPermissao,
 } from '@/lib/permissions'
 import { podeOperarEscolta } from '@/lib/acesso-escolta'
