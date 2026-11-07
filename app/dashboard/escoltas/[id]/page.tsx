@@ -3370,7 +3370,7 @@ export default function EscoltaDetalhePage() {
     { key: 'efetivo',     label: 'Efetivo',     count: totalEfetivo },
     { key: 'veiculos',    label: 'Veículos',    count: viaturas.length },
     { key: 'ocorrencias', label: 'Ocorrências', count: ocorrencias.length },
-    ...(verFinanceiroDet ? [{ key: 'financeiro' as Tab, label: '💰 Financeiro' }] : []),
+    ...(verFinanceiroDet ? [{ key: 'financeiro' as Tab, label: 'Financeiro' }] : []),
   ]
 
   // ── Renderização do Wizard Guiado de Partida (Checklist) ─────────────────────
