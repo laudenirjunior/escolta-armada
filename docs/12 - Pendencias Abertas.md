@@ -106,3 +106,15 @@ Branch `melhoria/2026-11-onda-m-leveza`, sobre a onda L. Detalhe no [`../LOG-ALT
 | 6.9 | **Limite da rota de endereço por instância (revisão cruzada 2.5)** | `dentroDoLimite` guarda o contador na memória do processo: na Vercel, cada instância tem o seu. O custo fica limitado (só pontos sem endereço, visíveis pela RLS de quem chama, gravados uma vez), mas um limite por usuário no banco seria o correto |
 | 6.10 | **Onda N, item 1: um escritor por etapa (lib/etapas.ts)** | Não feito nesta execução. Desde as ondas F e L a etapa já é gravada numa transação única no servidor (`registrar_etapa_escolta` e o envelope `registrar_campo`); falta unificar o código do cliente (Campo e detalhe montam os argumentos cada um a seu modo) e levar às demais viaturas os registros que ainda vão só na primeira (0.2). Refatoração grande, para depois do piloto |
 
+
+## 7. Onda O (experiência do gestor e do operador), 07/11/2026: o que ficou em aberto
+
+Branch `melhoria/2026-11-onda-o-experiencia`, sobre a master `90d37ad`. Fonte: teste de uso de 07/11 (nota "2026-11-07 Registro - Diagnostico de uso Escolta Armada" no cofre). Detalhe no [`../LOG-ALTERACOES.md`](../LOG-ALTERACOES.md), entrada de 07/11/2026.
+
+| # | Pendência | Situação |
+|---|---|---|
+| 7.1 | **A5(b): medir Mapbox v5, v6 e Search Box** | Não medido de novo: a extração do token público do JavaScript publicado, autorizada pelo comando de 07/11 só para medir, foi recusada pelo controle de permissões da sessão do Claude Code. Fica a v5 (D5). A onda O resolveu o caso pelo lado dos locais salvos: o que combina com o texto aparece antes das sugestões da Mapbox. Para medir: rodar a comparação com o token num ambiente autorizado (Galeão, Santos Dumont, Engenhão, JAMEF e Sede) e trocar só se ganhar |
+| 7.2 | **M3 no Painel Guiado do Campo** | O retorno em um toque está na tela de detalhe (2 toques de No destino à Chegada na base). No Painel Guiado o Campo grava por viatura (comboio: cada viatura registra o próprio ponto e o status só anda quando todas registram), e encadear as duas transições ali quebraria essa regra e o fluxo sem rede da onda L. Proposta: uma RPC `registrar_retorno` (migration) que grave as duas transições numa transação, por viatura, ou juntar os estados `em_transito_retorno` e `retornando` na máquina de estados (migration e trigger). As duas dependem do Peçanha |
+| 7.3 | **Painel em cerca de 5 s** | As consultas do Painel já saem em paralelo; o tempo vem do layout (avisos, sessão) e do banco de produção. Os índices usados existem. Medir no aparelho com a produção depois da publicação antes de mexer |
+| 7.4 | **Fotos sobem em paralelo, não mais rápido na banda** | Em rede limitada pela banda, 3 envios ao mesmo tempo dividem a mesma banda: o ganho da A1 vem da leitura do GPS, do Telegram fora da espera e da tela liberada aos 15 s. A redução das fotos da onda M é o que corta bytes |
+| 7.5 | **Teste em aparelho real** | GPS contínuo (A2) e quadro fixo (A3) foram medidos com GPS simulado no Chromium; repetir no Android e no iPhone do piloto |
