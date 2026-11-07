@@ -41,6 +41,7 @@ import {
   TEXTO_PADRAO_ETAPA,
   TEXTO_PADRAO_PONTO,
   TEXTO_PADRAO_MATERIAIS,
+  TEXTO_PADRAO_VIATURA,
   SUGESTAO_PARADA,
   SUGESTOES_WIZARD,
   SUGESTOES_PARADA,
@@ -957,7 +958,8 @@ export default function EscoltaDetalhePage() {
   const [fotosViatura, setFotosViatura] = useState<Record<string, File | null>>(
     Object.fromEntries(FOTOS_VIATURA_DEF.map(f => [f.key, null]))
   )
-  const [obsViatura, setObsViatura] = useState('')
+  // Onda O (M4): abre preenchida como a do Passo 1.
+  const [obsViatura, setObsViatura] = useState<string>(TEXTO_PADRAO_VIATURA)
 
   const [kmPartida, setKmPartida] = useState<KmPorViatura>({})
   const [fotosPartida, setFotosPartida] = useState<FotosPorViatura>({})
