@@ -1,7 +1,6 @@
 'use client'
 
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 
 import { useEffect, useState } from 'react'
 import {
@@ -56,15 +55,9 @@ export default function DashboardPage() {
   })
   const [recentes, setRecentes] = useState<EscoltaRecente[]>([])
   const [loading, setLoading] = useState(true)
-  const router = useRouter()
   const perfil = user?.perfil?.codigo ?? null
-
-  // Onda M (D8): o operador entra direto no Campo (Painel Guiado), que já abre a escolta do
-  // dia dele (a que está na rua primeiro). Do login ao primeiro registro: até 3 toques.
-  // O painel da gestão não carrega nada para ele.
-  useEffect(() => {
-    if (perfil === 'operador') router.replace('/dashboard/campo')
-  }, [perfil, router])
+  // Onda M (D8): o layout já leva o operador ao Campo (Painel Guiado). Aqui, o painel da
+  // gestão deixa de carregar os números para ele enquanto o redirecionamento acontece.
 
   useEffect(() => {
     if (!perfil || perfil === 'operador') return

@@ -64,7 +64,10 @@ export function CameraInput({
     const gps = await gpsRapido()
     const r = await aplicarCarimbo(file, { timestamp: agora.toISOString(), gps })
     const tsStr = agora.toISOString().replace(/[:.]/g, '-').slice(0, 19)
-    const namedFile = new File([r.file], `${prefixoNome}_${tsStr}.jpg`, { type: 'image/jpeg' })
+    // Revisão cruzada (2.6): sem carimbo, o arquivo é o original (HEIC, PNG...): nome e tipo
+    // reais, nunca um rótulo de JPEG sobre bytes de outro formato.
+    const ext = r.carimbado ? 'jpg' : (r.file.name.split('.').pop() || 'jpg').toLowerCase()
+    const namedFile = new File([r.file], `${prefixoNome}_${tsStr}.${ext}`, { type: r.carimbado ? 'image/jpeg' : (r.file.type || 'application/octet-stream') })
     if (r.carimbado) marcarCarimbada(namedFile)
     const novas = [...fotos, { file: namedFile, url: URL.createObjectURL(namedFile) }]
     setFotos(novas)
@@ -103,6 +106,11 @@ export function CameraInput({
   const capturar = async () => {
     if (!videoRef.current) return
     const v = videoRef.current
+    // Revisão cruzada (2.8): o vídeo ainda sem dimensões daria uma foto de 1 por 1.
+    if (!v.videoWidth || !v.videoHeight) {
+      setErro('A câmera ainda está abrindo. Aguarde um instante e toque de novo.')
+      return
+    }
     const agora = new Date()
     // Onda M (D7): o vídeo ao vivo passa pela mesma redução e pelo mesmo carimbo do seletor de
     // arquivo e do Campo (lado maior de 1600 px, JPEG 0,7, data, hora e coordenada).

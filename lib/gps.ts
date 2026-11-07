@@ -73,10 +73,12 @@ export function textoPrecisao(precisao: number | null | undefined): string {
 
 /**
  * Leitura rápida para o carimbo da foto na tela de detalhe (onda M): aceita leitura de até
- * 60 s e espera no máximo 4 s. Sem sinal, devolve null e o carimbo diz "SEM SINAL DE GPS".
+ * 5 s e espera no máximo 4 s. Sem sinal, devolve null e o carimbo diz "SEM SINAL DE GPS".
  * A coordenada gravada no ponto continua sendo a do registro (obterGpsPreciso).
  */
 export function gpsRapido(geo: Geo | undefined = typeof navigator !== 'undefined' ? navigator.geolocation : undefined): Promise<LeituraGps | null> {
   if (!geo) return Promise.resolve(null)
-  return lerUmaVez(geo, false, 4000, 60_000).catch(() => null)
+  // Revisão cruzada (2.7): leitura de no máximo 5 s atrás. Sem leitura nova, o carimbo diz
+  // "SEM SINAL DE GPS", mais honesto que uma coordenada de um minuto antes.
+  return lerUmaVez(geo, false, 4000, 5_000).catch(() => null)
 }

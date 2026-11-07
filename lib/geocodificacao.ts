@@ -32,18 +32,44 @@ export async function enderecoPorExtenso(lat: number, lng: number, timeoutMs = 4
 
 /**
  * Onda M (B2): pede ao servidor o endereço por extenso dos pontos que chegaram ao banco só
- * com a coordenada (fila sem internet, ou check-in sem resposta da Mapbox). Uma chamada por
- * envio, sem esperar e sem erro na tela: falhou, o ponto continua com a coordenada, que é a
- * verdade. A rota (/api/pontos/endereco) lê com a RLS de quem chama e grava uma única vez.
+ * com a coordenada (fila sem internet, ou check-in sem resposta da Mapbox). A rota
+ * (/api/pontos/endereco) lê com a RLS de quem chama e grava uma única vez.
+ *
+ * Revisão cruzada (2.2): o pedido não é mais descartável. As escoltas ficam numa lista no
+ * aparelho (localStorage, por conveniência; sem ele vale só a tentativa da hora) até a rota
+ * responder sem pendências; a próxima rodada de envio da fila tenta de novo. Erro nunca vai
+ * à tela: o ponto continua com a coordenada, que é a verdade.
  */
+const CHAVE_PENDENTES = 'escolta.endereco.pendentes'
+
+function lerPendentesEndereco(): string[] {
+  try { const v = JSON.parse(localStorage.getItem(CHAVE_PENDENTES) ?? '[]'); return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [] } catch { return [] }
+}
+function gravarPendentesEndereco(lista: string[]): void {
+  try { if (lista.length) localStorage.setItem(CHAVE_PENDENTES, JSON.stringify(lista.slice(-30))); else localStorage.removeItem(CHAVE_PENDENTES) } catch { /* só conveniência */ }
+}
+
 export function pedirEnderecoDepois(escoltaIds: Array<string | null | undefined>, f: typeof fetch = fetch): void {
-  const escoltas = Array.from(new Set(escoltaIds.filter((e): e is string => !!e))).slice(0, 10)
-  if (escoltas.length === 0) return
+  const novas = escoltaIds.filter((e): e is string => !!e)
+  const todas = Array.from(new Set([...lerPendentesEndereco(), ...novas]))
+  if (todas.length === 0) return
+  gravarPendentesEndereco(todas)
+  const lote = todas.slice(0, 10)
   try {
     void f('/api/pontos/endereco', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ escoltas }),
+      body: JSON.stringify({ escoltas: lote }),
+    }).then(async (r) => {
+      if (!r.ok) return
+      const d = await r.json().catch(() => null) as { pendentes?: number } | null
+      // Sem pendências: estas escoltas saem da lista; com pendências, ficam para a próxima.
+      if (d && d.pendentes === 0) gravarPendentesEndereco(lerPendentesEndereco().filter((e) => !lote.includes(e)))
     }).catch(() => {})
-  } catch { /* sem fetch: fica só a coordenada */ }
+  } catch { /* sem fetch: fica para a próxima rodada */ }
+}
+
+/** Há escoltas esperando o endereço dos pontos (a rodada de envio tenta de novo). */
+export function temEnderecoPendente(): boolean {
+  return lerPendentesEndereco().length > 0
 }

@@ -25,6 +25,14 @@ A tela de entrada tem o título **Painel de Acesso Operacional**, um campo com o
 - O **Operador** entra pelo **usuário**, no formato `primeironome_ultimonome`. Não precisa digitar arroba: o sistema completa sozinho o domínio interno.
 - Administrador, Gestor, Supervisor e Central entram pelo e-mail cadastrado.
 
+Novidades de novembro de 2026 (onda M):
+
+- **O aparelho lembra o último usuário.** Na próxima entrada, o campo de usuário já vem preenchido; é só digitar a senha. A senha nunca fica guardada.
+- O campo de usuário **não corrige nem coloca letra maiúscula** sozinho.
+- O **olho** ao lado da senha mostra ou esconde o que foi digitado.
+- Mensagens claras: "Usuário não encontrado ou senha incorreta", "Sem internet no momento" e "O servidor não conseguiu concluir o login". O botão de entrar ficou maior, para usar com uma mão.
+- **O Operador entra direto no Campo (Painel Guiado)**, com a escolta do dia aberta. Do Painel ao primeiro registro são 3 toques (por exemplo: Registrar Check-in, foto, Confirmar).
+
 `[PRINT P01]`
 
 ### 1.2 Primeiro acesso: troca de senha obrigatória
@@ -373,11 +381,13 @@ O pré-início **não acontece pela tela de Campo**. Ele é um assistente de tr�
 Do momento em que a escolta sai da base, avançar cada etapa é registrar um checkpoint. Na tela de Campo, o bloco **Registrar Checkpoint** pede, nesta ordem:
 
 1. **A viatura do registro** (quando há mais de uma e o perfil é administrativo). Cada viatura tem o próprio ponto. **A etapa só avança quando todas as viaturas registram.**
-2. **Foto (mínimo 1, até 5).** A câmera abre direto. O **GPS é capturado sozinho** no momento da foto e carimbado na imagem.
+2. **Foto (mínimo 1, até 3, desde novembro de 2026).** A câmera abre direto. O **GPS é capturado sozinho** no momento da foto e carimbado na imagem. A foto é **reduzida no próprio aparelho** (lado maior de 1600 pixels, cerca de 200 a 400 KB em vez de 3 a 6 MB), com o carimbo de data, hora e coordenada; isso deixa a fila sem internet leve e o envio rápido em 3G e 4G fraco.
 3. **Observação**, já sugerida conforme a etapa.
 4. O **botão de avanço**, com o nome da próxima etapa.
 
 Sobre o GPS no checkpoint: **a falta de sinal não trava o registro.** A foto é gravada com o aviso de que não houve coordenada, para o Operador não ficar preso sem rede. A foto, essa sim, é obrigatória.
+
+**GPS impreciso (novembro de 2026):** se a leitura vier com precisão pior que 100 m, o aparelho tenta de novo por até 10 segundos e grava a melhor leitura. Se continuar ruim, a tela avisa "GPS impreciso: ±N m". A precisão aparece também no carimbo e na tela da escolta.
 
 `[PRINT P31]`
 
@@ -399,11 +409,15 @@ Durante o trajeto, o Operador mantém o pulso da operação. Estas duas ações 
 - **Check-in, quando ligado:** a periodicidade é configurável (de 10 a 120 minutos). Quando vence, o botão fica vermelho e avisa "CHECK-IN ATRASADO". O diálogo pede **foto (mínimo 1)** e usa o **GPS**. Aqui, ao contrário do checkpoint, **o botão de confirmar fica bloqueado sem GPS e sem foto**.
 - **Registrar Parada:** para qualquer parada não prevista (abastecimento, refeição, blitz, manutenção, entre outras). Pede o tipo, **foto** e **justificativa**, ambos obrigatórios.
 
+**Sugestões de texto (novembro de 2026).** Abaixo dos campos obrigatórios (wizard de pré-início, parada, cancelamento, reagendamento e relatório final) aparecem botões pequenos com frases prontas. **Um toque insere a frase no campo; depois é só completar ou corrigir.** Nada é preenchido sozinho: com o campo vazio, o registro continua bloqueado. No relatório final, as frases são trechos para completar com o que aconteceu.
+
 `[PRINT P33]`
 
 ## B7. Registrar ocorrência
 
 Para relatar incidente, irregularidade ou desvio, o bloco **Registrar Ocorrência** (na tela de Campo, durante o trânsito) pede o **tipo**, uma **descrição** obrigatória e uma **foto recomendada**. A foto aqui não é obrigatória, mas registra data, hora e GPS quando existe.
+
+Desde novembro de 2026, acima da descrição há botões de **categoria** (Acidente de trânsito, Ameaça ou tentativa de abordagem, Avaria ou violação da carga, Desvio ou bloqueio de rota, Falha mecânica, Fiscalização ou documentação, Outra ocorrência). O toque escreve "Categoria: ..." no início; tocar em outra troca a anterior. **A categoria não substitui o relato:** o botão só libera depois que o Operador descreve o que aconteceu, com as próprias palavras.
 
 `[PRINT P34]`
 
@@ -412,6 +426,8 @@ Para relatar incidente, irregularidade ou desvio, o bloco **Registrar Ocorrênci
 O botão **Acionar Emergência** fica fixo na base da tela de Campo, largo e vermelho. Ele **pede confirmação em dois toques** para evitar disparo acidental: ao tocar, abre "Confirmar Emergência?" com o aviso "A central será notificada imediatamente. Use apenas em situação real", e só o botão **CONFIRMAR** dispara.
 
 A emergência **nunca é bloqueada por falta de GPS**: é um toque, e a central é acionada de imediato, com a posição se houver ou com o aviso de informar por rádio se não houver.
+
+Na confirmação aparecem botões de **categoria opcional** (Risco imediato à equipe, Tentativa de roubo ou abordagem, Acidente com vítima, Pane em local inseguro, Perda de contato com a central, Outra emergência). **Não é preciso escolher:** o CONFIRMAR funciona sem categoria. Se escolhida, ela vai junto para a central e para o Telegram.
 
 `[PRINT P35]`
 
@@ -437,8 +453,8 @@ Quando o aparelho perde a conexão, aparece no topo uma **faixa vermelha fixa**:
 - **iPhone:** o envio só acontece com o aplicativo aberto (o Safari não envia em segundo plano). **Instale o aplicativo na tela de início**: sem isso, o iPhone pode apagar os dados guardados depois de alguns dias sem uso.
 - Registro que ainda está **só no aparelho se perde** se o aparelho for perdido, quebrado ou limpo antes do envio. Procure sinal assim que puder.
 - A hora gravada é a do **relógio do aparelho** no momento da ação; o servidor guarda também a hora em que recebeu. Relógio errado no aparelho dá hora errada no registro.
-- As fotos são guardadas inteiras; se o espaço do aparelho acabar, a câmera avisa e não deixa tirar a foto até liberar espaço ou enviar o que está guardado.
-- Sem internet, o endereço por extenso do check-in e da parada não é buscado (fica só a coordenada).
+- As fotos são guardadas já reduzidas (desde novembro de 2026, cerca de 200 a 400 KB cada); se o espaço do aparelho acabar, a câmera avisa e não deixa tirar a foto até liberar espaço ou enviar o que está guardado.
+- Sem internet, o endereço por extenso do check-in e da parada não é buscado na hora (fica só a coordenada). **Desde novembro de 2026, quando os registros sobem, o servidor busca o endereço uma única vez** e ele aparece na tela da escolta, marcado como aproximado. A coordenada do GPS continua sendo a verdade.
 - Ao **sair do sistema** com registros guardados, o aplicativo avisa: eles ficam no aparelho e só sobem quando você entrar de novo, neste aparelho, com internet.
 - A chave de liga e desliga é da administração (`offline_ligado`); desligada, o aplicativo grava direto, como antes, e continua enviando o que já estava guardado.
 

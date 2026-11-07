@@ -52,7 +52,8 @@ export async function POST(req: NextRequest) {
     .not('latitude', 'is', null)
     .not('longitude', 'is', null)
     .gte('criado_em', desde)
-    .order('criado_em', { ascending: true })
+    // Revisão cruzada (2.3): os mais novos primeiro (os que acabaram de subir da fila).
+    .order('criado_em', { ascending: false })
     .limit(200)
   if (error) return NextResponse.json({ error: 'Não foi possível ler os pontos.' }, { status: 502 })
 
@@ -60,14 +61,21 @@ export async function POST(req: NextRequest) {
     .filter((p) => !lerObservacao(p.observacoes).endereco)
   const lote = semEndereco.slice(0, MAX_PONTOS)
 
+  // Revisão cruzada (2.4): 4 pedidos à Mapbox por vez (cada um com 4 s de limite), dentro de
+  // um orçamento de 20 s; o que não couber volta como pendente e o aparelho pede de novo.
   let preenchidos = 0
-  for (const p of lote) {
-    const texto = await enderecoPorExtenso(Number(p.latitude), Number(p.longitude))
-    if (!texto) continue
-    const r = await sb.rpc('preencher_endereco_ponto', { p_ponto_id: p.id, p_endereco: texto })
-    // Função ausente (bloco 1 sem a 220): para sem erro; o ponto fica só com a coordenada.
-    if (r.error) break
-    if (r.data === true) preenchidos++
+  let parar = false
+  const inicio = Date.now()
+  for (let i = 0; i < lote.length && !parar && Date.now() - inicio < 20_000; i += 4) {
+    const grupo = lote.slice(i, i + 4)
+    const textos = await Promise.all(grupo.map((p) => enderecoPorExtenso(Number(p.latitude), Number(p.longitude))))
+    for (let k = 0; k < grupo.length; k++) {
+      if (!textos[k]) continue
+      const r = await sb.rpc('preencher_endereco_ponto', { p_ponto_id: grupo[k].id, p_endereco: textos[k] })
+      // Função ausente (bloco 1 sem a 220): para sem erro; o ponto fica só com a coordenada.
+      if (r.error) { parar = true; break }
+      if (r.data === true) preenchidos++
+    }
   }
   return NextResponse.json({ preenchidos, pendentes: semEndereco.length - preenchidos })
 }
