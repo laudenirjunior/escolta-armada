@@ -12,6 +12,9 @@ import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
+import { urlsAssinadas, urlDoMapa } from '@/lib/fotos-url'
+import { COR_PADRAO_CLIENTE, corDoCliente, primeiraCorLivre } from '@/lib/paleta-clientes'
+import { SeletorCorCliente } from '@/components/escolta/seletor-cor-cliente'
 
 interface ClienteRow {
   id: string
@@ -49,7 +52,7 @@ const FORM_VAZIO: FormData = {
   cnpj: '',
   contato: '',
   telefone: '',
-  cor_destaque: '#3B82F6',
+  cor_destaque: COR_PADRAO_CLIENTE,
   telegram_chat_id: '',
   observacoes: '',
   status: 'ativo',
@@ -73,6 +76,9 @@ export default function ClientesPage() {
   const [erro, setErro] = useState<string | null>(null)
   const [logoFile, setLogoFile] = useState<File | null>(null)
   const [logoPreview, setLogoPreview] = useState<string>('')
+  const [logosAssinadas, setLogosAssinadas] = useState<Record<string, string>>({})
+  // Lote 2026-10: remoção da logo só por ação explícita (a prévia pode ficar vazia se a URL assinada falhar).
+  const [logoRemovida, setLogoRemovida] = useState(false)
   const { user } = useAuth()
   const supabase = createClient()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -87,6 +93,9 @@ export default function ClientesPage() {
       .select('id, nome_cliente, cnpj, contato, telefone, cor_destaque, telegram_chat_id, observacoes, status, valor_padrao_escolta, km_franquia, valor_km_excedente, criado_em, metadados')
       .order('nome_cliente') as { data: ClienteRow[] | null }
     setClientes(data ?? [])
+    // Lote 2026-10: bucket privado; a logo é exibida por URL assinada.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setLogosAssinadas(await urlsAssinadas(sb, (data ?? []).map((c: any) => c.metadados?.logo_url)))
     setLoading(false)
   }, [sb])
 
@@ -94,7 +103,9 @@ export default function ClientesPage() {
 
   const abrirNovo = () => {
     setEditando(null)
-    setForm(FORM_VAZIO)
+    setLogoRemovida(false)
+    // Revisão adversarial K, menor 10: o cliente novo nasce com a primeira cor livre da paleta.
+    setForm({ ...FORM_VAZIO, cor_destaque: primeiraCorLivre(clientes) })
     setLogoFile(null)
     setLogoPreview('')
     setErro(null)
@@ -103,12 +114,13 @@ export default function ClientesPage() {
 
   const abrirEdicao = (c: ClienteRow) => {
     setEditando(c)
+    setLogoRemovida(false)
     setForm({
       nome_cliente: c.nome_cliente,
       cnpj: c.cnpj ?? '',
       contato: c.contato,
       telefone: c.telefone,
-      cor_destaque: c.cor_destaque,
+      cor_destaque: corDoCliente(c.cor_destaque),
       telegram_chat_id: c.telegram_chat_id ?? '',
       observacoes: c.observacoes ?? '',
       status: c.status,
@@ -117,7 +129,7 @@ export default function ClientesPage() {
       valor_km_excedente: c.valor_km_excedente?.toString() ?? '',
     })
     setLogoFile(null)
-    setLogoPreview(c.metadados?.logo_url ?? '')
+    setLogoPreview(urlDoMapa(logosAssinadas, c.metadados?.logo_url) ?? '')
     setErro(null)
     setDialogAberto(true)
   }
@@ -130,6 +142,7 @@ export default function ClientesPage() {
   }
 
   const removerLogo = () => {
+    setLogoRemovida(true)
     setLogoFile(null)
     setLogoPreview('')
   }
@@ -176,13 +189,13 @@ export default function ClientesPage() {
       const path = `logos/clientes/${clienteId}/logo.${ext}`
       const { error: upErr } = await sb.storage.from('fotos').upload(path, logoFile, { upsert: true })
       if (!upErr) {
-        const { data: pub } = sb.storage.from('fotos').getPublicUrl(path)
+        // Lote 2026-10: grava o caminho no bucket, não a URL pública (o bucket é privado).
         const metaAtual = editando?.metadados ?? {}
         await sb.from('clientes').update({
-          metadados: { ...metaAtual, logo_url: pub.publicUrl },
+          metadados: { ...metaAtual, logo_url: path },
         }).eq('id', clienteId)
       }
-    } else if (!logoPreview && editando?.metadados?.logo_url) {
+    } else if (logoRemovida && editando?.metadados?.logo_url) {
       // Logo foi removida manualmente
       const metaAtual = { ...editando.metadados }
       delete metaAtual.logo_url
@@ -252,12 +265,12 @@ export default function ClientesPage() {
             <div
               key={c.id}
               className="flex items-center gap-4 p-4 bg-white/2 border border-white/5 hover:border-white/10 rounded-sm transition-colors"
-              style={{ borderLeftColor: c.cor_destaque, borderLeftWidth: 3 }}
+              style={{ borderLeftColor: corDoCliente(c.cor_destaque), borderLeftWidth: 3 }}
             >
               {/* Logo do cliente */}
               <div style={{ width: '40px', height: '40px', borderRadius: '4px', border: '1px solid rgba(255,255,255,0.1)', overflow: 'hidden', flexShrink: 0, backgroundColor: 'rgba(255,255,255,0.04)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                {c.metadados?.logo_url
-                  ? <img src={c.metadados.logo_url} alt={c.nome_cliente} style={{ width: '100%', height: '100%', objectFit: 'contain', padding: '4px' }} />
+                {urlDoMapa(logosAssinadas, c.metadados?.logo_url)
+                  ? <img src={urlDoMapa(logosAssinadas, c.metadados?.logo_url) ?? undefined} alt={c.nome_cliente} style={{ width: '100%', height: '100%', objectFit: 'contain', padding: '4px' }} />
                   : <ImageIcon size={16} style={{ color: 'rgba(255,255,255,0.15)' }} />}
               </div>
               <div className="flex-1 min-w-0">
@@ -347,16 +360,10 @@ export default function ClientesPage() {
               />
             </div>
             <div>
-              <Label className="text-xs text-text-secondary mb-1 block">Cor destaque</Label>
-              <div className="flex items-center gap-2 h-8">
-                <input
-                  type="color"
-                  value={form.cor_destaque}
-                  onChange={(e) => upd({ cor_destaque: e.target.value })}
-                  className="w-8 h-8 rounded-sm cursor-pointer border border-border bg-transparent"
-                />
-                <span className="text-xs text-text-secondary font-mono">{form.cor_destaque}</span>
-              </div>
+              <Label className="text-xs text-text-secondary mb-1 block">Cor do cliente</Label>
+              {/* Onda K: paleta fechada; aviso quando outro cliente ativo usa a mesma cor (S6). */}
+              <SeletorCorCliente valor={form.cor_destaque} onChange={(cor) => upd({ cor_destaque: cor })}
+                clientes={clientes} clienteAtualId={editando?.id ?? null} />
             </div>
           </div>
 

@@ -8,7 +8,21 @@ import { exigirSessao, dentroDoLimite, escaparHtml } from '@/lib/api-auth'
 const LIMITE_ENVIOS_POR_MINUTO = 30
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
-const BASE_URL = `https://api.telegram.org/bot${BOT_TOKEN}`
+// TELEGRAM_API_BASE existe só para a homologação (servidor falso do Telegram). Em
+// produção na Vercel é ignorado, para o token nunca ir a outro endereço.
+const API_BASE = process.env.VERCEL_ENV !== 'production' && process.env.TELEGRAM_API_BASE
+  ? process.env.TELEGRAM_API_BASE
+  : 'https://api.telegram.org'
+const BASE_URL = `${API_BASE}/bot${BOT_TOKEN}`
+
+// Lote 2026-10: foto só do bucket do próprio projeto, por URL assinada. Qualquer outra
+// URL é descartada e a mensagem sai só com texto.
+function fotoPermitida(url: unknown): string | null {
+  if (typeof url !== 'string' || !url) return null
+  const base = (process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').replace(/\/+$/, '')
+  if (!base) return null
+  return url.startsWith(`${base}/storage/v1/object/sign/fotos/`) ? url : null
+}
 
 if (!BOT_TOKEN) {
   console.warn('[telegram] TELEGRAM_BOT_TOKEN não configurado no .env.local')
@@ -67,15 +81,19 @@ export async function POST(req: NextRequest) {
       status_atual,
       efetivos,
       veiculo,
-      foto_url,
       data_hora,
       chat_id,
     } = body
+    const foto_url = fotoPermitida(body.foto_url)
+    const fotoDescartada = Boolean(body.foto_url) && !foto_url
 
     // O chat_id vinha do cliente: qualquer um usava o bot para mandar mensagem
     // a qualquer destino. Agora e resolvido no servidor a partir da escolta.
     let destChatId: string | undefined
-    if (escolta_id) {
+    // Lote 2026-10: avisos do mural vão ao chat central, não ao grupo do cliente, mesmo
+    // trazendo escolta_id (usado só no link). Decidido aqui, no servidor.
+    const paraCentral = body.destino === 'central'
+    if (escolta_id && !paraCentral) {
       const sb = createClient()
       const { data } = await sb
         .from('escoltas')
@@ -86,7 +104,7 @@ export async function POST(req: NextRequest) {
       destChatId = cli?.telegram_chat_id ?? undefined
     }
     // Um chat_id explicito so e aceito de quem administra as integracoes.
-    if (!destChatId && chat_id && ['administrador', 'gestor'].includes(auth.sessao.perfil)) {
+    if (!destChatId && !paraCentral && chat_id && ['administrador', 'gestor'].includes(auth.sessao.perfil)) {
       destChatId = chat_id
     }
     destChatId = destChatId ?? process.env.TELEGRAM_CHAT_ID
@@ -96,12 +114,14 @@ export async function POST(req: NextRequest) {
 
     let texto: string
 
-    if (texto_completo) {
+    // Destino central (avisos do mural) não aceita texto livre: só os campos escapados.
+    if (texto_completo && !paraCentral) {
       // Mensagem pré-formatada (ex: relatório de finalização)
       texto = texto_completo
     } else {
       const emoji = EMOJI[tipo] ?? EMOJI.default
-      const agora = data_hora ?? new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })
+      // Padrão DD/MM/AAAA HH:MM (Brasília), sem vírgula nem segundos.
+      const agora = data_hora ?? new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }).replace(',', '')
       const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
 
       texto = `${emoji} <b>${escaparHtml(String(titulo ?? ""))}</b>\n\n`
@@ -116,10 +136,10 @@ export async function POST(req: NextRequest) {
         for (const nome of efetivos) texto += `  • ${escaparHtml(String(nome))}\n`
       }
 
-      if (descricao?.trim()) texto += `\n📝 <i>${descricao.trim()}</i>\n`
+      if (descricao?.trim()) texto += `\n📝 <i>${escaparHtml(String(descricao).trim())}</i>\n`
 
       if (escolta_id) {
-        texto += `\n🔗 <a href="${appUrl}/dashboard/escoltas/${escolta_id}">Abrir Escolta ${escolta_codigo ?? ''}</a>`
+        texto += `\n🔗 <a href="${appUrl}/dashboard/escoltas/${encodeURIComponent(String(escolta_id))}">Abrir Escolta ${escaparHtml(String(escolta_codigo ?? ''))}</a>`
       }
     }
 
@@ -138,7 +158,7 @@ export async function POST(req: NextRequest) {
           console.warn('[telegram] sendPhoto (finalizacao) falhou:', await photoResp.text())
         }
       }
-      return NextResponse.json({ ok: true })
+      return NextResponse.json({ ok: true, foto_descartada: fotoDescartada })
     }
 
     // Demais eventos: foto com caption se houver, senão só texto
@@ -161,7 +181,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ ok: true })
+    return NextResponse.json({ ok: true, foto_descartada: fotoDescartada })
   } catch (err: any) {
     console.error('[telegram]', err)
     return NextResponse.json({ error: err.message }, { status: 500 })

@@ -11,6 +11,11 @@ import {
 import { createClient } from '@/lib/supabase/client'
 import { lerObservacao } from '@/lib/pontos-controle'
 import { useAuth } from '@/hooks/useAuth'
+import { urlsAssinadas, urlDoMapa } from '@/lib/fotos-url'
+import { PERFIS_GESTAO } from '@/lib/permissions'
+import type { CodigoPerfil } from '@/lib/permissions'
+import { CentralAvisos } from '@/components/avisos/central-avisos'
+import { useAvisos } from '@/components/avisos-provider'
 
 const sb = createClient() as any
 const sbStorage = createClient()
@@ -154,7 +159,12 @@ export default function NotificacoesPage() {
   const { user } = useAuth()
   const router = useRouter()
 
-  const [tab, setTab] = useState<'notificacoes' | 'chat'>('notificacoes')
+  // Lote 2026-10 (onda J): a aba padrão é a Central (avisos pessoais, com lida e não
+  // lida). O feed de eventos vira a aba Atividade, só para a gestão e fora do contador.
+  const [tab, setTab] = useState<'central' | 'notificacoes' | 'chat'>('central')
+  const perfil = user?.perfil?.codigo as CodigoPerfil | undefined
+  const ehGestao = !!perfil && PERFIS_GESTAO.includes(perfil)
+  const { naoLidas } = useAvisos()
 
   const [notificacoes, setNotificacoes] = useState<NotificacaoFeed[]>([])
   const [loadingNot, setLoadingNot] = useState(true)
@@ -171,12 +181,37 @@ export default function NotificacoesPage() {
   const [buscaUser, setBuscaUser] = useState('')
   const msgEndRef = useRef<HTMLDivElement>(null)
 
-  const toPublicUrl = useCallback((path: string | null): string | null => {
-    if (!path) return null
-    if (path.startsWith('http')) return path
-    const { data } = sbStorage.storage.from('fotos').getPublicUrl(path)
-    return data?.publicUrl ?? null
-  }, [])
+  // Onda J: o sino conta só os avisos da Central. Mensagem nova do Chat Interno tem o
+  // contador próprio, na aba Chat: mensagens para mim depois da última vez que abri a aba
+  // (marca em localStorage por usuário; no primeiro acesso do aparelho começa do zero).
+  const [chatNovas, setChatNovas] = useState(0)
+  useEffect(() => {
+    const eu = user?.id
+    if (!eu) return
+    const chave = `ea_chat_visto:${eu}`
+    const ler = () => { try { return window.localStorage.getItem(chave) } catch { return null } }
+    const gravar = (v: string) => { try { window.localStorage.setItem(chave, v) } catch { /* modo privado */ } }
+    let ativo = true
+    const conferir = async () => {
+      if (tab === 'chat') { gravar(new Date().toISOString()); setChatNovas(0); return }
+      let visto = ler()
+      if (!visto) { visto = new Date().toISOString(); gravar(visto) }
+      const { count, error } = await sb.from('chat_mensagens').select('id', { count: 'exact', head: true })
+        .eq('para_usuario_id', eu).gt('criado_em', visto)
+      if (ativo && !error) setChatNovas(count ?? 0)
+    }
+    conferir()
+    const t = setInterval(conferir, 20_000)
+    return () => {
+      ativo = false
+      clearInterval(t)
+      if (tab === 'chat') gravar(new Date().toISOString())
+    }
+  }, [user?.id, tab])
+
+  // Lote 2026-10: bucket privado. Aqui guarda só o caminho; a URL assinada é gerada em
+  // lote no fim de carregarNotificacoes.
+  const toPublicUrl = useCallback((path: string | null): string | null => path || null, [])
 
   const carregarNotificacoes = useCallback(async () => {
     setLoadingNot(true)
@@ -188,12 +223,15 @@ export default function NotificacoesPage() {
           id, data_hora, observacoes,
           tipo:dom_tipos_ponto(codigo, nome_exibicao),
           lancado_por:usuarios!lancado_por(nome_completo),
-          escolta_veiculo:escolta_veiculos(
+          escolta_veiculo:escolta_veiculos!inner(
             veiculo:veiculos(placa),
-            escolta:escoltas(id, codigo_escolta, status, cliente:clientes(nome_cliente))
+            escolta:escoltas!inner(id, codigo_escolta, status, arquivada_em, cliente:clientes(nome_cliente))
           ),
           foto:fotos!foto_id(caminho_arquivo)
         `)
+        // Onda I: registro anulado e escolta arquivada fora do feed.
+        .is('anulado_em', null)
+        .is('escolta_veiculo.escolta.arquivada_em', null)
         .order('data_hora', { ascending: false })
         .limit(100)
 
@@ -220,9 +258,11 @@ export default function NotificacoesPage() {
           id, descricao, data_hora,
           tipo:dom_tipos_ocorrencia(nome),
           autor:usuarios!registrado_por(nome_completo),
-          escolta:escoltas!escolta_id(id, codigo_escolta, status, cliente:clientes(nome_cliente)),
+          escolta:escoltas!escolta_id!inner(id, codigo_escolta, status, arquivada_em, cliente:clientes(nome_cliente)),
           foto:fotos!foto_id(caminho_arquivo)
         `)
+        .is('anulado_em', null)
+        .is('escolta.arquivada_em', null)
         .order('data_hora', { ascending: false })
         .limit(50)
 
@@ -248,8 +288,10 @@ export default function NotificacoesPage() {
         .select(`
           id, data_hora, status_novo, status_anterior,
           autor:usuarios!alterado_por(nome_completo),
-          escolta:escoltas!escolta_id(id, codigo_escolta, status, cliente:clientes(nome_cliente))
+          escolta:escoltas!escolta_id!inner(id, codigo_escolta, status, arquivada_em, cliente:clientes(nome_cliente))
         `)
+        .is('anulado_em', null)
+        .is('escolta.arquivada_em', null)
         .not('status_novo', 'in', '(na_origem,em_transito_destino,no_destino,retornando,na_base)')
         .order('data_hora', { ascending: false })
         .limit(50)
@@ -276,9 +318,11 @@ export default function NotificacoesPage() {
         .select(`
           id, data_hora,
           vigilante:vigilantes!vigilante_id(nome_completo),
-          escolta:escoltas!escolta_id(id, codigo_escolta, status, cliente:clientes(nome_cliente)),
+          escolta:escoltas!escolta_id!inner(id, codigo_escolta, status, arquivada_em, cliente:clientes(nome_cliente)),
           foto:fotos!foto_id(caminho_arquivo)
         `)
+        .is('anulado_em', null)
+        .is('escolta.arquivada_em', null)
         .order('data_hora', { ascending: false })
         .limit(50)
 
@@ -301,6 +345,9 @@ export default function NotificacoesPage() {
       const tudo = [...feedPts, ...feedOcorrs, ...feedHist, ...feedPres]
         .sort((a, b) => new Date(b.data_hora).getTime() - new Date(a.data_hora).getTime())
 
+      const assinadas = await urlsAssinadas(sbStorage, tudo.map(n => n.foto_url))
+      for (const n of tudo) n.foto_url = urlDoMapa(assinadas, n.foto_url)
+
       setNotificacoes(tudo)
     } finally {
       setLoadingNot(false)
@@ -317,7 +364,7 @@ export default function NotificacoesPage() {
     setUsuarios((data ?? []) as ChatUser[])
   }, [user?.id])
 
-  useEffect(() => { carregarNotificacoes() }, [carregarNotificacoes])
+  useEffect(() => { if (ehGestao) carregarNotificacoes() }, [carregarNotificacoes, ehGestao])
   useEffect(() => { carregarUsuarios() }, [carregarUsuarios])
 
   const carregarMensagens = useCallback(async () => {
@@ -334,6 +381,7 @@ export default function NotificacoesPage() {
   useEffect(() => { msgEndRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [mensagens])
 
   useEffect(() => {
+    if (!ehGestao) return
     const ch = sb.channel('notif-feed-v3')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'pontos_controle' }, () => carregarNotificacoes())
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ocorrencias' }, () => carregarNotificacoes())
@@ -341,7 +389,7 @@ export default function NotificacoesPage() {
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'presencas' }, () => carregarNotificacoes())
       .subscribe()
     return () => { sb.removeChannel(ch) }
-  }, [carregarNotificacoes])
+  }, [carregarNotificacoes, ehGestao])
 
   useEffect(() => {
     if (!chatSelecionado) return
@@ -402,16 +450,21 @@ export default function NotificacoesPage() {
           <div className="eyebrow-tag mb-2">
             <Radio size={10} />Central de Comunicações · Tempo Real
           </div>
-          <h1 className="page-title" style={{ marginBottom: '2px' }}>Notificações & Chat</h1>
-          <p className="page-subtitle">{loadingNot ? 'Carregando...' : `${counts.total} eventos · ${counts.comFoto} com foto`}</p>
+          <h1 className="page-title" style={{ marginBottom: '2px' }}>Avisos</h1>
+          <p className="page-subtitle">
+            {tab === 'central' ? (naoLidas === 1 ? '1 aviso não lido' : `${naoLidas} avisos não lidos`)
+              : tab === 'chat' ? 'Chat interno'
+              : loadingNot ? 'Carregando...' : `${counts.total} eventos · ${counts.comFoto} com foto`}
+          </p>
         </div>
 
         {/* Tabs */}
         <div className="flex gap-0.5 self-start sm:self-auto shrink-0" style={{ backgroundColor: '#E2E6F0', padding: '3px', borderRadius: '3px' }}>
           {([
-            { key: 'notificacoes', label: 'Notificações', icon: <Bell size={12} /> },
+            { key: 'central', label: 'Central', icon: <Bell size={12} /> },
+            ...(ehGestao ? [{ key: 'notificacoes', label: 'Atividade', icon: <Radio size={12} /> }] : []),
             { key: 'chat', label: 'Chat Interno', icon: <MessageSquare size={12} /> },
-          ] as const).map(t => (
+          ] as { key: 'central' | 'notificacoes' | 'chat'; label: string; icon: React.ReactNode }[]).map(t => (
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
@@ -425,10 +478,15 @@ export default function NotificacoesPage() {
                 boxShadow: tab === t.key ? '0 1px 4px rgba(26,41,74,0.3)' : 'none',
               }}
             >
-              {t.icon}<span className="hidden xs:inline sm:hidden md:inline">{t.label}</span>
-              {t.key === 'notificacoes' && counts.total > 0 && (
-                <span style={{ backgroundColor: tab === 'notificacoes' ? 'rgba(255,255,255,0.2)' : '#B83832', color: '#fff', borderRadius: '10px', fontSize: '9px', fontWeight: 900, padding: '1px 6px', minWidth: '18px', textAlign: 'center' }}>
-                  {counts.total}
+              {t.icon}<span>{t.label}</span>
+              {t.key === 'chat' && chatNovas > 0 && (
+                <span data-teste="chat-novas" aria-label={`${chatNovas} mensagens novas`} style={{ backgroundColor: '#B83832', color: '#fff', borderRadius: '10px', fontSize: '9px', fontWeight: 900, padding: '1px 6px', minWidth: '18px', textAlign: 'center' }}>
+                  {chatNovas > 99 ? '99+' : chatNovas}
+                </span>
+              )}
+              {t.key === 'central' && naoLidas > 0 && (
+                <span style={{ backgroundColor: tab === 'central' ? 'rgba(255,255,255,0.2)' : '#B83832', color: '#fff', borderRadius: '10px', fontSize: '9px', fontWeight: 900, padding: '1px 6px', minWidth: '18px', textAlign: 'center' }}>
+                  {naoLidas > 99 ? '99+' : naoLidas}
                 </span>
               )}
             </button>
@@ -436,8 +494,11 @@ export default function NotificacoesPage() {
         </div>
       </div>
 
-      {/* ══════════ NOTIFICAÇÕES ══════════ */}
-      {tab === 'notificacoes' && (
+      {/* ══════════ CENTRAL ══════════ */}
+      {tab === 'central' && <CentralAvisos perfil={perfil} />}
+
+      {/* ══════════ ATIVIDADE (feed de eventos, só gestão) ══════════ */}
+      {tab === 'notificacoes' && ehGestao && (
         <div className={`grid gap-3 md:gap-4 items-start ${selecionada ? 'grid-cols-1 lg:grid-cols-[1fr_340px]' : 'grid-cols-1 lg:grid-cols-[1fr_200px]'}`}>
 
           {/* ── Feed principal ── */}

@@ -5,12 +5,40 @@ import { useRouter } from 'next/navigation'
 import { Mail, Lock, Eye, EyeOff, Shield, ChevronRight, Loader2 } from 'lucide-react'
 import { useAuth } from '@/hooks/useAuth'
 
+const ULTIMO_USUARIO = 'escolta.ultimo_usuario'
+
+function mensagemDeLogin(erro: string): string {
+  const normalizado = erro.toLocaleLowerCase('pt-BR')
+  if (normalizado.includes('usuário não encontrado') || normalizado.includes('user not found')) {
+    return 'Usuário não encontrado. Confira o nome informado ou fale com o administrador.'
+  }
+  if (normalizado.includes('invalid login credentials') || normalizado.includes('e-mail ou senha incorretos')) {
+    return 'Usuário não encontrado ou senha incorreta. Confira os dados e tente novamente.'
+  }
+  if (normalizado.includes('fetch') || normalizado.includes('network') || normalizado.includes('conexão')) {
+    return 'Sem internet no momento. Confira a conexão e tente novamente.'
+  }
+  if (normalizado.includes('conta está') || normalizado.includes('conta ainda') || normalizado === 'acesso negado.') {
+    return erro
+  }
+  return 'O servidor não conseguiu concluir o login. Aguarde um momento e tente novamente.'
+}
+
 export default function LoginPage() {
   const [email,       setEmail]       = useState('')
   const [password,    setPassword]    = useState('')
   const [showPass,    setShowPass]    = useState(false)
   const router = useRouter()
-  const { user, login, loading, error, isAuthenticated, precisaTrocarSenha } = useAuth()
+  const { login, loading, error, isAuthenticated, precisaTrocarSenha } = useAuth()
+
+  useEffect(() => {
+    try {
+      const ultimoUsuario = window.localStorage.getItem(ULTIMO_USUARIO)
+      if (ultimoUsuario) setEmail(ultimoUsuario)
+    } catch {
+      // Navegação privada ou armazenamento bloqueado não impedem o login.
+    }
+  }, [])
 
   // Redireciona se já estiver logado ao carregar a página
   useEffect(() => {
@@ -28,6 +56,11 @@ export default function LoginPage() {
       : `${identificador.toLowerCase()}@operador.local`
     const result = await login(loginEmail, password)
     if (result.ok) {
+      try {
+        window.localStorage.setItem(ULTIMO_USUARIO, identificador)
+      } catch {
+        // O usuário entrou; lembrar o identificador é apenas uma conveniência local.
+      }
       router.replace(result.trocarSenha ? '/auth/trocar-senha' : '/dashboard')
     }
   }
@@ -184,6 +217,10 @@ export default function LoginPage() {
                 placeholder="Usuário ou e-mail de acesso"
                 required
                 autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                inputMode="email"
                 className="w-full outline-none transition-all font-bold text-sm"
                 style={{
                   height: '56px',
@@ -228,6 +265,8 @@ export default function LoginPage() {
               <button
                 type="button"
                 onClick={() => setShowPass(!showPass)}
+                aria-label={showPass ? 'Ocultar senha' : 'Mostrar senha'}
+                aria-pressed={showPass}
                 className="flex items-center justify-center transition-all"
                 style={{
                   position: 'absolute', right: '12px', top: '50%', transform: 'translateY(-50%)',
@@ -244,6 +283,8 @@ export default function LoginPage() {
             {/* Erro */}
             {error && (
               <div
+                role="alert"
+                aria-live="polite"
                 className="flex items-center gap-3 animate-in fade-in zoom-in"
                 style={{
                   backgroundColor: 'rgba(231,76,60,0.05)',
@@ -262,7 +303,7 @@ export default function LoginPage() {
                 <p className="font-black uppercase" style={{
                   fontSize: '11px', color: '#e74c3c', letterSpacing: '0.1em'
                 }}>
-                  {error}
+                  {mensagemDeLogin(error)}
                 </p>
               </div>
             )}
@@ -273,7 +314,7 @@ export default function LoginPage() {
               disabled={loading}
               className="w-full flex items-center justify-center gap-3 font-black uppercase transition-all group overflow-hidden disabled:opacity-60"
               style={{
-                height: '56px',
+                minHeight: '64px',
                 backgroundColor: '#1A294A',
                 color: '#fff',
                 fontSize: '11px',

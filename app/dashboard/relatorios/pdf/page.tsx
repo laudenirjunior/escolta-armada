@@ -3,6 +3,10 @@
 import { useEffect, useState, useCallback, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
+import { urlAssinada, VALIDADE_IMPRESSAO_S } from '@/lib/fotos-url'
+import { useAuth } from '@/hooks/useAuth'
+import { EMBED_CONCLUSAO, linhasPendencias, type ConclusaoEmbutida } from '@/lib/gestao'
+import { textoInterestadual } from '@/lib/uf-endereco'
 
 const sb = createClient() as any
 
@@ -22,6 +26,15 @@ interface EscoltaPDF {
   cliente: { id: string; nome_cliente: string; cor_destaque: string | null } | null
   veiculos: { quilometragem_saida: number; quilometragem_retorno: number | null; abastecimento_valor: number | null; abastecimento_litros: number | null }[]
   efetivo: { valor_pago_vigilante: number | null; papel_na_escolta: string | null; confirmado: boolean; vigilante: { nome_completo: string } | null }[]
+  // Onda I: conclusão antecipada válida (etiqueta "com pendências" na lista e a lista de
+  // pendências logo abaixo, adendo 4.3.6).
+  conclusao?: ConclusaoEmbutida[] | null
+  // Onda K (migration 216): etiqueta Interestadual.
+  origem_uf?: string | null
+  destino_uf?: string | null
+  origem_uf_estimada?: boolean | null
+  destino_uf_estimada?: boolean | null
+  interestadual?: boolean | null
 }
 interface OcorrenciaPDF {
   id: string; descricao: string; data_hora: string
@@ -199,8 +212,13 @@ function SecaoEscoltas({ escoltas }: { escoltas: EscoltaPDF[] }) {
                 <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {(e.origem_endereco ?? '—').split(',')[0]} → {(e.destino_endereco ?? '—').split(',')[0]}
                 </span>
+                {e.interestadual === true && (
+                  <span data-teste="etiqueta-interestadual" style={{ display: 'inline-block', marginTop: '2px', padding: '0 5px', borderRadius: '2px', background: '#FFF7E6', color: '#8A5A10', fontSize: '9px', fontWeight: 800, textTransform: 'uppercase' }}>
+                    {textoInterestadual(e)}
+                  </span>
+                )}
               </td>
-              <td><span className={`status-badge status-${e.status}`}>{STATUS_LABEL[e.status] ?? e.status}</span></td>
+              <td><span className={`status-badge status-${e.status}`}>{STATUS_LABEL[e.status] ?? e.status}{(e.conclusao ?? []).some(c => !c.anulado_em) ? ' (com pendências)' : ''}</span></td>
               <td style={{ fontVariantNumeric: 'tabular-nums', fontSize: '10px' }}>{fmt(e.data_hora_prevista)}</td>
               <td style={{ fontVariantNumeric: 'tabular-nums', fontSize: '10px' }}>{e.data_finalizacao ? fmt(e.data_finalizacao) : '—'}</td>
               <td style={{ fontVariantNumeric: 'tabular-nums' }}>{fmtDur(calcDurMin(e))}</td>
@@ -214,6 +232,36 @@ function SecaoEscoltas({ escoltas }: { escoltas: EscoltaPDF[] }) {
             <td style={{ fontWeight: 900, fontVariantNumeric: 'tabular-nums' }}>{escoltas.reduce((s,e) => s + calcKm(e.veiculos), 0).toLocaleString('pt-BR')}</td>
           </tr>
         </tfoot>
+      </table>
+      <PendenciasDeConclusao escoltas={escoltas} />
+    </div>
+  )
+}
+
+/** Onda I (adendo 4.3.6): o que não foi feito nas escoltas concluídas pela gestão antes do fim. */
+function PendenciasDeConclusao({ escoltas }: { escoltas: EscoltaPDF[] }) {
+  const linhas = linhasPendencias(escoltas)
+  if (linhas.length === 0) return null
+  return (
+    <div style={{ marginTop: '20px' }} data-teste="pdf-pendencias">
+      <h3 style={{ fontSize: '12px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B7791F', marginBottom: '6px' }}>Pendências de conclusão</h3>
+      <p style={{ fontSize: '11px', color: '#53648A', marginBottom: '10px' }}>{linhas.length} item(ns) não feito(s) nas escoltas concluídas pela gestão antes do fim.</p>
+      <table className="tabela">
+        <thead>
+          <tr><th>Escolta</th><th>Etapa</th><th>Viatura</th><th>Item não feito</th><th>Concluída por</th><th>Quando (Brasília)</th></tr>
+        </thead>
+        <tbody>
+          {linhas.map((l, i) => (
+            <tr key={`${l.escolta_id}:${i}`}>
+              <td style={{ fontWeight: 700 }}>{l.codigo}</td>
+              <td>{l.etapa}</td>
+              <td style={{ fontFamily: 'monospace' }}>{l.placa}</td>
+              <td>{l.item}</td>
+              <td>{l.quem}</td>
+              <td style={{ fontVariantNumeric: 'tabular-nums', fontSize: '10px' }}>{l.quando}</td>
+            </tr>
+          ))}
+        </tbody>
       </table>
     </div>
   )
@@ -569,6 +617,7 @@ function RelatoriosPDFConteudo() {
       let escoltasQ = sb.from('escoltas').select(`
         id, codigo_escolta, status, data_hora_prevista, data_finalizacao,
         origem_endereco, destino_endereco, valor_cobrado, outros_custos,
+        origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada, interestadual,
         cliente:clientes(id, nome_cliente, cor_destaque),
         veiculos:escolta_veiculos(
           id, veiculo_id,
@@ -579,8 +628,11 @@ function RelatoriosPDFConteudo() {
         efetivo:escolta_efetivo(
           valor_pago_vigilante, papel_na_escolta, confirmado,
           vigilante:vigilantes(nome_completo)
-        )
+        ),
+        ${EMBED_CONCLUSAO}
       `)
+      // Onda I: arquivada fora do relatório.
+      escoltasQ = escoltasQ.is('arquivada_em', null)
 
       if (from) escoltasQ = escoltasQ.gte('data_hora_prevista', from)
       if (to)   escoltasQ = escoltasQ.lte('data_hora_prevista', to)
@@ -592,7 +644,9 @@ function RelatoriosPDFConteudo() {
       else promises.push(Promise.resolve({ data: [] }))
 
       if (needsOcorr) {
-        let oQ = sb.from('ocorrencias').select(`id, descricao, data_hora, tipo:dom_tipos_ocorrencia(nome), autor:usuarios!registrado_por(nome_completo), escolta:escoltas(codigo_escolta)`)
+        // Onda I: só ocorrência válida, de escolta não arquivada (filha lida por data).
+        let oQ = sb.from('ocorrencias').select(`id, descricao, data_hora, tipo:dom_tipos_ocorrencia(nome), autor:usuarios!registrado_por(nome_completo), escolta:escoltas!inner(codigo_escolta, arquivada_em)`)
+          .is('anulado_em', null).is('escolta.arquivada_em', null)
         if (from) oQ = oQ.gte('data_hora', from)
         if (to)   oQ = oQ.lte('data_hora', to)
         oQ = oQ.order('data_hora', { ascending: false })
@@ -611,7 +665,7 @@ function RelatoriosPDFConteudo() {
         // Defeito 4: faltava o alias, e SecaoChecklists le c.respostas.
         const cQ = sb.from('checklists').select(`id, tipo, concluido, data_inicio, data_conclusao, respostas:checklist_respostas(conforme, descricao_item)`)
         if (escVeicIds.length > 0) {
-          promises.push(cQ.in('escolta_veiculo_id', escVeicIds))
+          promises.push(cQ.in('escolta_veiculo_id', escVeicIds).is('anulado_em', null))
         } else {
           // checklists nao tem escolta_id. Sem viatura nao ha checklist a mostrar,
           // e filtrar por escolta_id daria erro 400 e esvaziaria o relatorio inteiro.
@@ -622,7 +676,8 @@ function RelatoriosPDFConteudo() {
       if (clienteId) {
         const { data: cliData } = await sb.from('clientes').select('nome_cliente, metadados').eq('id', clienteId).maybeSingle() as any
         setClienteNome(cliData?.nome_cliente ?? '')
-        setClienteLogoUrl(cliData?.metadados?.logo_url ?? '')
+        // Lote 2026-10: bucket privado; logo por URL assinada com validade para imprimir.
+        setClienteLogoUrl((await urlAssinada(sb, cliData?.metadados?.logo_url, VALIDADE_IMPRESSAO_S)) ?? '')
       }
 
       const [escResult, ocorrResult, checkResult] = await Promise.all(promises)
@@ -747,10 +802,21 @@ function RelatoriosPDFConteudo() {
   )
 }
 
-export default function RelatoriosPDFPage() {
+function RelatoriosPDFComSuspense() {
   return (
     <Suspense fallback={<div style={{ padding: 40, fontFamily: 'system-ui', color: '#5A6A80' }}>Carregando relatorio...</div>}>
       <RelatoriosPDFConteudo />
     </Suspense>
   )
+}
+
+// Lote 2026-10 (M3): o PDF traz financeiro e combustível. Só os perfis do menu Relatórios
+// abrem; antes o operador abria a URL direto e via o custo das próprias escoltas.
+export default function RelatoriosPDFPage() {
+  const { user, loading } = useAuth()
+  if (loading) return null
+  if (!['administrador', 'gestor', 'supervisor', 'central'].includes((user?.perfil?.codigo ?? '') as string)) {
+    return <div className="p-6 text-sm">Acesso restrito à gestão.</div>
+  }
+  return <RelatoriosPDFComSuspense />
 }

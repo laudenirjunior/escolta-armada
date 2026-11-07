@@ -21,7 +21,14 @@ import {
   FileText, Map as MapIcon, Octagon, Radio, Shield, X, Zap,
 } from 'lucide-react'
 import { FOTOS_POR_PONTO } from '@/lib/fluxo-escolta'
+import { SugestoesTexto } from '@/components/ui/sugestoes-texto'
+import { CATEGORIAS_EMERGENCIA, CATEGORIAS_OCORRENCIA, comCategoria, relatoAlemDaCategoria } from '@/lib/textos-padrao'
 import { TOTAL_ETAPAS, type AcaoDetalhe, type ProximaAcao } from '@/lib/proximo-passo-operador'
+import { EstouNaBase } from './estou-na-base'
+import { AvisosMural } from '@/components/escolta/avisos-mural'
+import { CartaoEscolta } from '@/components/escolta/cartao-escolta'
+import type { CartaoEscolta as CartaoDados } from '@/lib/cartao-escolta'
+import { ContadorFila } from '@/components/offline/offline-provider'
 
 // ─── Paleta Navy (app/globals.css), sem migrar paleta ─────────────────────────
 const COR = {
@@ -56,6 +63,8 @@ export interface EscoltaGuiada {
   origem: string
   destino: string
   prevista: string
+  /** Onda K: dados do cartão padrão (mesmo cartão da lista, do mural e do mapa). */
+  cartao?: CartaoDados | null
 }
 
 export interface Pendencia { texto: string; nivel: 'alerta' | 'atencao' }
@@ -73,7 +82,9 @@ export interface PainelGuiadoProps {
   escolta: EscoltaGuiada | null
   escoltasParaEscolher: { id: string; codigo: string | null; cliente: string | null }[]
   onSelecionarEscolta: (id: string) => void
-  agendadas: { id: string; codigo: string | null; cliente: string | null; prevista: string }[]
+  agendadas: { id: string; codigo: string | null; cliente: string | null; prevista: string; cartao?: CartaoDados | null }[]
+  /** Perfil de quem usa (etiquetas e equipe do cartão). */
+  perfil?: string | null
   semVinculoCadastro: boolean
   proxima: ProximaAcao | null
   /**
@@ -121,6 +132,9 @@ export interface PainelGuiadoProps {
   onConfirmarOcorrencia: () => void
 
   emergConfirm: boolean
+  /** Onda M (D9): categoria opcional da emergência; nunca atrasa nem bloqueia o CONFIRMAR. */
+  emergCategoria?: string | null
+  onEmergCategoria?: (c: string | null) => void
   onEmergIniciar: () => void
   onEmergCancelar: () => void
   onEmergConfirmar: () => void
@@ -404,6 +418,8 @@ export function PainelGuiado(p: PainelGuiadoProps) {
     return (
       <div className="max-w-xl mx-auto space-y-4">
         <h1 className="font-black" style={{ fontSize: '22px', color: COR.texto }}>Painel Operacional Guiado</h1>
+        <AvisosMural />
+        <ContadorFila />
         {p.semVinculoCadastro ? (
           <Cartao borda="#E9C46A">
             <p className="font-black" style={{ fontSize: '18px', color: COR.texto }}>Seu cadastro não está ligado a um vigilante</p>
@@ -413,13 +429,20 @@ export function PainelGuiado(p: PainelGuiadoProps) {
           p.agendadas.map((a) => (
             <Cartao key={a.id}>
               <Rotulo>Escolta Agendada</Rotulo>
-              <p className="font-black" style={{ fontSize: '20px', color: COR.texto }}>{a.cliente ?? 'Cliente'}</p>
-              <p className="flex items-center gap-2" style={{ fontSize: '16px', color: COR.apoio }}>
-                <Clock size={16} />
-                {new Date(a.prevista).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                {a.codigo ? ` · ${a.codigo}` : ''}
-              </p>
+              {a.cartao ? (
+                <CartaoEscolta variante="cartao" tamanho="grande" escolta={a.cartao} perfil={p.perfil} />
+              ) : (
+                <>
+                  <p className="font-black" style={{ fontSize: '20px', color: COR.texto }}>{a.cliente ?? 'Cliente'}</p>
+                  <p className="flex items-center gap-2" style={{ fontSize: '16px', color: COR.apoio }}>
+                    <Clock size={16} />
+                    {new Date(a.prevista).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })}
+                    {a.codigo ? ` · ${a.codigo}` : ''}
+                  </p>
+                </>
+              )}
               <p style={{ fontSize: '16px', color: COR.texto }}>Com a equipe na base, inicie o pré-início da escolta.</p>
+              <EstouNaBase escoltaId={a.id} />
               <BotaoPrincipal onClick={() => p.onAbrirDetalhe('pre_inicio', a.id)} icone={<ChevronRight size={22} />}>
                 Iniciar Pré-início da Escolta
               </BotaoPrincipal>
@@ -509,7 +532,8 @@ export function PainelGuiado(p: PainelGuiadoProps) {
   if (p.painel === 'ocorrencia') {
     const faltas = faltando([
       [!!p.tipoOcId, 'escolher o tipo'],
-      [!!p.descOc.trim(), 'descrever o que aconteceu'],
+      // Onda M (D9): a categoria inserida por toque não conta como relato.
+      [!!relatoAlemDaCategoria(p.descOc), 'descrever o que aconteceu'],
     ])
     return (
       <div className="max-w-xl mx-auto space-y-4 pb-4">
@@ -525,6 +549,7 @@ export function PainelGuiado(p: PainelGuiadoProps) {
         <Cartao>
           <Rotulo>2. O que aconteceu (obrigatório)</Rotulo>
           {/* Ocorrencia nunca abre preenchida: existe porque algo fugiu do previsto. */}
+          <SugestoesTexto className="mb-2" titulo="Categoria (toque para marcar; depois descreva o fato)" sugestoes={CATEGORIAS_OCORRENCIA} onInserir={(c) => p.onDescOc(comCategoria(p.descOc, c))} />
           <textarea rows={4} value={p.descOc} onChange={(e) => p.onDescOc(e.target.value)} placeholder={p.placeholderOc} className="input-light w-full resize-none" style={{ fontSize: '16px' }} />
         </Cartao>
         <Cartao>
@@ -579,10 +604,18 @@ export function PainelGuiado(p: PainelGuiadoProps) {
 
       {/* Escolta e etapa */}
       <div style={{ backgroundColor: COR.fundo, border: `1.5px solid ${COR.borda}`, borderRadius: '4px', overflow: 'hidden' }}>
-        <div style={{ height: '6px', backgroundColor: escolta.cor ?? COR.navy }} />
-        <div className="p-4 space-y-2">
-          <p className="font-black leading-tight" style={{ fontSize: '22px', color: COR.texto }}>{escolta.cliente ?? 'Escolta'}</p>
-          <p style={{ fontSize: '14px', color: COR.apoio }}>{escolta.codigo ?? 'Sem código'}</p>
+        {escolta.cartao ? (
+          <CartaoEscolta variante="cartao" tamanho="grande" escolta={escolta.cartao} perfil={p.perfil} />
+        ) : (
+          <>
+            <div style={{ height: '6px', backgroundColor: escolta.cor ?? COR.navy }} />
+            <div className="px-4 pt-4 space-y-2">
+              <p className="font-black leading-tight" style={{ fontSize: '22px', color: COR.texto }}>{escolta.cliente ?? 'Escolta'}</p>
+              <p style={{ fontSize: '14px', color: COR.apoio }}>{escolta.codigo ?? 'Sem código'}</p>
+            </div>
+          </>
+        )}
+        <div className="px-4 pb-4 pt-2 space-y-2">
           {proxima && etapaNum > 0 && (
             <>
               <p className="font-bold" style={{ fontSize: '17px', color: COR.navy }}>
@@ -621,6 +654,9 @@ export function PainelGuiado(p: PainelGuiadoProps) {
           )}
         </div>
       )}
+
+      {/* Onda L: registros guardados no aparelho, não aceitos e recusados (some com zero). */}
+      <ContadorFila />
 
       {/* Pendencias */}
       <Cartao>
@@ -682,6 +718,14 @@ export function PainelGuiado(p: PainelGuiadoProps) {
           <div className="p-4 space-y-3" style={{ backgroundColor: COR.vermelhoFundo, border: `2px solid ${COR.vermelho}`, borderRadius: '4px' }}>
             <p className="text-center font-black" style={{ fontSize: '19px', color: COR.vermelho }}>Confirmar Emergência?</p>
             <p className="text-center" style={{ fontSize: '15px', color: COR.texto }}>A central será avisada agora. Use só em situação real.</p>
+            {p.onEmergCategoria && (
+              <SugestoesTexto
+                titulo={p.emergCategoria ? `Categoria: ${p.emergCategoria} (opcional)` : 'Categoria (opcional, não precisa para confirmar)'}
+                sugestoes={CATEGORIAS_EMERGENCIA}
+                onInserir={(c) => p.onEmergCategoria?.(p.emergCategoria === c ? null : c)}
+                disabled={p.executando}
+              />
+            )}
             <div className="flex gap-2">
               <button type="button" onClick={p.onEmergCancelar} className="flex-1 font-bold" style={{ minHeight: '56px', fontSize: '16px', backgroundColor: '#fff', border: `1.5px solid ${COR.borda}`, borderRadius: '4px', color: COR.texto }}>
                 Cancelar

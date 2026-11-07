@@ -20,7 +20,18 @@ import { createClient } from '@/lib/supabase/client'
  * Escolta que ainda nao tem equipe pula a confirmacao e o motivo: nao ha nada a
  * substituir, e transformar o caminho simples em burocracia so faria o operador evitar
  * o sistema.
+ *
+ * Lote 2026-10 (M5): com equipe escalada, o pedido vai para a supervisao aprovar
+ * (migration 204). Sem resposta no tempo limite, o banco libera sozinho. O motivo
+ * passa a ter no minimo 20 caracteres. Todas as travas sao conferidas na RPC.
  */
+
+export const MOTIVO_MINIMO = 20
+
+export interface ResultadoAssumir {
+  substituiu: boolean
+  pedido?: { id: string; expira_em: string }
+}
 
 const sb = createClient() as any
 
@@ -43,13 +54,16 @@ export function DialogoAssumirEscolta({
   /** Vigilante vinculado a quem esta usando. Ele vira o comandante. */
   meuVigilanteId: string | null
   onFechar: () => void
-  onAssumido: (substituiu: boolean) => void
+  onAssumido: (r: ResultadoAssumir) => void
 }) {
   const [etapa, setEtapa] = useState<Etapa>('carregando')
   const [erro, setErro] = useState<string | null>(null)
 
   const [equipeAtual, setEquipeAtual] = useState<Membro[]>([])
   const [viaturaAtual, setViaturaAtual] = useState<Viatura | null>(null)
+  // Onda G: placas das demais viaturas da escolta. A troca vale só para a primeira
+  // viatura, e a mesma placa não pode estar em duas viaturas da escolta (índice da 210).
+  const [placasOutrasViaturas, setPlacasOutrasViaturas] = useState<string[]>([])
 
   const [vigilantes, setVigilantes] = useState<VigilanteOpt[]>([])
   const [veiculos, setVeiculos] = useState<VeiculoOpt[]>([])
@@ -58,6 +72,7 @@ export function DialogoAssumirEscolta({
   const [trocarViatura, setTrocarViatura] = useState(false)
   const [veiculoNovo, setVeiculoNovo] = useState('')
   const [motivo, setMotivo] = useState('')
+  const [tempoLimiteMin, setTempoLimiteMin] = useState(15)
 
   const temEquipe = equipeAtual.length > 0
 
@@ -65,17 +80,25 @@ export function DialogoAssumirEscolta({
     setEtapa('carregando')
     setErro(null)
     try {
-      const [{ data: info, error: e1 }, { data: vigs, error: e2 }, { data: veics }] = await Promise.all([
+      const [{ data: info, error: e1 }, { data: vigs, error: e2 }, { data: veics }, { data: cfg }, { error: semTravas }] = await Promise.all([
         sb.rpc('equipe_escalada', { p_escolta_id: escoltaId }),
         sb.rpc('vigilantes_para_escala'),
         sb.from('veiculos').select('id, placa, modelo').eq('status', 'ativo').order('placa'),
+        sb.from('configuracoes_mural').select('aprovacao_tempo_limite_min').maybeSingle(),
+        sb.rpc('mural_travas_ativas'),
       ])
+      if (cfg?.aprovacao_tempo_limite_min) setTempoLimiteMin(cfg.aprovacao_tempo_limite_min)
       if (e1) throw new Error(e1.message)
       if (e2) throw new Error(e2.message)
 
       const equipe: Membro[] = info?.equipe ?? []
+      // Defesa extra: sem as travas no banco, substituir equipe trocaria na hora.
+      if (equipe.length > 0 && semTravas) {
+        throw new Error('Atualização em andamento: a substituição de equipe volta em instantes. Tente de novo mais tarde.')
+      }
       setEquipeAtual(equipe)
       setViaturaAtual(info?.viaturas?.[0] ?? null)
+      setPlacasOutrasViaturas(((info?.viaturas ?? []) as Viatura[]).slice(1).map(v => v.veiculo_id))
       setVigilantes(vigs ?? [])
       setVeiculos(veics ?? [])
 
@@ -94,12 +117,16 @@ export function DialogoAssumirEscolta({
 
   const enviar = async () => {
     setErro(null)
-    if (temEquipe && motivo.trim().length < 5) {
-      setErro('Descreva o motivo da substituição. Ele fica registrado no histórico da escolta.')
+    if (temEquipe && motivo.trim().length < MOTIVO_MINIMO) {
+      setErro(`Descreva o motivo com pelo menos ${MOTIVO_MINIMO} caracteres. Ele vai para a supervisão e fica no histórico.`)
       return
     }
     if (trocarViatura && !veiculoNovo) {
       setErro('Selecione a viatura que será usada.')
+      return
+    }
+    if (trocarViatura && placasOutrasViaturas.includes(veiculoNovo)) {
+      setErro('Esta viatura já está em outra viatura desta escolta. Escolha outra placa ou mantenha a atual.')
       return
     }
     setEtapa('enviando')
@@ -114,7 +141,24 @@ export function DialogoAssumirEscolta({
       setEtapa('editar')
       return
     }
-    onAssumido(Boolean(data?.substituiu_equipe))
+    if (data?.status === 'pendente') {
+      // Sem o envio pelo banco (Vault ou extensões ausentes), o aviso ao chat central sai
+      // pela rota antiga, uma vez, de quem fez o pedido.
+      if (data.aviso_pelo_banco === false) {
+        fetch('/api/telegram', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            tipo: 'status', destino: 'central', escolta_id: escoltaId, escolta_codigo: codigo,
+            titulo: 'Pedido de substituição de equipe',
+            descricao: `Equipe atual: ${data.equipe_atual ?? '-'}. Motivo: ${motivo.trim()}. Sem resposta até ${new Date(data.expira_em).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })}, o pedido é liberado automaticamente.`,
+          }),
+        }).catch(() => {})
+      }
+      onAssumido({ substituiu: false, pedido: { id: data.pedido_id, expira_em: data.expira_em } })
+      return
+    }
+    onAssumido({ substituiu: Boolean(data?.substituiu_equipe) })
   }
 
   // O proprio usuario nao entra na lista de acompanhantes: ele ja e o comandante.
@@ -159,8 +203,9 @@ export function DialogoAssumirEscolta({
                 <div className="flex items-start gap-2 mb-3">
                   <AlertTriangle size={16} style={{ color: '#8A5A10', flexShrink: 0, marginTop: 1 }} />
                   <p className="text-xs font-bold leading-relaxed" style={{ color: '#8A5A10' }}>
-                    Esta escolta já tem equipe designada. Se você assumir, a equipe abaixo
-                    será substituída e o registro ficará no histórico do sistema.
+                    Esta escolta já tem equipe designada. Seu pedido vai para a supervisão
+                    aprovar. Se ninguém responder em {tempoLimiteMin} minutos, ele é liberado
+                    automaticamente e você assume. Tudo fica no histórico.
                   </p>
                 </div>
 
@@ -196,7 +241,7 @@ export function DialogoAssumirEscolta({
               </div>
 
               <p className="text-sm font-bold text-center" style={{ color: '#1E2D35' }}>
-                Deseja realmente assumir esta escolta?
+                {temEquipe ? 'Deseja pedir para assumir esta escolta?' : 'Deseja realmente assumir esta escolta?'}
               </p>
 
               {erro && (
@@ -211,7 +256,7 @@ export function DialogoAssumirEscolta({
                 <button onClick={() => setEtapa('editar')}
                   className="flex-1 text-xs font-black uppercase tracking-wider text-white"
                   style={{ minHeight: '44px', backgroundColor: '#C8813A' }}>
-                  Sim, assumir
+                  Sim, pedir
                 </button>
               </div>
             </>
@@ -268,7 +313,7 @@ export function DialogoAssumirEscolta({
                   <select value={veiculoNovo} onChange={e => setVeiculoNovo(e.target.value)}
                     className="input-light w-full mt-2 text-sm" style={{ minHeight: '44px' }}>
                     <option value="">Selecione a viatura</option>
-                    {veiculos.map(v => (
+                    {veiculos.filter(v => !placasOutrasViaturas.includes(v.id)).map(v => (
                       <option key={v.id} value={v.id}>{v.placa}{v.modelo ? ` · ${v.modelo}` : ''}</option>
                     ))}
                   </select>
@@ -283,8 +328,8 @@ export function DialogoAssumirEscolta({
                   <textarea value={motivo} onChange={e => setMotivo(e.target.value)} rows={3}
                     className="input-light w-full text-sm"
                     placeholder="Ex: equipe escalada não compareceu. Assumindo com a dupla disponível na base." />
-                  <p className="text-[10px] mt-1" style={{ color: '#A8B8C2' }}>
-                    Fica registrado no histórico, junto com quem estava escalado antes.
+                  <p className="text-[10px] mt-1" style={{ color: motivo.trim().length >= MOTIVO_MINIMO ? '#1E7C52' : '#A8B8C2' }}>
+                    {motivo.trim().length} de {MOTIVO_MINIMO} caracteres no mínimo. Vai para a supervisão e fica no histórico.
                   </p>
                 </div>
               )}
@@ -302,7 +347,7 @@ export function DialogoAssumirEscolta({
                 <button onClick={enviar} disabled={etapa === 'enviando'}
                   className="flex-1 text-xs font-black uppercase tracking-wider text-white disabled:opacity-50"
                   style={{ minHeight: '44px', backgroundColor: '#1E7C52' }}>
-                  {etapa === 'enviando' ? 'Assumindo…' : temEquipe ? 'Substituir e assumir' : 'Assumir escolta'}
+                  {etapa === 'enviando' ? 'Enviando…' : temEquipe ? 'Enviar pedido à supervisão' : 'Assumir escolta'}
                 </button>
               </div>
             </>

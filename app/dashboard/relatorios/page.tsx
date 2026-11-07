@@ -10,6 +10,9 @@ import {
   CheckSquare, Square, ChevronUp, Layers,
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
+import { EMBED_CONCLUSAO, linhasPendencias, type ConclusaoEmbutida } from '@/lib/gestao'
+import { rotuloInterestadual, textoInterestadual } from '@/lib/uf-endereco'
+import { corDoCliente } from '@/lib/paleta-clientes'
 
 // ─── Paleta ───────────────────────────────────────────────────────────────────
 const P = {
@@ -77,8 +80,18 @@ interface EscoltaRelatorio {
   origem_endereco: string | null
   destino_endereco: string | null
   cliente: { id: string; nome_cliente: string; cor_destaque: string | null } | null
+  // Onda K (revisão adversarial, menor 5): etiqueta Interestadual na lista e coluna no CSV.
+  origem_uf?: string | null
+  destino_uf?: string | null
+  origem_uf_estimada?: boolean | null
+  destino_uf_estimada?: boolean | null
+  interestadual?: boolean | null
   veiculos: { quilometragem_saida: number; quilometragem_retorno: number | null }[]
+  // Onda I: conclusão antecipada válida vira etiqueta "Concluída com pendências" e a lista
+  // de pendências aparece na seção própria (adendo 4.3.6).
+  conclusao?: ConclusaoEmbutida[] | null
 }
+const comPendencias = (e: EscoltaRelatorio) => (e.conclusao ?? []).some(c => !c.anulado_em)
 interface OcorrenciaRelatorio {
   id: string
   descricao: string
@@ -193,14 +206,25 @@ function toCSVRow(fields: (string | number | null | undefined)[]): string {
   return fields.map(f => `"${String(f ?? '').replace(/"/g, '""')}"`).join(',')
 }
 
+/**
+ * UF de origem, UF de destino e Interestadual (Sim, Não, Não determinado) para o CSV. UF
+ * estimada pela coordenada sai com "(estimada)"; lado fora do Brasil, "fora do Brasil".
+ */
+function colunasUf(e: EscoltaRelatorio): string[] {
+  const uf = (u: string | null | undefined, est: boolean | null | undefined) =>
+    u ? (est ? `${u} (estimada)` : u) : est ? 'fora do Brasil' : ''
+  return [uf(e.origem_uf, e.origem_uf_estimada), uf(e.destino_uf, e.destino_uf_estimada), rotuloInterestadual(e)]
+}
+
 function exportarCSVEscoltas(data: EscoltaRelatorio[], periodo: string): void {
-  const headers = toCSVRow(['Código','Cliente','Status','Origem','Destino','Data/Hora Prevista','Data Finalização','Duração (min)','KM Rodado'])
+  const headers = toCSVRow(['Código','Cliente','Status','Origem','Destino','UF origem','UF destino','Interestadual','Data/Hora Prevista','Data Finalização','Duração (min)','KM Rodado'])
   const rows = data.map(e => toCSVRow([
     e.codigo_escolta,
     e.cliente?.nome_cliente,
     STATUS_LABEL[e.status] ?? e.status,
     e.origem_endereco,
     e.destino_endereco,
+    ...colunasUf(e),
     new Date(e.data_hora_prevista).toLocaleString('pt-BR'),
     e.data_finalizacao ? new Date(e.data_finalizacao).toLocaleString('pt-BR') : '',
     calcDuracaoMin(e),
@@ -236,8 +260,8 @@ function exportarCSVCompleto(
   ocorrencias: OcorrenciaRelatorio[],
   periodo: string
 ): void {
-  const secEscoltas  = ['# ESCOLTAS', toCSVRow(['Código','Cliente','Status','Origem','Destino','Data Prevista','Data Fin.','Duração (min)','KM']),
-    ...escoltas.map(e => toCSVRow([e.codigo_escolta, e.cliente?.nome_cliente, STATUS_LABEL[e.status]??e.status, e.origem_endereco, e.destino_endereco, new Date(e.data_hora_prevista).toLocaleString('pt-BR'), e.data_finalizacao ? new Date(e.data_finalizacao).toLocaleString('pt-BR'):'', calcDuracaoMin(e), calcKmEscolta(e.veiculos)]))]
+  const secEscoltas  = ['# ESCOLTAS', toCSVRow(['Código','Cliente','Status','Origem','Destino','UF origem','UF destino','Interestadual','Data Prevista','Data Fin.','Duração (min)','KM']),
+    ...escoltas.map(e => toCSVRow([e.codigo_escolta, e.cliente?.nome_cliente, STATUS_LABEL[e.status]??e.status, e.origem_endereco, e.destino_endereco, ...colunasUf(e), new Date(e.data_hora_prevista).toLocaleString('pt-BR'), e.data_finalizacao ? new Date(e.data_finalizacao).toLocaleString('pt-BR'):'', calcDuracaoMin(e), calcKmEscolta(e.veiculos)]))]
   const secClientes = ['', '# ANÁLISE POR CLIENTE', toCSVRow(['Cliente','Total','Concluídas','Canceladas','KM Total']),
     ...clientes.map(c => toCSVRow([c.nome, c.total, c.concluidas, c.canceladas, c.kmTotal]))]
   const secOcorr    = ['', '# OCORRÊNCIAS', toCSVRow(['Data/Hora','Código Escolta','Tipo','Descrição','Registrado por']),
@@ -377,11 +401,14 @@ export default function RelatoriosPage() {
     let q = sb.from('escoltas').select(`
       id, codigo_escolta, status, data_hora_prevista, data_finalizacao, criado_em,
       origem_endereco, destino_endereco,
+      origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada, interestadual,
       cliente:clientes(id, nome_cliente, cor_destaque),
-      veiculos:escolta_veiculos(quilometragem_saida, quilometragem_retorno)
+      veiculos:escolta_veiculos(quilometragem_saida, quilometragem_retorno),
+      ${EMBED_CONCLUSAO}
     `)
     .gte('data_hora_prevista', from)
     .lte('data_hora_prevista', to)
+    .is('arquivada_em', null)   // onda I: arquivada fora dos relatórios
     .order('data_hora_prevista', { ascending: false })
 
     if (clienteFiltroId) q = q.eq('cliente_id', clienteFiltroId)
@@ -423,10 +450,12 @@ export default function RelatoriosPage() {
       id, descricao, data_hora,
       tipo:dom_tipos_ocorrencia(nome),
       autor:usuarios!registrado_por(nome_completo),
-      escolta:escoltas(codigo_escolta)
+      escolta:escoltas!inner(codigo_escolta, arquivada_em)
     `)
     .gte('data_hora', from)
     .lte('data_hora', to)
+    .is('anulado_em', null)               // onda I: ocorrência anulada não é válida
+    .is('escolta.arquivada_em', null)
     .order('data_hora', { ascending: false })
 
     const { data } = await q
@@ -483,6 +512,9 @@ export default function RelatoriosPage() {
       (e.destino_endereco ?? '').toLowerCase().includes(q)
     )
   })
+
+  // Onda I: pendências das concluídas antes do fim, das escoltas que estão na tabela.
+  const pendenciasTabela = linhasPendencias(escFiltradas)
 
   const escOrdenadas = [...escFiltradas].sort((a, b) => {
     if (!sortDir) return 0
@@ -1050,14 +1082,17 @@ export default function RelatoriosPage() {
                             style={{ cursor: 'pointer' }}
                             onClick={() => window.open(`/dashboard/escoltas/${e.id}`, '_blank')}
                           >
-                            <td><span style={{ fontFamily: 'monospace', fontSize: '12px', fontWeight: 700, color: P.text }}>{e.codigo_escolta ?? '—'}</span></td>
+                            <td>
+                              <span style={{ fontFamily: 'monospace', fontSize: '12px', fontWeight: 700, color: P.text }}>{e.codigo_escolta ?? '-'}</span>
+                              {e.interestadual === true && <span className="badge-warning ml-2 text-[10px]" data-teste="etiqueta-interestadual">{textoInterestadual(e)}</span>}
+                            </td>
                             <td>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                {e.cliente?.cor_destaque && <div style={{ width: '6px', height: '6px', borderRadius: '2px', backgroundColor: e.cliente.cor_destaque, flexShrink: 0 }} />}
+                                {e.cliente?.cor_destaque && <div style={{ width: '6px', height: '6px', borderRadius: '2px', backgroundColor: corDoCliente(e.cliente.cor_destaque), flexShrink: 0 }} />}
                                 <span style={{ fontSize: '12px', color: P.text, maxWidth: '130px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.cliente?.nome_cliente ?? '—'}</span>
                               </div>
                             </td>
-                            <td><span className={STATUS_BADGE[e.status] ?? 'badge-neutral'}>{STATUS_LABEL[e.status] ?? e.status}</span></td>
+                            <td><span className={STATUS_BADGE[e.status] ?? 'badge-neutral'}>{STATUS_LABEL[e.status] ?? e.status}</span>{comPendencias(e) && <span className="badge-warning ml-1">Com pendências</span>}</td>
                             <td><span style={{ fontSize: '11px', color: P.textSub, maxWidth: '140px', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.origem_endereco ? e.origem_endereco.split(',').slice(0,2).join(',') : '—'}</span></td>
                             <td><span style={{ fontSize: '11px', color: P.textSub, maxWidth: '140px', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.destino_endereco ? e.destino_endereco.split(',').slice(0,2).join(',') : '—'}</span></td>
                             <td><span style={{ fontSize: '11px', color: P.textSub, whiteSpace: 'nowrap' }}>{new Date(e.data_hora_prevista).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'2-digit', hour:'2-digit', minute:'2-digit' })}</span></td>
@@ -1083,11 +1118,14 @@ export default function RelatoriosPage() {
                         className="w-full text-left rounded-lg p-3 border transition-all active:scale-[0.99]"
                         style={{ borderColor: P.border, backgroundColor: '#fff' }}>
                         <div className="flex items-center justify-between mb-1.5">
-                          <span style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: 700, color: P.text }}>{e.codigo_escolta ?? '—'}</span>
-                          <span className={STATUS_BADGE[e.status] ?? 'badge-neutral'}>{STATUS_LABEL[e.status] ?? e.status}</span>
+                          <span style={{ fontFamily: 'monospace', fontSize: '13px', fontWeight: 700, color: P.text }}>
+                            {e.codigo_escolta ?? '-'}
+                            {e.interestadual === true && <span className="badge-warning ml-2 text-[10px]" data-teste="etiqueta-interestadual">{textoInterestadual(e)}</span>}
+                          </span>
+                          <span className={STATUS_BADGE[e.status] ?? 'badge-neutral'}>{STATUS_LABEL[e.status] ?? e.status}{comPendencias(e) ? ' · com pendências' : ''}</span>
                         </div>
                         <div className="flex items-center gap-1.5 mb-1">
-                          {e.cliente?.cor_destaque && <div style={{ width: '6px', height: '6px', borderRadius: '2px', backgroundColor: e.cliente.cor_destaque, flexShrink: 0 }} />}
+                          {e.cliente?.cor_destaque && <div style={{ width: '6px', height: '6px', borderRadius: '2px', backgroundColor: corDoCliente(e.cliente.cor_destaque), flexShrink: 0 }} />}
                           <span style={{ fontSize: '12px', fontWeight: 600, color: P.text }}>{e.cliente?.nome_cliente ?? '—'}</span>
                         </div>
                         <p style={{ fontSize: '11px', color: P.textSub }} className="truncate">{e.origem_endereco ? e.origem_endereco.split(',').slice(0,2).join(',') : '—'}</p>
@@ -1142,6 +1180,39 @@ export default function RelatoriosPage() {
               </div>
             )}
           </div>
+
+          {/* Onda I (adendo 4.3.6): lista das pendências das escoltas concluídas antes do fim. */}
+          {!loading && pendenciasTabela.length > 0 && (
+            <div style={cardStyle} data-teste="relatorio-pendencias">
+              <div style={{ padding: '12px 16px', borderBottom: `1px solid ${P.border}` }}>
+                <h3 style={{ fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.08em', color: '#B7791F' }}>Pendências de conclusão</h3>
+                <p style={{ fontSize: '11px', color: P.textSub, marginTop: '2px' }}>
+                  O que não foi feito nas escoltas concluídas pela gestão antes do fim ({pendenciasTabela.length} item(ns)).
+                </p>
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table className="table-content">
+                  <thead>
+                    <tr>
+                      {['Escolta', 'Etapa', 'Viatura', 'Item não feito', 'Concluída por', 'Quando (Brasília)'].map(h => <th key={h}>{h}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pendenciasTabela.map((l, i) => (
+                      <tr key={`${l.escolta_id}:${i}`} data-teste="relatorio-pendencia">
+                        <td><span style={{ fontFamily: 'monospace', fontSize: '12px', fontWeight: 700, color: P.text }}>{l.codigo}</span></td>
+                        <td style={{ fontSize: '11px', color: P.text }}>{l.etapa}</td>
+                        <td style={{ fontSize: '11px', fontFamily: 'monospace', color: P.text }}>{l.placa}</td>
+                        <td style={{ fontSize: '11px', color: P.text }}>{l.item}</td>
+                        <td style={{ fontSize: '11px', color: P.textSub }}>{l.quem}</td>
+                        <td style={{ fontSize: '11px', color: P.textSub, whiteSpace: 'nowrap' }}>{l.quando}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

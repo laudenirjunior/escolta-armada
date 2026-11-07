@@ -5,24 +5,28 @@
  * adequada aquela atividade, alteravel pelo operador. Isso vale para os campos de
  * rotina, e a distincao importa mais do que parece.
  *
- * DUAS FAMILIAS, POR UM MOTIVO DE SEGURANCA OPERACIONAL
+ * TRES FAMILIAS, POR UM MOTIVO DE SEGURANCA OPERACIONAL
  *
  * 1. TEXTO_PADRAO_* entra como VALOR INICIAL. Sao campos de rotina, sem validacao
  *    por tras, cujo conteudo esperado e mesmo "sem alteracoes". Pre-preencher poupa
  *    digitacao na estrada e nao esconde nada.
  *
- * 2. PLACEHOLDER entra como DICA, nunca como valor. Sao os campos cuja unica barreira
- *    e `if (!campo.trim())`. Por um texto de fabrica no valor deles anularia essa
- *    validacao e liberaria a jornada inteira sem uma linha digitada: o wizard de
- *    pre-inicio, a parada, o cancelamento, o reagendamento e o relatorio final
- *    passariam a ser confirmaveis no automatico. Ali o texto orienta, nao preenche.
+ * 2. SUGESTOES entram apenas depois de um toque do operador e continuam editaveis.
+ *    Sao atalhos para campos obrigatorios, nunca valor inicial. O componente de
+ *    sugestoes nao confirma nem libera o campo sozinho.
  *
- * 3. CAMPOS_SEM_TEXTO_PADRAO sao os que nao recebem nem sugestao no valor, porque
- *    existem justamente para registrar o que fugiu do previsto. Ocorrencia,
- *    emergencia, cancelamento e item de checklist nao conforme. Um texto pronto ali
- *    facilita registro falso exatamente onde o registro precisa ser verdadeiro.
+ * 3. CATEGORIAS orientam ocorrencia e emergencia sem criar relato. O que aconteceu
+ *    continua sendo escrito por quem presenciou o fato.
  *
- * As duas telas, detalhe e campo, leem daqui. A frase nunca e escrita duas vezes.
+ * PLACEHOLDER e apenas dica visual, nunca valor. Os campos obrigatorios (wizard de
+ * pre-inicio, parada, cancelamento, reagendamento e relatorio final) tem como unica
+ * barreira `if (!campo.trim())`: um texto de fabrica no valor deles anularia essa
+ * validacao e liberaria a jornada sem uma linha digitada. Por isso as SUGESTOES so
+ * entram por toque (onda M, D9), e a categoria da ocorrencia nao conta como relato
+ * (relatoAlemDaCategoria). CAMPOS_SEM_TEXTO_PADRAO registra as excecoes que nunca
+ * recebem valor automatico. As duas telas, detalhe e campo, leem daqui; a frase nunca
+ * e escrita duas vezes. A excecao conhecida e TEXTO_PADRAO_MATERIAIS (pedido de
+ * Pecanha em 10/09, custo explicado abaixo).
  */
 
 import { STATUS } from './fluxo-escolta'
@@ -78,6 +82,69 @@ export const SUGESTAO_PARADA: Record<string, string> = {
   inspecao: 'Inspeção visual da carga realizada. Lacres íntegros, sem alterações.',
   aguardando: 'Aguardando autorização para prosseguir. Sem alterações.',
 }
+
+/** Sugestões de um toque para os três passos do pré-início. */
+export const SUGESTOES_WIZARD = {
+  materiais: [
+    'Materiais e equipamentos conferidos, sem alterações.',
+    'Materiais conferidos. A não conformidade encontrada está descrita no campo.',
+  ],
+  viatura: [
+    'Viatura conferida, sem avarias aparentes e com documentação regular.',
+    'Viatura conferida. A avaria ou pendência encontrada está descrita no campo.',
+  ],
+  partida: [
+    'Rota principal e alternativa conferidas. Condições favoráveis para a saída.',
+    'Rota conferida. A condição de tráfego ou segurança relevante está descrita no campo.',
+  ],
+} as const
+
+/** Sugestões gerais para parada quando o tipo escolhido não possui frase própria. */
+export const SUGESTOES_PARADA = [
+  'Parada iniciada no local informado. Equipe e carga permanecem seguras.',
+  'Parada concluída sem alterações. Deslocamento retomado.',
+  'Parada solicitada pelo cliente. Motivo e autorização registrados no campo.',
+] as const
+
+export const SUGESTOES_CANCELAMENTO = [
+  'Cancelamento determinado pelo cliente. Motivo e horário registrados no campo.',
+  'Cancelamento determinado pela central. Motivo e horário registrados no campo.',
+  'Cancelamento por condição de segurança. Situação e responsável registrados no campo.',
+] as const
+
+export const SUGESTOES_REAGENDAMENTO = [
+  'Reagendamento solicitado pelo cliente. Nova data e autorização registradas no campo.',
+  'Reagendamento determinado pela central. Nova data e motivo registrados no campo.',
+  'Reagendamento por indisponibilidade operacional. Motivo registrado no campo.',
+] as const
+
+/** Trechos opcionais, nunca um relatório completo nem valor inicial. */
+export const SUGESTOES_RELATORIO_FINAL = [
+  'Carga entregue sem ressalvas no destino informado.',
+  'Equipe retornou à base sem intercorrências após a entrega.',
+  'As ocorrências e providências adotadas estão detalhadas no histórico da escolta.',
+] as const
+
+/** Categorias ajudam a classificar; não descrevem o fato ocorrido. */
+export const CATEGORIAS_OCORRENCIA = [
+  'Acidente de trânsito',
+  'Ameaça ou tentativa de abordagem',
+  'Avaria ou violação da carga',
+  'Desvio ou bloqueio de rota',
+  'Falha mecânica',
+  'Fiscalização ou documentação',
+  'Outra ocorrência',
+] as const
+
+/** Emergência recebe só categoria. O acionamento nunca ganha relato automático. */
+export const CATEGORIAS_EMERGENCIA = [
+  'Risco imediato à equipe',
+  'Tentativa de roubo ou abordagem',
+  'Acidente com vítima',
+  'Pane em local inseguro',
+  'Perda de contato com a central',
+  'Outra emergência',
+] as const
 
 /**
  * Texto modelo do checklist de materiais do wizard de pre-inicio.
@@ -213,3 +280,48 @@ export function comporObservacao(...partes: (string | null | undefined)[]): stri
   const limpas = partes.map((p) => (p ?? '').trim()).filter(Boolean)
   return limpas.length ? limpas.join(' · ') : null
 }
+
+/**
+ * Onda M (D9): junta a frase da sugestão ao que já foi escrito. Campo vazio recebe a frase;
+ * com texto, a frase entra no fim, separada por espaço. Nunca apaga o que o operador digitou.
+ */
+export function juntarSugestao(atual: string, frase: string): string {
+  const a = atual.trim()
+  return a ? `${a} ${frase}` : frase
+}
+
+/**
+ * Categoria da ocorrência (D9): entra como prefixo "Categoria: X. " e é trocada, não somada,
+ * se outra for escolhida. A categoria sozinha não conta como relato: o botão de registrar
+ * confere relatoAlemDaCategoria, que precisa ter texto escrito por quem viu o fato.
+ */
+const PREFIXO_CATEGORIA = /^\s*Categoria: [^.\n]*\.\s*/
+
+export function comCategoria(atual: string, categoria: string): string {
+  return `Categoria: ${categoria}. ${atual.replace(PREFIXO_CATEGORIA, '')}`
+}
+
+export function relatoAlemDaCategoria(texto: string): string {
+  return texto.replace(PREFIXO_CATEGORIA, '').trim()
+}
+
+/**
+ * Revisão cruzada da onda M (achado grave 2.1): a sugestão não pode liberar sozinha um campo
+ * obrigatório quando ela própria pede o fato ("... registrados no campo", "... descrita no
+ * campo") ou quando é só um trecho do relatório final. Tira do texto todas as frases da lista
+ * e devolve o que sobrou, escrito por quem registra. Frases completas (por exemplo, "Viatura
+ * conferida, sem avarias aparentes...") continuam valendo sozinhas, como antes da onda M.
+ */
+export function faltaComplementoDaSugestao(texto: string, sugestoes: readonly string[], sempre = false): boolean {
+  let resto = texto
+  let pedeFato = sempre
+  for (const frase of sugestoes) {
+    if (!frase || !resto.includes(frase)) continue
+    if (/no campo\.?$/.test(frase)) pedeFato = true
+    resto = resto.split(frase).join(' ')
+  }
+  return pedeFato && resto.replace(/[\s.,;:-]+/g, '').length < 3
+}
+
+export const MENSAGEM_COMPLETAR_SUGESTAO =
+  'Complete a sugestão com o que aconteceu (motivo, horário, responsável ou o detalhe pedido). A frase sozinha não basta.'

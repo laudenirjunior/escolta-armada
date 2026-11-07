@@ -104,8 +104,8 @@ Legenda de "Como capturar": **PC** = computador, rota estável, extensão do Chr
 | P26 | `P26 - Campo - Mural Disponiveis.png` | operador / CEL | Escoltas, aba Disponíveis, botão Puxar | O mural de serviço | 1 | CEL | F |
 | P27 | `P27 - Campo - Assumir Escalada.png` | operador / CEL | Diálogo de assumir escolta já escalada, campo de motivo | Assumir de outra equipe exige motivo | 2 | CEL | F |
 | P28 | `P28 - Pre-Inicio - Passo 1 Equipamentos.png` | operador / CEL | Preparação de Partida, passo 1 de 3 | Checklist de material antes de sair | 1 | CEL | F |
-| P29 | `P29 - Pre-Inicio - Passo 2 Viatura.png` | operador / CEL | Passo 2, as cinco fotos da viatura | Cinco fotos, uma por ângulo | 1 | CEL | F |
-| P30 | `P30 - Pre-Inicio - Passo 3 Saida.png` | operador / CEL | Passo 3, KM e foto do hodômetro | O ato que coloca a escolta em operação | 1 | CEL | F |
+| P29 | `P29 - Pre-Inicio - Passo 2 Viatura.png` | operador / CEL | Passo 2, as cinco fotos, o checklist e o bloco Por viatura (KM inicial e foto do painel) | Cinco fotos, uma por ângulo, e o KM e a foto do painel de cada viatura | 1 | CEL | F |
+| P30 | `P30 - Pre-Inicio - Passo 3 Saida.png` | operador / CEL | Passo 3, resumo do KM e da foto do painel e observações de saída | O ato que coloca a escolta em operação | 1 | CEL | F |
 | P31 | `P31 - Campo - Registrar Checkpoint.png` | operador / CEL | Bloco "Registrar Checkpoint", foto capturada, viatura e observação | O gesto que mais se repete | 1 | CEL | F |
 | P32 | `P32 - Campo - Checklist Nao Conformidade.png` | operador / CEL | Checklist, item não conforme, justificativa e foto abertas | Item reprovado exige justificativa e foto | 1 | CEL | F |
 | P33 | `P33 - Campo - Check-in e Parada.png` | operador / CEL | Painel de Ações, diálogo de Check-in (foto e GPS) | O pulso de vida no trajeto | 1 | CEL | F |
@@ -168,7 +168,7 @@ Percurso, na ordem, capturando quando indicado:
 2. Com o ícone do app na tela de início do aparelho: **P03**.
 3. Em Escoltas, aba Disponíveis (mural): **P26**. Se houver uma escolta já escalada, abra o diálogo de assumir com o campo de motivo: **P27**.
 4. Puxe a escolta de demonstração. Na tela Campo, com a escolta ativa e o "Progresso da Operação": **P25**.
-5. Inicie o Pré-Início (pela tela de detalhe). Passo 1, Equipamentos: **P28**. Passo 2, as cinco fotos da viatura: **P29**. Passo 3, KM e hodômetro: **P30**.
+5. Inicie o Pré-Início (pela tela de detalhe). Passo 1, Equipamentos: **P28**. Passo 2, as cinco fotos, o checklist e o bloco Por viatura: **P29**. Passo 3, resumo do KM e observações de saída: **P30**.
 6. Já em trânsito, no bloco "Registrar Checkpoint", com uma foto capturada e a viatura escolhida: **P31**.
 7. No checklist, marque um item como não conforme para abrir a justificativa e a foto: **P32**.
 8. No Painel de Ações, abra o diálogo de Check-in (foto e GPS): **P33**.

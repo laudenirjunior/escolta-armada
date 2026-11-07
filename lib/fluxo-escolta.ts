@@ -118,6 +118,37 @@ export const PROXIMO_STATUS: Record<string, { status: string; label: string } | 
   [STATUS.CANCELADA]: null,
 }
 
+/**
+ * Lote 2026-10, onda I: ordem linear das etapas. O "voltar uma etapa" da gestão vai para o
+ * antecessor nesta sequência (decisão S8), nunca pelo histórico. Vale também para o fluxo 1:
+ * os saltos legados da trigger só servem para avançar. O banco tem a mesma lista
+ * (lote_interno.sequencia_status, migration 218), que é quem decide.
+ */
+export const SEQUENCIA_STATUS: string[] = [
+  STATUS.RASCUNHO,
+  STATUS.AGENDADA,
+  STATUS.EM_PRE_INICIO,
+  STATUS.EM_ANDAMENTO,
+  STATUS.NA_ORIGEM,
+  STATUS.EM_TRANSITO_DESTINO,
+  STATUS.NO_DESTINO,
+  STATUS.EM_TRANSITO_RETORNO,
+  STATUS.RETORNANDO,
+  STATUS.NA_BASE,
+  STATUS.FINALIZADA,
+]
+
+/**
+ * Etapa anterior para o "voltar uma etapa" (S8). Nulo em rascunho, agendada e cancelada.
+ * Numa escolta finalizada por conclusão antecipada o banco volta ao status em que ela estava;
+ * a prévia da RPC mostra o destino real antes de confirmar.
+ */
+export function statusAnterior(status: string): string | null {
+  if (status === STATUS.RASCUNHO || status === STATUS.AGENDADA || status === STATUS.CANCELADA) return null
+  const i = SEQUENCIA_STATUS.indexOf(status)
+  return i > 0 ? SEQUENCIA_STATUS[i - 1] : null
+}
+
 /** As 9 etapas da barra de progresso. */
 export const JORNADA_ETAPAS: { statuses: string[]; label: string }[] = [
   { statuses: [STATUS.RASCUNHO, STATUS.AGENDADA], label: 'Planejamento' },
@@ -155,11 +186,17 @@ export const TIPO_PONTO_POR_STATUS: Record<string, string> = {
 }
 
 /**
- * Regra de fotos por ponto, decidida com Pecanha: ate 5, no minimo 1.
+ * Regra de fotos por ponto. Constante única: mudar aqui muda o Campo, o Painel Guiado e a
+ * tela de detalhe juntos.
+ * - Até 05/11/2026: no mínimo 1, até 5 (decisão de Pecanha de 20/08).
+ * - Onda M (decisão D7 de 06/11/2026): no mínimo 1, até 3. As fotos já saem reduzidas no
+ *   aparelho (lib/carimbo-foto.ts: lado maior de 1600 px, JPEG 0,7).
  * Vale para todo ponto do fluxo. O wizard de pre-inicio tem regra propria,
- * porque la cada uma das 5 fotos da viatura tem significado individual.
+ * porque la cada uma das 5 fotos da viatura tem significado individual (prova de
+ * custódia, mantida pela D7), e a foto do painel do Passo 2 vale como foto do ponto de
+ * saída de cada viatura (onda H).
  */
-export const FOTOS_POR_PONTO = { min: 1, max: 5 } as const
+export const FOTOS_POR_PONTO = { min: 1, max: 3 } as const
 
 export function ehStatusAtivo(status: string): boolean {
   return STATUS_ATIVOS.includes(status)

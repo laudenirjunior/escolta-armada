@@ -64,6 +64,19 @@ export const PODE_VER_FINANCEIRO: CodigoPerfil[] = ['administrador', 'gestor', '
 /** Pode ver relatórios e indicadores */
 export const PODE_VER_RELATORIOS: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor', 'central']
 
+/**
+ * Lote 2026-10, onda I: poder total da gestão. Editar escolta em qualquer status, voltar uma
+ * etapa, zerar para agendada, concluir com pendências e arquivar. Quem garante é o banco
+ * (RPCs da migration 218, com guarda de perfil); esta lista só desenha os botões.
+ */
+export const PODE_PODER_TOTAL: CodigoPerfil[] = ['administrador', 'gestor']
+
+/** Onda I: só o administrador vê as escoltas arquivadas e as recupera. */
+export const PODE_VER_ARQUIVADAS: CodigoPerfil[] = ['administrador']
+
+/** Onda I: tela "Pendências de conclusão" (supervisor ou acima). */
+export const PODE_VER_PENDENCIAS: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor']
+
 /** Pode configurar Telegram e integrações */
 export const PODE_CONFIGURAR_INTEGRACOES: CodigoPerfil[] = ['administrador', 'gestor']
 

@@ -3,23 +3,35 @@
 import { useEffect, useState, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import type { UsuarioAutenticado, Perfil } from '@/types'
+import { ehErroDeRede, esquecerUsuario, lembrarUsuario, pedirArmazenamentoPersistente, perfilOffline, semRede } from '@/lib/offline/sessao'
+import { contarFila, filaDisponivel } from '@/lib/offline/fila'
 
 const supabase = createClient()
+
+// Lote 2026-10 (onda L): leitura do perfil que falhou por falta de rede (não por recusa).
+// Sem rede, o app abre com o perfil guardado no aparelho (snapshot do último login).
+class ErroSemRede extends Error {
+  constructor() { super('Sem conexão com o servidor.'); this.name = 'ErroSemRede' }
+}
 
 export function useAuth() {
   const [user, setUser]       = useState<UsuarioAutenticado | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState<string | null>(null)
   const fetchingRef           = useRef(false)
+  // Onda L: dono da fila de campo e da sessão sem rede.
+  const [authUserId, setAuthUserId] = useState<string | null>(null)
+  const [modoOffline, setModoOffline] = useState(false)
 
   async function carregarPerfil(authUserId: string): Promise<UsuarioAutenticado | null> {
     try {
-      const { data: u } = await supabase
+      const { data: u, error: erroU } = await supabase
         .from('usuarios')
         .select('*')
         .eq('auth_user_id', authUserId)
         .maybeSingle() as any
 
+      if (erroU && ehErroDeRede(erroU)) throw new ErroSemRede()
       if (!u) return null
 
       if (u.status !== 'ativo') {
@@ -32,11 +44,12 @@ export function useAuth() {
         throw new Error(msgs[u.status] ?? 'Acesso negado.')
       }
 
-      const { data: p } = await supabase
+      const { data: p, error: erroP } = await supabase
         .from('dom_perfis')
         .select('id, codigo, nome_exibicao')
         .eq('id', u.perfil_id)
         .maybeSingle() as any
+      if (erroP && ehErroDeRede(erroP)) throw new ErroSemRede()
 
       // Ultimo acesso, COM await.
       //
@@ -71,14 +84,28 @@ export function useAuth() {
     if (fetchingRef.current) return
     fetchingRef.current = true
 
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session }, error: erroSessao }) => {
       if (session?.user) {
         try {
           const perfil = await carregarPerfil(session.user.id)
           setUser(perfil)
-        } catch {
-          setUser(null)
+          if (perfil) {
+            setAuthUserId(session.user.id)
+            void lembrarUsuario(session.user.id, perfil)
+          }
+        } catch (e) {
+          // Onda L: sem rede, o perfil guardado no aparelho (sem mandar ao login).
+          const off = e instanceof ErroSemRede || semRede() ? await perfilOffline<UsuarioAutenticado>(session.user.id) : null
+          setUser(off?.perfil ?? null)
+          setAuthUserId(off ? off.authUserId : null)
+          setModoOffline(!!off)
         }
+      } else if ((erroSessao && ehErroDeRede(erroSessao)) || semRede()) {
+        // Token vencido e sem rede para renovar: o último usuário deste aparelho.
+        const off = await perfilOffline<UsuarioAutenticado>()
+        setUser(off?.perfil ?? null)
+        setAuthUserId(off ? off.authUserId : null)
+        setModoOffline(!!off)
       }
       setLoading(false)
     })
@@ -124,6 +151,11 @@ export function useAuth() {
       }
 
       setUser(perfil)
+      setAuthUserId(session.user.id)
+      setModoOffline(false)
+      // Onda L: guarda o perfil para abrir sem rede e pede armazenamento persistente.
+      void lembrarUsuario(session.user.id, perfil)
+      void pedirArmazenamentoPersistente()
       setLoading(false)
       return { ok: true, trocarSenha: perfil.troca_senha_obrigatoria ?? false }
 
@@ -137,9 +169,24 @@ export function useAuth() {
   }
 
   const logout = async () => {
+    // Onda L: sair com registros guardados avisa (eles ficam no aparelho e só sobem quando
+    // este usuário entrar de novo aqui).
+    if (authUserId && filaDisponivel()) {
+      try {
+        const c = await contarFila(authUserId)
+        if (c.pendentes > 0 && typeof window !== 'undefined'
+            && !window.confirm(`Há ${c.pendentes} registro(s) guardado(s) neste aparelho que ainda não foram enviados. ` +
+              'Eles só serão enviados quando você entrar de novo neste aparelho, com internet. Sair mesmo assim?')) {
+          return
+        }
+      } catch { /* fila ilegível: sai normalmente */ }
+    }
     setLoading(true)
     await supabase.auth.signOut()
+    await esquecerUsuario(authUserId)
     setUser(null)
+    setAuthUserId(null)
+    setModoOffline(false)
     setLoading(false)
   }
 
@@ -186,5 +233,8 @@ export function useAuth() {
     changePassword,
     isAuthenticated: !!user,
     precisaTrocarSenha: user?.troca_senha_obrigatoria ?? false,
+    // Onda L: dono da fila de campo e indicação de que o perfil veio do aparelho (sem rede).
+    authUserId,
+    modoOffline,
   }
 }

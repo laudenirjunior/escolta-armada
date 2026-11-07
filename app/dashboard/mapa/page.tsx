@@ -7,6 +7,9 @@ import { MapPin, ArrowRight, RefreshCw, ExternalLink, ChevronLeft } from 'lucide
 import { createClient } from '@/lib/supabase/client'
 import { lerObservacao } from '@/lib/pontos-controle'
 import { useAuth } from '@/hooks/useAuth'
+import { CartaoEscolta } from '@/components/escolta/cartao-escolta'
+import { SELECT_CARTAO, type CartaoEscolta as CartaoDados, corCartao, dataHoraBrasilia, completarCoresClientes, resumoEndereco, textoEquipe, etiquetas } from '@/lib/cartao-escolta'
+import { rotuloStatus } from '@/lib/fluxo-escolta'
 
 const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? ''
 const sb = createClient() as any
@@ -27,17 +30,12 @@ interface HistoricoPos {
   data_hora: string
 }
 
-interface EscoltaAtiva {
-  id: string
-  codigo_escolta: string | null
-  status: string
+// Onda K: a escolta do mapa é o cartão padrão (lib/cartao-escolta.ts) mais a posição.
+interface EscoltaAtiva extends CartaoDados {
   origem_lat: number | null
   origem_lng: number | null
   destino_lat: number | null
   destino_lng: number | null
-  origem_endereco: string
-  destino_endereco: string
-  cliente: { nome_cliente: string } | null
   viatura_id: string | null
   ultimo_ponto: UltimoPonto | null
 }
@@ -50,14 +48,21 @@ interface MarkerSet {
 
 // ── Constantes --------------------------------------------------------------
 
-const STATUS_MAP: Record<string, { label: string; color: string }> = {
-  em_pre_inicio: { label: 'Pré-Início',   color: '#D97706' },
-  em_andamento:  { label: 'Em Andamento', color: '#2563EB' },
-  na_origem:     { label: 'Na Origem',    color: '#7C3AED' },
-  em_transito_destino: { label: 'Trânsito p/ Destino', color: '#2563EB' },
-  no_destino:    { label: 'No Destino',   color: '#059669' },
-  retornando:    { label: 'Retornando',   color: '#D97706' },
-  na_base:       { label: 'Na Base',      color: '#1E7C52' },
+// O marcador e a rota continuam na cor do STATUS (sinal operacional); a cor do cliente fica
+// no cartão da lista lateral e na faixa do popup (onda K). Rótulo por lib/fluxo-escolta.ts.
+const COR_STATUS_MAPA: Record<string, string> = {
+  em_pre_inicio: '#D97706',
+  em_andamento:  '#2563EB',
+  na_origem:     '#7C3AED',
+  em_transito_destino: '#2563EB',
+  no_destino:    '#059669',
+  em_transito_retorno: '#2563EB',
+  retornando:    '#D97706',
+  na_base:       '#1E7C52',
+}
+
+function statusMapa(status: string): { label: string; color: string } {
+  return { label: rotuloStatus(status), color: COR_STATUS_MAPA[status] ?? '#53648A' }
 }
 
 const STATUS_ATIVOS = ['em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando', 'na_base']
@@ -85,8 +90,26 @@ function buildGMapsUrl(lat: number, lng: number) {
   return `https://www.google.com/maps?q=${lat},${lng}`
 }
 
+// Lote 2026-10 (H15): a rota entre a mesma origem e o mesmo destino não muda. Sem este
+// cache, a recarga a cada 30 s pedia a rota de novo, cerca de 240 vezes por hora por aba.
+const rotasEmCache = new Map<string, Promise<[number, number][]>>()
+
 // Busca rota real via Mapbox Directions API (segue estradas)
-async function fetchRotaReal(
+function fetchRotaReal(
+  origLng: number, origLat: number,
+  destLng: number, destLat: number,
+): Promise<[number, number][]> {
+  const chave = `${origLng},${origLat};${destLng},${destLat}`
+  const emCache = rotasEmCache.get(chave)
+  if (emCache) return emCache
+  const pedido = buscarRotaReal(origLng, origLat, destLng, destLat)
+  rotasEmCache.set(chave, pedido)
+  // Falha (rota vazia) não fica em cache: a próxima recarga tenta de novo.
+  pedido.then(r => { if (!r.length) rotasEmCache.delete(chave) })
+  return pedido
+}
+
+async function buscarRotaReal(
   origLng: number, origLat: number,
   destLng: number, destLat: number,
 ): Promise<[number, number][]> {
@@ -127,7 +150,10 @@ function criarElDestino(): HTMLElement {
   return el
 }
 
-function criarElPosicao(code: string, color: string): HTMLElement {
+function criarElPosicao(codeBruto: string, colorBruta: string): HTMLElement {
+  // Lote 2026-10: escapados porque vão para innerHTML (cor vem do cadastro do cliente).
+  const code = esc(codeBruto)
+  const color = esc(colorBruta)
   const el = document.createElement('div')
   el.style.cssText = `position:relative; cursor:pointer; width:32px; height:32px;`
   el.innerHTML = `
@@ -164,18 +190,44 @@ function criarElPosicao(code: string, color: string): HTMLElement {
   return el
 }
 
-function popupHTML(e: EscoltaAtiva): string {
-  const s = STATUS_MAP[e.status] ?? { label: e.status, color: '#53648A' }
+// Lote 2026-10: o popup é HTML montado à mão; todo texto vindo do banco passa por aqui
+// (antes, o nome do cliente permitia injetar script).
+function esc(v: unknown): string {
+  return String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+}
+
+/**
+ * Popup do marcador: o resumo do cartão padrão (revisão adversarial K, menor 6), com as mesmas
+ * funções de lib/cartao-escolta.ts: código, cliente com a faixa, data e hora em Brasília,
+ * origem e destino resumidos, quem criou, equipe e todas as etiquetas. O status sai na cor do
+ * marcador, como na lista lateral.
+ */
+function popupHTML(e: EscoltaAtiva, perfil: string | null): string {
+  const s = statusMapa(e.status)
   const pt = e.ultimo_ponto
+  const equipe = textoEquipe(e, perfil)
+  const criador = e.criador?.nome_completo ?? null
+  const selos = etiquetas(e, perfil).map(t =>
+    `<span data-teste="etiqueta-${t.chave}" style="font-size:9px;font-weight:700;padding:1px 6px;margin-left:4px;background:#FBF3DE;color:#8B6914;text-transform:uppercase">${esc(t.texto)}</span>`).join('')
   return `
-    <div style="font-family:system-ui;padding:4px 0;min-width:160px">
-      <div style="font-size:12px;font-weight:800;color:#0E1A33">${e.codigo_escolta ?? '—'}</div>
-      <div style="font-size:11px;color:#5A6A80;margin:2px 0 4px">${e.cliente?.nome_cliente ?? '—'}</div>
-      <span style="font-size:9px;font-weight:700;padding:1px 6px;background:${s.color}22;color:${s.color};text-transform:uppercase">${s.label}</span>
+    <div data-teste="popup-cartao" style="font-family:system-ui;padding:4px 0;min-width:200px;max-width:260px">
+      <div style="display:flex;gap:8px">
+      <div data-teste="faixa-cliente" style="width:5px;border-radius:2px;background-color:${esc(corCartao(e))}"></div>
+      <div>
+      <div style="font-size:12px;font-weight:800;color:#0E1A33">${esc(e.codigo_escolta ?? '-')}${selos}</div>
+      <div style="font-size:11px;color:#5A6A80;margin:2px 0 2px">${esc(e.cliente?.nome_cliente ?? '-')}</div>
+      <div style="font-size:10px;color:#5A6A80">${esc(dataHoraBrasilia(e.data_hora_prevista))} (Brasília)</div>
+      <div data-teste="origem-destino" style="font-size:10px;color:#5A6A80;margin:2px 0">${esc(resumoEndereco(e.origem_endereco))} &rarr; ${esc(resumoEndereco(e.destino_endereco))}</div>
+      ${equipe ? `<div style="font-size:10px;color:#6B7E8A">${esc(equipe)}</div>` : ''}
+      ${criador ? `<div style="font-size:10px;color:#6B7E8A">Criada por ${esc(criador)}</div>` : ''}
+      <span data-teste="status" style="display:inline-flex;align-items:center;gap:4px;font-size:9px;font-weight:700;margin-top:4px;color:${s.color};text-transform:uppercase"><span style="width:8px;height:8px;border-radius:50%;background:${s.color};display:inline-block"></span>${esc(s.label)}</span>
+      </div>
+      </div>
       ${pt ? `
         <div style="margin-top:6px;padding-top:5px;border-top:1px solid #f0f0f0">
-          <div style="font-size:10px;font-weight:700;color:${corSinal(pt.data_hora)}">${pt.tipo} · ${tempoAtras(pt.data_hora)}</div>
-          ${pt.endereco ? `<div style="font-size:9px;color:#8B9BAD;margin-top:2px">${pt.endereco.substring(0, 70)}</div>` : ''}
+          <div style="font-size:10px;font-weight:700;color:${corSinal(pt.data_hora)}">${esc(pt.tipo)} · ${esc(tempoAtras(pt.data_hora))}</div>
+          ${pt.endereco ? `<div style="font-size:9px;color:#8B9BAD;margin-top:2px">${esc(pt.endereco.substring(0, 70))}</div>` : ''}
         </div>
       ` : `<div style="font-size:9px;color:#9CA3AF;margin-top:5px">Posição: coordenadas de origem</div>`}
     </div>
@@ -185,7 +237,7 @@ function popupHTML(e: EscoltaAtiva): string {
 // ── Componente Principal ----------------------------------------------------
 
 export default function MapaPage() {
-  useAuth()
+  const { user } = useAuth()
   const [escoltas, setEscoltas]         = useState<EscoltaAtiva[]>([])
   const [selecionada, setSelecionada]   = useState<EscoltaAtiva | null>(null)
   const [historico, setHistorico]       = useState<HistoricoPos[]>([])
@@ -199,6 +251,9 @@ export default function MapaPage() {
   const mapRef          = useRef<mapboxgl.Map | null>(null)
   const markersRef      = useRef<Map<string, MarkerSet>>(new Map())
   const fittedRef       = useRef(false) // controla o fit-to-all inicial
+  // Perfil para o popup (etiquetas e equipe do cartão padrão), lido dentro do efeito dos marcadores.
+  const perfilRef       = useRef<string | null>(null)
+  perfilRef.current = user?.perfil?.codigo ?? null
 
   // Atualiza contadores de tempo a cada minuto
   useEffect(() => {
@@ -213,14 +268,12 @@ export default function MapaPage() {
     try {
       const { data: raw } = await sb
         .from('escoltas')
-        .select(`
-          id, codigo_escolta, status,
+        .select(`${SELECT_CARTAO},
           origem_lat, origem_lng, destino_lat, destino_lng,
-          origem_endereco, destino_endereco,
-          cliente:clientes(nome_cliente),
           veiculos:escolta_veiculos(id)
         `)
         .in('status', STATUS_ATIVOS)
+        .is('arquivada_em', null)   // onda I
         .order('status')
 
       if (!raw?.length) {
@@ -240,6 +293,7 @@ export default function MapaPage() {
           .from('pontos_controle')
           .select('escolta_veiculo_id, latitude, longitude, data_hora, observacoes, tipo_ponto:dom_tipos_ponto(nome_exibicao)')
           .in('escolta_veiculo_id', viaturaIds)
+          .is('anulado_em', null)   // onda I: ponto anulado não é a última posição
           .not('latitude', 'is', null)
           .not('longitude', 'is', null)
           .order('data_hora', { ascending: false })
@@ -267,23 +321,16 @@ export default function MapaPage() {
             endereco,
           }
         }
+        const { veiculos: _v, ...resto } = e
+        void _v
         return {
-          id: e.id,
-          codigo_escolta: e.codigo_escolta,
-          status: e.status,
-          origem_lat: e.origem_lat,
-          origem_lng: e.origem_lng,
-          destino_lat: e.destino_lat,
-          destino_lng: e.destino_lng,
-          origem_endereco: e.origem_endereco,
-          destino_endereco: e.destino_endereco,
-          cliente: e.cliente,
+          ...resto,
           viatura_id: vt?.id ?? null,
           ultimo_ponto: ultimoPonto,
-        }
+        } as EscoltaAtiva
       })
 
-      setEscoltas(lista)
+      setEscoltas(await completarCoresClientes(sb, lista))
       setLastUpdate(new Date())
       setSelecionada(prev => {
         if (!prev) return null  // mantém "mostrar todos" por padrão
@@ -301,6 +348,7 @@ export default function MapaPage() {
       .from('pontos_controle')
       .select('latitude, longitude, data_hora')
       .eq('escolta_veiculo_id', e.viatura_id)
+      .is('anulado_em', null)
       .not('latitude', 'is', null)
       .not('longitude', 'is', null)
       .order('data_hora', { ascending: true })
@@ -404,7 +452,7 @@ export default function MapaPage() {
     })
 
     escoltas.forEach(e => {
-      const s = STATUS_MAP[e.status] ?? { color: '#53648A', label: e.status }
+      const s = statusMapa(e.status)
       // Coordenada de origem zerada é ausência de coordenada, não o golfo da Guiné.
       // O resto do arquivo já trata assim (418, 438, 517, 529, 551).
       const posLat = e.ultimo_ponto?.lat ?? (e.origem_lat || null)
@@ -414,7 +462,7 @@ export default function MapaPage() {
       const existing = markersRef.current.get(e.id)
       if (existing) {
         existing.pos.setLngLat([posLng, posLat])
-        existing.pos.getPopup()?.setHTML(popupHTML(e))
+        existing.pos.getPopup()?.setHTML(popupHTML(e, perfilRef.current))
       } else {
         // Origem
         const origEl = criarElOrigem(s.color)
@@ -423,7 +471,7 @@ export default function MapaPage() {
               .setLngLat([e.origem_lng, e.origem_lat])
               .setPopup(new mapboxgl.Popup({ offset: 12, closeButton: false }).setHTML(
                 `<div style="font-family:system-ui;font-size:10px;font-weight:700;color:#1E7C52">ORIGEM</div>
-                 <div style="font-family:system-ui;font-size:11px;color:#0E1A33;margin-top:2px">${e.origem_endereco?.substring(0, 60)}</div>`
+                 <div style="font-family:system-ui;font-size:11px;color:#0E1A33;margin-top:2px">${esc(e.origem_endereco?.substring(0, 60))}</div>`
               ))
               .addTo(map)
           : new mapboxgl.Marker({ element: origEl }).setLngLat([posLng, posLat])
@@ -433,7 +481,7 @@ export default function MapaPage() {
         posEl.addEventListener('click', () => setSelecionada(e))
         const posMarker = new mapboxgl.Marker({ element: posEl, anchor: 'bottom' })
           .setLngLat([posLng, posLat])
-          .setPopup(new mapboxgl.Popup({ offset: 24, closeButton: false }).setHTML(popupHTML(e)))
+          .setPopup(new mapboxgl.Popup({ offset: 24, closeButton: false }).setHTML(popupHTML(e, perfilRef.current)))
           .addTo(map)
 
         // Destino
@@ -444,7 +492,7 @@ export default function MapaPage() {
             .setLngLat([e.destino_lng, e.destino_lat])
             .setPopup(new mapboxgl.Popup({ offset: 20, closeButton: false }).setHTML(
               `<div style="font-family:system-ui;font-size:10px;font-weight:700;color:#B83832">DESTINO</div>
-               <div style="font-family:system-ui;font-size:11px;color:#0E1A33;margin-top:2px">${e.destino_endereco?.substring(0, 60)}</div>`
+               <div style="font-family:system-ui;font-size:11px;color:#0E1A33;margin-top:2px">${esc(e.destino_endereco?.substring(0, 60))}</div>`
             ))
             .addTo(map)
         }
@@ -498,7 +546,7 @@ export default function MapaPage() {
       return
     }
 
-    const s = STATUS_MAP[selecionada.status] ?? { color: '#53648A' }
+    const s = statusMapa(selecionada.status)
     // Sem coordenada real a câmera não voa: o flyTo de 0,0 esconderia a escolta.
     const posLat = selecionada.ultimo_ponto?.lat ?? (selecionada.origem_lat || null)
     const posLng = selecionada.ultimo_ponto?.lng ?? (selecionada.origem_lng || null)
@@ -634,7 +682,7 @@ export default function MapaPage() {
                 <p className="text-sm font-semibold" style={{ color: '#6B7E8A' }}>Nenhuma escolta ativa</p>
               </div>
             ) : escoltas.map(e => {
-              const s = STATUS_MAP[e.status] ?? { label: e.status, color: '#53648A' }
+              const s = statusMapa(e.status)
               const isSel = selecionada?.id === e.id
               const pt = e.ultimo_ponto
               const sinalCor = pt ? corSinal(pt.data_hora) : null
@@ -652,31 +700,8 @@ export default function MapaPage() {
                   onMouseEnter={ev => { if (!isSel) (ev.currentTarget as HTMLElement).style.backgroundColor = '#F8FAFC' }}
                   onMouseLeave={ev => { if (!isSel) (ev.currentTarget as HTMLElement).style.backgroundColor = '' }}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-mono font-bold truncate" style={{ color: '#1E2D35' }}>
-                      {e.codigo_escolta ?? '—'}
-                    </span>
-                    <span className="shrink-0 text-[9px] font-black uppercase tracking-wider px-1.5 py-0.5"
-                      style={{ backgroundColor: `${s.color}18`, color: s.color, border: `1px solid ${s.color}30` }}>
-                      {s.label}
-                    </span>
-                  </div>
-
-                  <p className="text-[11px] mt-0.5 truncate" style={{ color: '#6B7E8A' }}>
-                    {e.cliente?.nome_cliente ?? '—'}
-                  </p>
-
-                  <div className="flex items-center gap-1 mt-1.5">
-                    <div style={{ width: 6, height: 6, borderRadius: '50%', backgroundColor: '#1E7C52', flexShrink: 0 }} />
-                    <span className="text-[10px] truncate" style={{ color: '#A8B8C2', maxWidth: 75 }}>
-                      {e.origem_endereco?.split(',')[0] ?? '—'}
-                    </span>
-                    <ArrowRight size={8} style={{ color: '#C8D5DC', flexShrink: 0 }} />
-                    <div style={{ width: 0, height: 0, borderLeft: '5px solid transparent', borderRight: '5px solid transparent', borderBottom: '9px solid #B83832', flexShrink: 0 }} />
-                    <span className="text-[10px] truncate" style={{ color: '#A8B8C2', maxWidth: 75 }}>
-                      {e.destino_endereco?.split(',')[0] ?? '—'}
-                    </span>
-                  </div>
+                  {/* Onda K: o cartão padrão, com a faixa na cor do cliente. */}
+                  <CartaoEscolta variante="cartao" escolta={e} perfil={user?.perfil?.codigo} corStatus={s.color} />
 
                   {pt ? (
                     <div className="mt-2 flex items-start gap-1.5 rounded px-2 py-1.5"
@@ -710,7 +735,7 @@ export default function MapaPage() {
           <div className="px-4 py-3 border-t space-y-2" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8FAFC' }}>
             <p className="text-[9px] font-bold uppercase tracking-widest" style={{ color: '#A8B8C2' }}>Status</p>
             <div className="flex flex-wrap gap-x-3 gap-y-1">
-              {Object.values(STATUS_MAP).map(v => (
+              {Object.keys(COR_STATUS_MAPA).map(statusMapa).map(v => (
                 <div key={v.label} className="flex items-center gap-1">
                   <div style={{ width: 7, height: 7, borderRadius: '50%', backgroundColor: v.color }} />
                   <span style={{ fontSize: '9px', color: '#6B7E8A' }}>{v.label}</span>
@@ -734,7 +759,7 @@ export default function MapaPage() {
           {/* Cabeçalho: escolta selecionada ou modo geral */}
           <div className="px-4 py-3 border-b shrink-0" style={{ borderColor: '#E2E8EC' }}>
             {selecionada ? (() => {
-              const s = STATUS_MAP[selecionada.status] ?? { label: selecionada.status, color: '#53648A' }
+              const s = statusMapa(selecionada.status)
               const pt = selecionada.ultimo_ponto
               return (
                 <div className="flex items-start justify-between gap-3">

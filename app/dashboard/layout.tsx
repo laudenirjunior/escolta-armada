@@ -1,24 +1,22 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import {
   LayoutDashboard, Shield, Radio, Map, Database,
   Crosshair, ClipboardList, BarChart2, FileText,
   Users, Settings, AlertTriangle, Bell, Send,
-} from 'lucide-react'
+ Repeat, MapPin, Archive, ListChecks, ShieldAlert } from 'lucide-react'
 import { Sidebar, MobileDrawer, SidebarContent, SidebarSection, SidebarItem, SidebarFooter } from '@/components/layout/sidebar'
 import { TopBar } from '@/components/layout/topbar'
 import { TelegramNotificacoesProvider } from '@/components/telegram-notificacoes-provider'
-import { CheckinAlertProvider } from '@/components/checkin-alert-provider'
+import { AvisosProvider, useAvisos } from '@/components/avisos-provider'
 import { InstalarAppProvider } from '@/components/instalar-app-provider'
+import { OfflineProvider } from '@/components/offline/offline-provider'
 import { useAuth } from '@/hooks/useAuth'
 import { ModoGuiadoProvider, useModoGuiado } from '@/hooks/useModoGuiado'
-import { createClient } from '@/lib/supabase/client'
 import type { Perfil } from '@/types'
-
-const sb = createClient() as any
 
 interface NavItem {
   label: string
@@ -46,6 +44,13 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { label: 'Cadastros',   href: '/dashboard/cadastros',   icon: <Database size={16} />,     perfis: ['administrador','gestor','supervisor','central'] as Perfil[] },
       { label: 'Armamentos',  href: '/dashboard/armamentos',  icon: <Crosshair size={16} />,    perfis: ['administrador','gestor','supervisor','central'] as Perfil[] },
       { label: 'Checklists',  href: '/dashboard/checklists',  icon: <ClipboardList size={16} />, perfis: ['administrador','gestor','supervisor','central'] as Perfil[] },
+      // Lote 2026-10 (M5): pedidos de substituição do mural, para supervisor ou acima.
+      { label: 'Substituições', href: '/dashboard/substituicoes', icon: <Repeat size={16} />, perfis: ['administrador','gestor','supervisor'] as Perfil[] },
+      // Lote 2026-10 (onda I): pendências de conclusão (supervisor ou acima) e arquivadas (administrador).
+      { label: 'Pendências de conclusão', href: '/dashboard/escoltas/pendencias', icon: <ListChecks size={16} />, perfis: ['administrador','gestor','supervisor'] as Perfil[] },
+      { label: 'Arquivadas', href: '/dashboard/escoltas/arquivadas', icon: <Archive size={16} />, perfis: ['administrador'] as Perfil[] },
+      // Lote 2026-10 (onda L): registros de campo não aplicados (conflitos), supervisor ou acima.
+      { label: 'Conflitos de campo', href: '/dashboard/conflitos', icon: <ShieldAlert size={16} />, perfis: ['administrador','gestor','supervisor'] as Perfil[] },
     ],
   },
   {
@@ -60,6 +65,8 @@ const NAV: { section: string; items: NavItem[] }[] = [
     items: [
       { label: 'Usuários',      href: '/dashboard/usuarios',           icon: <Users size={16} />,       perfis: ['administrador','gestor','supervisor'] as Perfil[] },
       { label: 'Telegram',      href: '/dashboard/sistema/telegram',   icon: <Send size={16} />,        perfis: ['administrador','gestor'] as Perfil[] },
+      // Lote 2026-10 (M2): atalhos de endereço; supervisor ou acima cadastra, gestor e administrador ativam.
+      { label: 'Locais Salvos', href: '/dashboard/configuracoes/locais', icon: <MapPin size={16} />,   perfis: ['administrador','gestor','supervisor'] as Perfil[] },
       { label: 'Configurações', href: '/dashboard/configuracoes',      icon: <Settings size={16} />,    perfis: ['administrador'] as Perfil[] },
       { label: 'Auditoria',     href: '/dashboard/auditoria',          icon: <AlertTriangle size={16} />, perfis: ['administrador'] as Perfil[] },
     ],
@@ -96,27 +103,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 }
 
 function DashboardLayoutInterno({ children, auth }: { children: React.ReactNode; auth: ReturnType<typeof useAuth> }) {
-  const { user, loading, isAuthenticated, logout, precisaTrocarSenha } = auth
+  const { user, loading, isAuthenticated, logout, precisaTrocarSenha, authUserId, modoOffline } = auth
   const { ligado: modoGuiado } = useModoGuiado()
   const router = useRouter()
   const pathname = usePathname()
-  const [notifCount, setNotifCount] = useState(0)
   const [mobileOpen, setMobileOpen] = useState(false)
-  const notifChannelRef = useRef<any>(null)
-
-  useEffect(() => {
-    if (!isAuthenticated) return
-    if (pathname === '/dashboard/notificacoes') { setNotifCount(0); return }
-    const ch = sb.channel(`layout-notif-counter-${Date.now()}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'pontos_controle' }, () => setNotifCount(n => n + 1))
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ocorrencias' }, () => setNotifCount(n => n + 1))
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'escolta_status_historico' }, () => setNotifCount(n => n + 1))
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'presencas' }, () => setNotifCount(n => n + 1))
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'chat_mensagens' }, () => setNotifCount(n => n + 1))
-      .subscribe()
-    notifChannelRef.current = ch
-    return () => { sb.removeChannel(ch) }
-  }, [isAuthenticated, pathname])
+  // Lote 2026-10 (onda J): o contador por inserções em 5 tabelas saiu. Sino e item Avisos
+  // mostram as não lidas da Central (AvisosProvider), e o sino não zera ao clicar.
 
   useEffect(() => {
     if (!loading && !isAuthenticated) router.push('/auth/login')
@@ -168,6 +161,7 @@ function DashboardLayoutInterno({ children, auth }: { children: React.ReactNode;
     : BOTTOM_NAV_ITEMS.filter(i => perfil && i.perfis.includes(perfil))
 
   return (
+    <AvisosProvider usuarioId={user.id} perfil={perfil}>
     <div
       className="flex flex-col h-screen overflow-hidden"
       style={{
@@ -179,14 +173,16 @@ function DashboardLayoutInterno({ children, auth }: { children: React.ReactNode;
       }}
     >
 
-      <TopBar
+      {/* Onda L: faixa fixa de conexão e envio da fila de campo (some com tudo em dia). */}
+      <OfflineProvider authUserId={authUserId} modoOffline={modoOffline} />
+
+      <TopBarComAvisos
         userInfo={{
           name: user.nome_completo.split(' ').slice(0, 2).join(' '),
           role: user.perfil?.nome_exibicao ?? 'Usuário',
         }}
         onLogout={logout}
-        notificacoesCount={notifCount}
-        onBellClick={() => { setNotifCount(0); router.push('/dashboard/notificacoes') }}
+        onBellClick={() => router.push('/dashboard/notificacoes')}
         onMenuOpen={() => setMobileOpen(true)}
       />
 
@@ -205,7 +201,6 @@ function DashboardLayoutInterno({ children, auth }: { children: React.ReactNode;
         </Sidebar>
 
         <TelegramNotificacoesProvider />
-        <CheckinAlertProvider perfil={perfil} />
         <InstalarAppProvider />
 
         {/* Conteúdo principal: folga no mobile para não ficar atrás da bottom nav, mais a área segura do iPhone */}
@@ -247,17 +242,7 @@ function DashboardLayoutInterno({ children, auth }: { children: React.ReactNode;
               }}
             >
               {/* Badge de notificação no ícone de avisos */}
-              {item.href === '/dashboard/notificacoes' && notifCount > 0 && (
-                <span style={{
-                  position: 'absolute', top: '8px', right: '25%',
-                  backgroundColor: '#B83832', color: '#fff',
-                  borderRadius: '10px', fontSize: '8px', fontWeight: 900,
-                  padding: '1px 4px', minWidth: '14px', textAlign: 'center',
-                  lineHeight: '13px', border: '1.5px solid #0B1120',
-                }}>
-                  {notifCount > 99 ? '99+' : notifCount}
-                </span>
-              )}
+              {item.href === '/dashboard/notificacoes' && <BadgeAvisos />}
               <span style={{ color: active ? '#fff' : 'rgba(255,255,255,0.3)' }}>{item.icon}</span>
               <span style={{
                 fontSize: '9px', fontWeight: 900, textTransform: 'uppercase',
@@ -271,5 +256,29 @@ function DashboardLayoutInterno({ children, auth }: { children: React.ReactNode;
       </nav>
 
     </div>
+    </AvisosProvider>
+  )
+}
+
+// Sino com as não lidas da Central (lê o contexto do AvisosProvider).
+function TopBarComAvisos(props: Omit<React.ComponentProps<typeof TopBar>, 'notificacoesCount'>) {
+  const { naoLidas } = useAvisos()
+  return <TopBar {...props} notificacoesCount={naoLidas} />
+}
+
+// Badge de não lidas no item Avisos da barra inferior.
+function BadgeAvisos() {
+  const { naoLidas } = useAvisos()
+  if (naoLidas <= 0) return null
+  return (
+    <span data-teste="badge-avisos" style={{
+      position: 'absolute', top: '8px', right: '25%',
+      backgroundColor: '#B83832', color: '#fff',
+      borderRadius: '10px', fontSize: '8px', fontWeight: 900,
+      padding: '1px 4px', minWidth: '14px', textAlign: 'center',
+      lineHeight: '13px', border: '1.5px solid #0B1120',
+    }}>
+      {naoLidas > 99 ? '99+' : naoLidas}
+    </span>
   )
 }

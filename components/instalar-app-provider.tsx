@@ -55,7 +55,8 @@ export function InstalarAppProvider() {
     if (typeof window === 'undefined') return
 
     // O service worker e registrado sempre, mesmo com o banner escondido: ele e
-    // pre-requisito de instalabilidade e nao tem cache nenhum (ver public/sw.js).
+    // pre-requisito de instalabilidade e, desde a onda L, guarda as telas de campo para abrir
+    // sem internet (app/sw.js/route.ts e lib/offline/sw-fonte.js).
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('/sw.js').catch(() => {
         // Falha de registro nao pode derrubar o dashboard. O app continua

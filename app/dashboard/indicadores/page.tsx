@@ -10,6 +10,8 @@ import {
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
+import { ehPontoCheckin } from '@/lib/checkin'
+import { SubstituicoesPorOperador } from '@/components/indicadores/substituicoes-por-operador'
 
 // ─── Paleta ──────────────────────────────────────────────────────────────────
 const P = {
@@ -248,6 +250,7 @@ export default function IndicadoresPage() {
 
     sb.from('escoltas')
       .select('data_hora_prevista, status')
+      .is('arquivada_em', null)   // onda I: arquivada fora dos indicadores
       .gte('data_hora_prevista', dozeAtras.toISOString())
       .not('status', 'in', '(rascunho,cancelada)')
       .then(({ data }) => {
@@ -335,14 +338,16 @@ export default function IndicadoresPage() {
     `)
     .gte('data_hora_prevista', from)
     .lte('data_hora_prevista', to)
+    .is('arquivada_em', null)
     .order('data_hora_prevista', { ascending: false })
 
     if (clienteFiltroId) {
       q = (q as any).eq('cliente_id', clienteFiltroId)
     }
 
-    const ocQ = sb.from('ocorrencias').select('id', { count: 'exact', head: true })
-      .gte('data_hora', from).lte('data_hora', to)
+    // Onda I: filha lida por data só conta com escolta não arquivada e registro válido.
+    const ocQ = sb.from('ocorrencias').select('id, escolta:escoltas!inner(arquivada_em)', { count: 'exact', head: true })
+      .gte('data_hora', from).lte('data_hora', to).is('anulado_em', null).is('escolta.arquivada_em', null)
 
     const [{ data: escData }, { count: ocCount }] = await Promise.all([q, ocQ])
 
@@ -427,22 +432,26 @@ export default function IndicadoresPage() {
       // Segunda bateria de queries (operacional/qualidade/pessoas)
       const [{ data: pontosData }, { data: emergData }, { data: presData }, { data: clkData }, { data: ocorrTipoData }] = await Promise.all([
         escoltaVeiculoIds.length > 0
-          ? sb.from('pontos_controle').select('id, criado_offline, precisao_metros, escolta_veiculo_id').in('escolta_veiculo_id', escoltaVeiculoIds)
+          ? sb.from('pontos_controle').select('id, criado_offline, precisao_metros, escolta_veiculo_id, observacoes').in('escolta_veiculo_id', escoltaVeiculoIds).is('anulado_em', null)
           : Promise.resolve({ data: [] as any[] }),
-        sb.from('emergencias').select('id, status, data_hora, atualizado_em').in('escolta_id', rowIds),
-        sb.from('presencas').select('vigilante_id, escolta_id').in('escolta_id', rowIds),
+        sb.from('emergencias').select('id, status, data_hora, atualizado_em').in('escolta_id', rowIds).is('anulado_em', null),
+        sb.from('presencas').select('vigilante_id, escolta_id').in('escolta_id', rowIds).is('anulado_em', null),
         escoltaVeiculoIds.length > 0
-          ? sb.from('checklists').select('id, concluido, data_inicio, data_conclusao, tipo, checklist_respostas(conforme, descricao_item)').in('escolta_veiculo_id', escoltaVeiculoIds)
+          ? sb.from('checklists').select('id, concluido, data_inicio, data_conclusao, tipo, checklist_respostas(conforme, descricao_item)').in('escolta_veiculo_id', escoltaVeiculoIds).is('anulado_em', null)
           : Promise.resolve({ data: [] as any[] }),
-        sb.from('ocorrencias').select('id, tipo:dom_tipos_ocorrencia(nome)').gte('data_hora', from).lte('data_hora', to),
+        sb.from('ocorrencias').select('id, tipo:dom_tipos_ocorrencia(nome), escolta:escoltas!inner(arquivada_em)').gte('data_hora', from).lte('data_hora', to)
+          .is('anulado_em', null).is('escolta.arquivada_em', null),
       ])
 
       // Check-ins stats
       const pontos = (pontosData ?? []) as any[]
-      const evIdsComPontos = [...new Set(pontos.map((p: any) => p.escolta_veiculo_id))]
+      // Lote 2026-10: "Check-ins Realizados" conta só o check-in periódico (reporte_periodico);
+      // antes contava todos os pontos de controle, inclusive as etapas.
+      const checkins = pontos.filter((p: any) => ehPontoCheckin(p))
+      const evIdsComCheckin = [...new Set(checkins.map((p: any) => p.escolta_veiculo_id))]
       setCheckinsStats({
-        total: pontos.length,
-        mediaPerEscolta: evIdsComPontos.length > 0 ? Math.round(pontos.length / evIdsComPontos.length) : 0,
+        total: checkins.length,
+        mediaPerEscolta: evIdsComCheckin.length > 0 ? Math.round(checkins.length / evIdsComCheckin.length) : 0,
         offlineCount: pontos.filter((p: any) => p.criado_offline).length,
         precisaoMedia: pontos.filter((p: any) => p.precisao_metros).length > 0
           ? Math.round(pontos.filter((p: any) => p.precisao_metros).reduce((s: number, p: any) => s + Number(p.precisao_metros), 0) / pontos.filter((p: any) => p.precisao_metros).length)
@@ -528,6 +537,9 @@ export default function IndicadoresPage() {
           .select('escolta_id, status_novo, data_hora')
           .in('escolta_id', escoltasFinalizadasIds)
           .in('status_novo', ['em_andamento', 'finalizada'])
+          // Onda I: histórico anulado (voltar etapa, zerar) fora do tempo médio; a escolta
+          // zerada e refeita mede da entrada válida em andamento.
+          .is('anulado_em', null)
 
         if (histStatus && histStatus.length > 0) {
           const porEscolta: Record<string, { inicio?: number; fim?: number }> = {}
@@ -1349,6 +1361,10 @@ export default function IndicadoresPage() {
       {/* ── ABA: PESSOAS ── */}
       {abaAtiva === 'pessoas' && (
         <div className="space-y-6">
+          {['administrador', 'gestor', 'supervisor'].includes((user?.perfil?.codigo ?? '') as string) && (() => {
+            const { from, to } = computeRange(tipoPeriodo, dataInicio, dataFim)
+            return <SubstituicoesPorOperador desde={from} ate={to} />
+          })()}
           <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
             {[
               { label: 'Total Efetivo',    valor: pessoasStats?.totalEfetivo ?? '—',    sub: 'escalações no período',                                   cor: P.navy,      corTop: P.navy    },

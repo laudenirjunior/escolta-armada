@@ -25,6 +25,14 @@ A tela de entrada tem o título **Painel de Acesso Operacional**, um campo com o
 - O **Operador** entra pelo **usuário**, no formato `primeironome_ultimonome`. Não precisa digitar arroba: o sistema completa sozinho o domínio interno.
 - Administrador, Gestor, Supervisor e Central entram pelo e-mail cadastrado.
 
+Novidades de novembro de 2026 (onda M):
+
+- **O aparelho lembra o último usuário.** Na próxima entrada, o campo de usuário já vem preenchido; é só digitar a senha. A senha nunca fica guardada.
+- O campo de usuário **não corrige nem coloca letra maiúscula** sozinho.
+- O **olho** ao lado da senha mostra ou esconde o que foi digitado.
+- Mensagens claras: "Usuário não encontrado ou senha incorreta", "Sem internet no momento" e "O servidor não conseguiu concluir o login". O botão de entrar ficou maior, para usar com uma mão.
+- **O Operador entra direto no Campo (Painel Guiado)**, com a escolta do dia aberta. Do Painel ao primeiro registro são 3 toques (por exemplo: Registrar Check-in, foto, Confirmar).
+
 `[PRINT P01]`
 
 ### 1.2 Primeiro acesso: troca de senha obrigatória
@@ -89,7 +97,7 @@ A regra real vive em `lib/permissions.ts`. Abaixo, o essencial para os dois perf
 Dois pontos que valem destaque:
 
 - **O Supervisor entra em Usuários com escopo restrito:** ele cria e edita apenas o perfil Operador. Não mexe em Gestor, Administrador ou Central.
-- **O Operador pode assumir uma escolta agendada e escolher quem vai junto, mas não altera o que foi contratado.** A regra está na tela e também no banco.
+- **O Operador pode puxar uma escolta agendada livre e escolher quem vai junto, mas não altera o que foi contratado.** Substituir uma equipe escalada passa pelas regras do mural (B2). A regra está na tela e também no banco.
 
 ---
 
@@ -133,6 +141,8 @@ O controle de armas fica em tela própria: **Armamentos** (menu Gestão). O bot�
 
 Na aba **Clientes**, o botão **Novo Cliente** pede nome (obrigatório), CNPJ, telefone, contato, uma **cor de destaque** que identifica o cliente na lista e na timeline, status e observações.
 
+**Cor do cliente (outubro de 2026).** A cor é escolhida numa **paleta fechada de 12 cores** (Azul, Verde, Vermelho, Mostarda, Anil, Rosa escuro, Oliva, Aço, Marinho, Roxo, Petróleo e Marrom), todas escuras o bastante para texto branco por cima e escolhidas para continuarem diferentes entre si também para quem tem daltonismo vermelho-verde. A mesma tela existe em **Clientes** e em **Cadastros**. Cliente novo já abre com a primeira cor da paleta que nenhum cliente ativo usa. A cor não é exclusiva: se outro cliente ativo já usa a cor escolhida, aparece o aviso "Cor já usada por ... Pode manter, mas as escoltas desses clientes ficam com a mesma faixa." e o cadastro pode seguir assim. Na atualização de outubro, as cores antigas foram trocadas pela cor mais próxima da paleta, sem repetir entre os clientes ativos enquanto houve cor livre. É essa cor que aparece na faixa lateral do cartão da escolta em todas as telas.
+
 Na aba **Vigilantes** acontece o ponto mais importante do cadastro: **ao cadastrar o vigilante, o sistema provisiona o acesso dele ao aplicativo, na hora.** Os campos são nome (obrigatório), CPF (obrigatório), telefone, **Função**, CNV, extensão EEA e valor padrão.
 
 Assim que o nome é digitado, aparece um aviso azul: **"Login gerado: primeironome_ultimonome, senha inicial 123456"**. O botão de salvar se chama **Cadastrar e Provisionar**.
@@ -162,13 +172,25 @@ Botão **Nova Escolta**, dentro de Escoltas. O assistente tem **três fases** no
 
 ### Fase 01: Dados da Escolta
 
-Bloco **Identificação da Missão**. Aqui entram **Cliente Contratante**, **Data** e **Hora de Partida**, **Endereço de Origem** e **Endereço de Destino** (escolhidos de uma lista de sugestões, não digitados livres), os complementos de cada endereço, observações e a **periodicidade de check-in em rota**. Um bloco de **Dados Financeiros** (valor cobrado, outros custos, observação) aparece só para Supervisor e acima.
+Bloco **Identificação da Missão**. Aqui entram **Cliente Contratante**, **Data** e **Hora de Partida**, **Endereço de Origem** e **Endereço de Destino** (escolhidos de uma lista de sugestões, não digitados livres), os complementos de cada endereço e observações. Desde o lote de outubro de 2026, o check-in periódico em rota vem **desligado** e o campo de periodicidade não aparece; ele só volta para o cliente que tiver o check-in religado no cadastro (ver B6). Um bloco de **Dados Financeiros** (valor cobrado, outros custos, observação) aparece só para Supervisor e acima.
+
+**Combustível (outubro de 2026).** O custo real de combustível é lançado por viatura (litros e valor) na aba **Financeiro** da tela da escolta, durante a escolta ou no fechamento, por supervisor, gestor, administrador ou central. O valor entra no custo total, na margem, nos Indicadores (Financeiro e Frota) e no relatório em PDF, uma vez por viatura. O operador não vê nem lança esse valor. Editar a escolta agendada não apaga o combustível já lançado. Atenção à regra que já existia: a aba Financeiro dos Indicadores soma só escoltas finalizadas; a aba Frota e o PDF somam todas as escoltas do período, inclusive as em andamento. Valores aceitam o formato brasileiro (1.250,50).
+
+**Locais salvos e conferência no mapa (outubro de 2026).** Acima de origem e destino aparecem, em botões pequenos, os **atalhos** dos locais salvos ativos (por exemplo JAMEF, Sede), **os mais usados primeiro**. Um toque preenche endereço, complemento, coordenada e UF, sem passar pela busca; a confirmação embaixo do campo mostra o local e a UF. Os atalhos aparecem na criação e na edição, inclusive na edição de escolta já iniciada pela gestão. Endereço escolhido na busca abre um **mapa com pino**: arraste o pino até o portão ou a doca e marque **Conferido no mapa**, sem o que a escolta não é salva. A lista de sugestões mostra bairro e município em destaque e avisa quando a sugestão não tem número. O complemento acompanha o endereço escolhido: escolher outro local ou outra sugestão da busca troca ou limpa o complemento (o que foi digitado antes de escolher o primeiro endereço fica). Supervisor, gestor e administrador têm **Salvar este endereço** ao lado de cada campo: dê um nome ao atalho, confira a UF e toque em **Salvar local**; o local nasce aguardando conferência, com o endereço, o complemento, a coordenada e a UF do campo, e só vira atalho depois que gestor ou administrador conferir o pino. A central usa os atalhos, sem o botão de salvar.
+
+**Configurações, Locais salvos.** Supervisor, gestor e administrador cadastram e editam; só **gestor e administrador** conferem o pino e ativam. Só local ativo vira atalho. Cada local mostra a **UF** (editável no cadastro) e quantas vezes é usado em escoltas: é o número de escoltas não canceladas que têm o local como origem ou destino (cada lado conta uma vez), calculado sozinho pelo sistema; trocar a origem e voltar não conta duas vezes, cancelar a escolta desconta, mudar status ou KM não muda nada. Essa contagem ordena os atalhos. Mudar o nome, o endereço, o complemento, o pino ou a UF de um local ativo devolve o local para conferência, e a tela avisa quando isso acontece. Nome repetido é recusado com a mensagem "Já existe um local com esse nome. Escolha outro nome.". Se a contagem falhar alguma vez, gestor e administrador veem um aviso no alto da tela com o total e a data da última falha (horário de Brasília); a escolta é gravada mesmo assim.
+
+**UF de origem e destino e etiqueta Interestadual (outubro de 2026).** A escolta grava a UF de origem e a de destino junto com o endereço: pelo atalho, a UF do local salvo; pela busca, a UF que a sugestão traz; quando a sugestão não traz a UF, ou quando o pino é movido, o sistema calcula a UF pela coordenada (pela malha oficial dos estados do IBGE) e a marca como estimada. Endereço digitado à mão, sem escolher sugestão, fica sem UF. Na edição, trocar o endereço de um lado, por qualquer caminho, troca a UF daquele lado; mudar só a data ou a equipe não mexe na UF. Enquanto o sistema calcula a UF de um pino movido, o botão de confirmar mostra "Conferindo a UF..." e espera; se a UF não chegar, o servidor a calcula ao salvar (nunca fica sem UF por pressa). Pino ou sugestão fora do Brasil mostra "Endereço fora do Brasil, confira." e o lado fica sem UF. Escolta com origem ou destino fora do RJ (inclusive fora do Brasil) recebe a etiqueta **Interestadual** no cartão, no cabeçalho da escolta, na impressão, na tela de Relatórios, no relatório em PDF e numa coluna própria do CSV (Sim, Não ou Não determinado, com a UF de origem e a de destino); escolta só dentro do RJ não recebe. Quando a UF de algum lado é estimada, a tela mostra só a etiqueta, sem o nome do estado vizinho. As escoltas que já existiam receberam a UF pela coordenada gravada; as que ficam perto da divisa (menos de 5 km) ou no mar e em ilha foram para uma lista de conferência da gestão.
+
+**Pontos de controle.** A coordenada do GPS é a verdade. Ponto a até 100 metros de um local salvo ativo aparece como "Local: nome, endereço"; os demais mostram o endereço por extenso marcado como aproximado, com a precisão do GPS.
 
 `[PRINT P11]`
 
 ### Fase 02: Efetivo e Veículos
 
 Para cada viatura, escolhe-se o **Veículo Operacional** e o **efetivo** (com o papel de comandante ou operador). Dá para adicionar mais de uma viatura. **O vigilante é opcional:** se ficar sem ninguém escalado, a escolta vai para o mural, de onde um Operador a puxa (ver B2).
+
+Cada vigilante entra **uma vez só** na escolta, em qualquer viatura: quem já foi escolhido some da lista das outras linhas. A mesma placa também não pode estar em duas viaturas da mesma escolta; o passo 2 avisa e não deixa avançar. Se o vigilante escolhido não tiver acesso ao aplicativo (cadastro sem conta de usuário), aparece logo abaixo dele: "Este vigilante não tem acesso ao aplicativo e não verá a escolta". O cadastro continua permitido, mas ele não recebe a escolta no celular. O mesmo vale para vigilante com conta **inativa**, **bloqueada** ou **pendente**: o aviso diz o estado da conta.
 
 `[PRINT P12]`
 
@@ -184,7 +206,7 @@ A tela de detalhe da escolta é o centro de tudo. Abre em `/dashboard/escoltas/<
 
 ### A3.1 O cabeçalho e a Jornada
 
-No topo: o código da escolta, o status atual, o cliente, e os botões **PDF** e **Cancelar**. Logo abaixo, a **Jornada**: a faixa das **9 etapas**, com a etapa concluída em verde, a atual destacada e pulsando com o rótulo "ATUAL", e as futuras apagadas. Em uma olhada, sabe-se onde a escolta está.
+No topo: o código da escolta, o status atual, o cliente, e os botões **PDF** e **Cancelar**. Escolta com origem ou destino fora do RJ mostra, numa linha, a etiqueta **Interestadual** (com as UFs, por exemplo "Interestadual: RJ para SP", quando elas não são estimadas). Logo abaixo, a **Jornada**: a faixa das **9 etapas**, com a etapa concluída em verde, a atual destacada e pulsando com o rótulo "ATUAL", e as futuras apagadas. Em uma olhada, sabe-se onde a escolta está.
 
 `[PRINT P14]`
 
@@ -222,6 +244,19 @@ O botão **Cancelar** exige um motivo, que fica registrado. O cancelamento é po
 
 `[PRINT P21]`
 
+### A3.7 Ações da gestão (gestor e administrador)
+
+Na tela da escolta, o botão **Ações da gestão** (canto superior) aparece só para gestor e administrador. Toda ação pede **motivo** (mínimo de 10 caracteres) e a marcação "Li a lista acima e confirmo", fica na Auditoria (voltar, zerar e concluir também no histórico da escolta; arquivar e recuperar só na Auditoria), e avisa a supervisão e a equipe na Central de avisos e no chat central do Telegram. **Nada é apagado**: o que é desfeito fica **anulado**, riscado na Timeline com a etiqueta "Anulado em DD/MM/AAAA HH:MM (Brasília) por Nome: motivo", e não conta em relatório, PDF, indicadores nem no Campo.
+
+- **Editar escolta:** abre o formulário em qualquer status. Com a escolta já iniciada, a revisão pede o motivo. Os registros de campo não mudam; viatura que já registrou algo não sai nem troca de placa; vigilante e placa não se repetem. Trocar a placa de uma viatura sem registro (ou trocar as placas de duas viaturas entre si) mantém a equipe dela, a confirmação, o valor pago, os armamentos e o combustível. Supervisor e central editam só escolta em rascunho ou agendada (a central não mexe na equipe).
+- **Voltar uma etapa:** a escolta volta para a etapa imediatamente anterior da sequência (de uma escolta concluída com pendências, volta ao status em que ela estava). Antes de confirmar, a tela mostra a lista do que será anulado (pontos, checklists, fotos, KM e linhas do histórico da etapa desfeita). A equipe refaz a etapa: o Campo pede de novo a foto. Voltar do Pré-Início leva a Agendada e tem o efeito do zerar (vale também para uma escolta concluída ainda em Agendada). Se alguém registrar algo entre a prévia e a confirmação, a confirmação é recusada ("A escolta mudou desde a prévia") e a tela mostra a lista nova para conferir de novo.
+- **Zerar para agendada:** todos os registros de campo ficam anulados; equipe e viaturas continuam. A escolta volta ao mural com a etiqueta **Reiniciada pela gestão**, a presença na base precisa ser confirmada de novo e o pré-início é refeito do começo. Se a data prevista passou, reagende.
+- **Concluir agora:** mostra o que não foi feito, por etapa e por viatura, e conclui com a observação, que vai para o relatório final. A escolta ganha a faixa **Concluída com pendências** e a lista do que não foi feito, que aparecem para quem vê a escolta (central inclusive) no detalhe, na impressão, no PDF da escolta, no Relatório de Escoltas e no PDF de relatórios (seção "Pendências de conclusão", com escolta, etapa, viatura, item, quem concluiu e quando). A escolta aparece também na tela **Pendências de conclusão** (supervisor ou acima, com filtro de período e cliente). A lista de escoltas tem o filtro "Concluída com pendências".
+- **Arquivar:** só rascunho, agendada, finalizada ou cancelada (em andamento, conclua ou cancele antes). A escolta some das listas, do mural, do Campo, do mapa e dos indicadores. O administrador vê em **Arquivadas** (motivo, autor e data) e pode **Recuperar**, também com motivo; ela volta no status em que estava. Aberta pelo administrador, a escolta arquivada mostra a faixa "Arquivada em DD/MM/AAAA HH:MM (Brasília) por Nome: motivo" e só oferece **Recuperar**.
+- Não é possível voltar, zerar, concluir nem arquivar com **emergência aberta**: encerre a emergência antes. Escolta não pode ser apagada pelo sistema, só arquivada (exceto rascunho sem registro, pelo administrador). Registro anulado e viatura com registro de campo não podem ser apagados por ninguém, e o autor e o horário de um ponto gravado não mudam.
+- Gestor e administrador também registram ponto, check-in, checklist, foto e etapa sem estar na equipe; o registro fica em nome de quem fez. No Campo, eles veem também as agendadas de qualquer equipe e o botão "Voltar ao Painel Guiado".
+- Logo depois de uma atualização do sistema, por alguns minutos, as ações podem mostrar "Atualização em andamento". Tente de novo em seguida.
+
 ## A4. Acompanhamento em tempo real
 
 Além da tela de detalhe, o Supervisor tem duas telas de monitoramento.
@@ -230,13 +265,26 @@ Além da tela de detalhe, o Supervisor tem duas telas de monitoramento.
 
   `[PRINT P22]`
 
-- **Notificações** (`/dashboard/notificacoes`): o feed único de tudo que acontece, com uma conversa por escolta (não por pessoa) no painel lateral.
+- **Avisos** (`/dashboard/notificacoes`, o sino da barra superior): três abas.
+  - **Central** (abre primeiro): os seus avisos, um por evento, do mais novo para o mais antigo. Filtre por tipo, por código da escolta ou só as não lidas; cada aviso tem **Abrir** (a escolta), **Marcar como lida** e, no check-in atrasado, **Registrar check-in**. **Marcar todas como lidas** marca o que a lista mostra: sem filtro, todos os avisos (zera o contador); com filtro de tipo ou de escolta, só os daquele filtro (o botão diz "filtro atual"). Cada pessoa vê só a própria Central.
+  - **Atividade** (só Supervisor e acima, e Central): o feed de tudo que acontece nas escoltas (pontos, ocorrências, mudanças de status, presenças), com uma conversa por escolta no painel lateral. Não conta no sino.
+  - **Chat Interno**: como antes. As mensagens novas não contam mais no sino: o número vermelho fica na própria aba **Chat Interno** (mensagens recebidas desde a última vez que você abriu a aba neste aparelho).
 
   `[PRINT P23]`
 
-O sistema também dispara um **alerta de check-in atrasado** quando uma escolta passa da periodicidade sem reportar. O atraso não passa despercebido.
+- **Lista de escoltas** (`/dashboard/escoltas`): ver A5.
+
+**Sino e aviso de 2 segundos (outubro de 2026).** O número no sino (e no item **Avisos** da barra inferior do celular) é a quantidade de avisos **não lidos** da sua Central; ele não zera ao clicar, só quando você marca os avisos como lidos (inclusive pelo **Ciente** do mural, que já baixa o número na hora). Mensagem do Chat Interno não entra mais no sino. Cada aviso novo aparece no canto da tela por **2 segundos** e some sozinho, sem botão de fechar; tocar nele abre a escolta (no check-in atrasado, abre direto o registro do check-in). Quem não viu o aviso no canto encontra a mesma linha na Central. Com duas abas abertas no mesmo navegador, o aviso aparece numa só; em dois aparelhos, aparece nos dois, mas a Central continua com um aviso só.
+
+Quando o check-in periódico está ligado para a escolta, o **sistema** (não mais o navegador) confere a cada minuto se a escolta passou da periodicidade sem reportar e gera **um aviso por período vencido** para a equipe escalada, o supervisor, a central, o gestor e o administrador. O primeiro aviso sai assim que a periodicidade vence, com o mesmo atraso que o Painel mostra. A mensagem do Telegram ao cliente sai uma vez por período e **depende do envio pelo banco** (segredos do Telegram no Vault do Supabase): com ele ativo, sai mesmo que ninguém esteja com o sistema aberto; sem ele, quem manda é o navegador de quem está com o sistema aberto (gestão ou equipe da escolta), uma vez só por período, como reserva, e sem nenhum navegador aberto a mensagem não sai. Os avisos do mural (pedido de substituição, decisão e substituição de equipe) também caem na Central e no sino.
 
 `[PRINT P24]`
+
+## A5. Cartão da escolta e filtros (outubro de 2026)
+
+Toda escolta aparece no mesmo **cartão** na lista de escoltas, no mural, no painel inicial, no Modo Guiado (agendadas e escolta ativa), na lista lateral do mapa e nas arquivadas: código, cliente com a **faixa lateral na cor do cliente**, data e hora prevista **no horário de Brasília** (DD/MM/AAAA HH:MM), origem e destino resumidos (bairro e município), quem criou, a equipe (quantidade e comandante; para o operador, só "Sem equipe" ou "Com equipe" no mural), o status e as etiquetas: **Interestadual**, **Escala fixa**, **Concluída com pendências**, **Reiniciada pela gestão** e **Arquivada** (esta só para o administrador). No mapa, o marcador continua na cor do status, o status do cartão da lista lateral sai na mesma cor do marcador, e a janela do marcador traz o resumo do cartão (faixa do cliente, data e hora, origem e destino, equipe, quem criou e etiquetas). Na tabela da lista, a faixa ocupa a linha inteira, e a equipe vem na coluna do cliente. No Modo Guiado, o cartão usa letra grande (cliente e hora). No mural, nas agendadas de outras equipes, o operador não vê o nome do cliente (como antes) e a faixa sai cinza, para a cor não revelar o cliente; gestão, supervisor e central veem a cor de todas.
+
+**Filtros.** Na lista e no mural: **status**, **cliente**, **período** (hoje, amanhã, esta semana ou um intervalo de datas, sempre no horário de Brasília), **quem criou**, **equipe** (com ou sem), **interestadual** (sim, não ou não determinado: escolta sem UF conhecida, como endereço digitado à mão sem coordenada, ou escolta com um lado no RJ e o outro sem UF) e a **busca** por código, endereço, cliente ou quem criou. Os filtros se combinam. A busca vale um instante depois da última letra digitada, sem recarregar a lista a cada tecla; ao trocar um filtro, a lista anterior continua na tela até a nova chegar. Em **quem criou** aparece também quem já foi desligado e criou escoltas, marcado "(inativo)". Ficam **lembrados neste aparelho, para o seu usuário**: ao voltar à tela, eles continuam; outra pessoa que entrar no mesmo aparelho começa com os filtros dela. Se um filtro lembrado não existe mais (cliente que saiu da lista, por exemplo), ele é descartado e a tela avisa. No celular, os filtros ficam recolhidos no botão **Filtros**, com o número de filtros ligados, para o mural aparecer logo. **Limpar filtros** volta tudo ao padrão.
 
 ---
 
@@ -248,7 +296,7 @@ O Operador é o registrador da escolta. Ele trabalha no celular, em movimento. E
 
 Desde 29/09/2026 a tela de Campo abre no **Modo Guiado**, ligado por padrão. Ele mostra uma coisa por vez, em letra grande:
 
-- **A escolta e a etapa**: cliente, código e "Etapa N de 9", com a barra das etapas.
+- **A escolta e a etapa**: o cartão da escolta (o mesmo da lista, com a faixa na cor do cliente e letra grande) e "Etapa N de 9", com a barra das etapas. As escoltas agendadas também aparecem no cartão.
 - **Próxima Ação**: uma frase curta e um botão grande com o que fazer agora, por exemplo **Registrar Chegada no Destino**.
 - **Pendências da Escolta**: check-in atrasado ou perto de vencer, e viatura que ainda falta registrar.
 - **Outras Ações**: Registrar Check-in, Registrar Parada, Registrar Ocorrência, Abrir Rota no Mapa e Ver Detalhes da Escolta.
@@ -274,7 +322,7 @@ Regras que valem no painel:
 - **Duas ou mais viaturas**: o painel pede a viatura do registro, já marcando a sua. Dá para trocar e registrar por outra viatura da mesma escolta. A etapa só avança quando todas as viaturas registram; enquanto isso aparece "Aguardando registro da viatura ...".
 - **Confirmação**: depois de cada registro aparece uma tela verde com o horário e a Próxima Ação. Ela só aparece se o registro foi de fato gravado.
 - **Pré-início, chegada na base, finalização e parada** abrem a tela da escolta no diálogo certo. Ao concluir, o sistema volta sozinho para o painel.
-- **Check-in atrasado** vira a Próxima Ação, em vermelho. O aviso de atraso tem o botão **Registrar Check-in**, que abre o registro direto.
+- **Check-in atrasado** (só quando o check-in periódico está ligado para a escolta) vira a Próxima Ação, em vermelho. O aviso de atraso aparece no canto por 2 segundos (tocar nele abre o registro direto) e fica na Central de **Avisos**, com o botão **Registrar check-in**.
 - **Ver tela completa**, no rodapé, desliga o Modo Guiado neste aparelho. O botão **Voltar ao Modo Guiado**, no topo da tela completa, liga de novo.
 
 ## B1. A tela de Campo
@@ -289,12 +337,26 @@ Quando não há escolta ativa, a tela diz "Nenhuma escolta ativa". É o sinal de
 
 Em **Escoltas**, o Operador tem um alternador de três modos: **Minhas Escoltas**, **Disponíveis** e **Todas as Ativas**. A aba **Disponíveis** é o mural: escoltas agendadas esperando equipe.
 
-- Escolta **sem equipe:** botão **Puxar**. O Operador vira o comandante e escolhe quem vai junto.
-- Escolta **já escalada:** badge "já escalada" e botão **Assumir**.
+A tela abre em **Minhas Escoltas** sempre que o Operador tem escolta ativa. Só abre direto no mural quem não tem nenhuma escolta e há escolta livre para puxar. Na aba Disponíveis, quem tem escolta vê o aviso "Você tem N escolta(s) em Minhas Escoltas", que leva de volta à aba dele. A escolta de outra dupla nunca aparece como livre: quem tem equipe é informado pelo servidor.
+
+- Escolta **sem equipe:** botão **Puxar**. O Operador vira o comandante e escolhe quem vai junto. Não dá para ser comandante de duas escoltas agendadas com menos de 6 horas entre elas.
+- **Outra viatura:** ao puxar ou pedir, "Vamos usar outra viatura" troca a primeira viatura da escolta. A lista não oferece a placa que já está em outra viatura da mesma escolta, e o sistema recusa essa troca com mensagem. Se a placa escolhida num pedido passar a estar em outra viatura antes da decisão, o pedido é invalidado com o motivo, sem travar os pedidos das outras escoltas.
+- Escolta **já escalada:** badge "já escalada". Antes da janela aparece "Substituição a partir das HH:MM"; dentro dela, o botão **Pedir**.
+- Escolta de **escala fixa** não aparece no mural: a equipe é definida pela supervisão.
+- **Cartão e filtros:** cada escolta do mural vem no cartão padrão, com a etiqueta Interestadual quando for o caso. A faixa sai na cor do cliente só nas escoltas em que você está na equipe; nas agendadas de outras equipes ela sai **cinza**, porque a cor identificaria o cliente (o nome do cliente dessas escoltas também não aparece); os filtros do topo (por exemplo, só interestaduais) ficam lembrados no aparelho para o seu usuário (ver A5).
 
 `[PRINT P26]`
 
-Assumir uma escolta que já tem equipe **exige confirmação e um motivo escrito** (mínimo de cinco caracteres), porque a equipe anterior será substituída e isso fica no histórico. Enquanto a escolta não começa, dá para **Devolver** ao mural.
+Regras do mural desde o lote de outubro de 2026 (travas T1 a T7):
+
+1. **Janela:** pedir uma escolta que já tem equipe só a partir de **60 minutos antes** da hora prevista.
+2. **Presença:** a equipe escalada confirma **Estou na base** (no mural ou no Painel Guiado, a partir do início da janela). Com a presença confirmada, ninguém assume a escolta.
+3. **Pedido:** dentro da janela e sem presença, assumir vira um **pedido à supervisão**, com motivo de **no mínimo 20 caracteres**. Supervisor, gestor ou administrador aprova ou recusa na tela **Substituições**. **Sem resposta em 15 minutos**, o pedido é liberado automaticamente pelo sistema e quem pediu assume.
+4. **Aviso:** a equipe substituída e a supervisão recebem aviso no aplicativo; o chat central do Telegram recebe uma mensagem por evento.
+5. **Escala fixa:** marcada pela supervisão no formulário da escolta; some do mural e só a supervisão muda a equipe.
+6. **Registro:** puxar, pedir, decidir, substituir, devolver, incluir e confirmar presença ficam na auditoria; a tela **Substituições** mostra o histórico (quem, de quem, quando, antecedência, motivo, quem decidiu ou se foi liberado por tempo).
+
+Os números (60 minutos, 15 minutos, 6 horas) são os padrões e podem ser ajustados por gestor ou administrador na tela Substituições. Enquanto a escolta não começa, o comandante pode **Devolver** ao mural, salvo em escala fixa.
 
 `[PRINT P27]`
 
@@ -306,11 +368,11 @@ O pré-início **não acontece pela tela de Campo**. Ele é um assistente de tr�
 
   `[PRINT P28]`
 
-- **Passo 2, Viatura:** as **cinco fotos obrigatórias da viatura**, em cinco ângulos com significado individual: **Frontal, Traseira, Lateral Esquerda, Lateral Direita e Painel/Interior**. Em seguida, um checklist de condições (pneus, óleo, faróis, armas no cofre, combustível, cintos, documentação, limpeza). A viatura só é liberada quando o passo é concluído inteiro.
+- **Passo 2, Viatura:** as **cinco fotos obrigatórias da viatura**, em cinco ângulos com significado individual: **Frontal, Traseira, Lateral Esquerda, Lateral Direita e Painel/Interior**. Em seguida, um checklist de condições (pneus, óleo, faróis, armas no cofre, combustível, cintos, documentação, limpeza) e as **observações e não conformidades** desse checklist (obrigatórias). Depois, antes do botão de avançar, o bloco **Por viatura**: um cartão para cada viatura da escolta, identificado pela placa, com o **KM inicial** (obrigatório, número maior que zero) e a **foto do painel com o hodômetro** (obrigatória, pela câmera). A viatura só é liberada quando o passo é concluído inteiro; se faltar o KM ou a foto de alguma viatura, a mensagem diz qual placa está pendente. Escolta sem viatura vinculada mostra o aviso "Escolta sem viatura vinculada" e não avança: vincule a viatura na aba Veículos. Numa escolta com mais de uma viatura, as cinco fotos de ângulo e o checklist de condições continuam registrando só a primeira viatura; o KM e a foto do painel são de cada uma.
 
   `[PRINT P29]`
 
-- **Passo 3, Saída:** a **quilometragem inicial**, a **foto do hodômetro** e as observações de saída. O botão **Confirmar e Iniciar Escolta** coloca a operação em campo.
+- **Passo 3, Saída:** só as **observações gerais de saída** (obrigatórias), com um resumo, só para conferência, do KM inicial e da miniatura da foto do painel de cada viatura informados no Passo 2. Para corrigir o KM ou trocar a foto, use **Voltar**: o Passo 2 volta com o KM e as miniaturas das fotos já tiradas; para trocar uma foto, toque no "x" da miniatura e fotografe de novo. O botão **Confirmar e Iniciar Escolta** coloca a operação em campo e grava o ponto de saída da base de cada viatura, com o KM e a foto do painel daquela viatura.
 
   `[PRINT P30]`
 
@@ -319,11 +381,13 @@ O pré-início **não acontece pela tela de Campo**. Ele é um assistente de tr�
 Do momento em que a escolta sai da base, avançar cada etapa é registrar um checkpoint. Na tela de Campo, o bloco **Registrar Checkpoint** pede, nesta ordem:
 
 1. **A viatura do registro** (quando há mais de uma e o perfil é administrativo). Cada viatura tem o próprio ponto. **A etapa só avança quando todas as viaturas registram.**
-2. **Foto (mínimo 1, até 5).** A câmera abre direto. O **GPS é capturado sozinho** no momento da foto e carimbado na imagem.
+2. **Foto (mínimo 1, até 3, desde novembro de 2026).** A câmera abre direto. O **GPS é capturado sozinho** no momento da foto e carimbado na imagem. A foto é **reduzida no próprio aparelho** (lado maior de 1600 pixels, cerca de 200 a 400 KB em vez de 3 a 6 MB), com o carimbo de data, hora e coordenada; isso deixa a fila sem internet leve e o envio rápido em 3G e 4G fraco.
 3. **Observação**, já sugerida conforme a etapa.
 4. O **botão de avanço**, com o nome da próxima etapa.
 
 Sobre o GPS no checkpoint: **a falta de sinal não trava o registro.** A foto é gravada com o aviso de que não houve coordenada, para o Operador não ficar preso sem rede. A foto, essa sim, é obrigatória.
+
+**GPS impreciso (novembro de 2026):** se a leitura vier com precisão pior que 100 m, o aparelho tenta de novo por até 10 segundos e grava a melhor leitura. Se continuar ruim, a tela avisa "GPS impreciso: ±N m". A precisão aparece também no carimbo e na tela da escolta.
 
 `[PRINT P31]`
 
@@ -341,14 +405,19 @@ Em dois momentos aparece um checklist: o **Pré-Saída** (na preparação) e o *
 
 Durante o trajeto, o Operador mantém o pulso da operação. Estas duas ações ficam no **Painel de Ações do Operador**, na tela de detalhe da escolta.
 
-- **Check-in:** a periodicidade é configurável (de 10 a 120 minutos). Quando vence, o botão fica vermelho e avisa "CHECK-IN ATRASADO". O diálogo pede **foto (mínimo 1)** e usa o **GPS**. Aqui, ao contrário do checkpoint, **o botão de confirmar fica bloqueado sem GPS e sem foto**.
+- **Check-in periódico desligado por padrão (outubro de 2026):** as fotos de cada etapa já registram a posição. O botão **Registrar Check-in** continua em Outras Ações para quem quiser reportar a posição entre etapas. Para religar o check-in obrigatório de um cliente, é preciso gravar `checkin_periodico_min` (em minutos) nos metadados do cliente, hoje só pelo SQL Editor (não há tela para isso); aí o campo volta ao formulário de escolta desse cliente.
+- **Check-in, quando ligado:** a periodicidade é configurável (de 10 a 120 minutos). Quando vence, o botão fica vermelho e avisa "CHECK-IN ATRASADO". O diálogo pede **foto (mínimo 1)** e usa o **GPS**. Aqui, ao contrário do checkpoint, **o botão de confirmar fica bloqueado sem GPS e sem foto**.
 - **Registrar Parada:** para qualquer parada não prevista (abastecimento, refeição, blitz, manutenção, entre outras). Pede o tipo, **foto** e **justificativa**, ambos obrigatórios.
+
+**Sugestões de texto (novembro de 2026).** Abaixo dos campos obrigatórios (wizard de pré-início, parada, cancelamento, reagendamento e relatório final) aparecem botões pequenos com frases prontas. **Um toque insere a frase no campo; depois é só completar ou corrigir.** Nada é preenchido sozinho: com o campo vazio, o registro continua bloqueado. No relatório final, as frases são trechos para completar com o que aconteceu.
 
 `[PRINT P33]`
 
 ## B7. Registrar ocorrência
 
 Para relatar incidente, irregularidade ou desvio, o bloco **Registrar Ocorrência** (na tela de Campo, durante o trânsito) pede o **tipo**, uma **descrição** obrigatória e uma **foto recomendada**. A foto aqui não é obrigatória, mas registra data, hora e GPS quando existe.
+
+Desde novembro de 2026, acima da descrição há botões de **categoria** (Acidente de trânsito, Ameaça ou tentativa de abordagem, Avaria ou violação da carga, Desvio ou bloqueio de rota, Falha mecânica, Fiscalização ou documentação, Outra ocorrência). O toque escreve "Categoria: ..." no início; tocar em outra troca a anterior. **A categoria não substitui o relato:** o botão só libera depois que o Operador descreve o que aconteceu, com as próprias palavras.
 
 `[PRINT P34]`
 
@@ -358,7 +427,49 @@ O botão **Acionar Emergência** fica fixo na base da tela de Campo, largo e ver
 
 A emergência **nunca é bloqueada por falta de GPS**: é um toque, e a central é acionada de imediato, com a posição se houver ou com o aviso de informar por rádio se não houver.
 
+Na confirmação aparecem botões de **categoria opcional** (Risco imediato à equipe, Tentativa de roubo ou abordagem, Acidente com vítima, Pane em local inseguro, Perda de contato com a central, Outra emergência). **Não é preciso escolher:** o CONFIRMAR funciona sem categoria. Se escolhida, ela vai junto para a central e para o Telegram.
+
 `[PRINT P35]`
+
+## B9. Sem internet (outubro de 2026)
+
+Quando o aparelho perde a conexão, aparece no topo uma **faixa vermelha fixa**: "Sem conexão." e, se houver, quantos registros estão guardados no aparelho. Com a conexão de volta, a faixa fica âmbar enquanto os registros guardados sobem e **some quando tudo foi enviado**. O Painel mostra o mesmo contador.
+
+**O que dá para fazer sem internet** (pelo Campo, pelo Painel Guiado e pela tela da escolta): pré-início e o checklist de partida (wizard, com o KM e as fotos de cada viatura), saída da base, as etapas até a chegada na base com o KM final, check-in, parada, ocorrência, checklist do Campo, "Estou na base" e emergência. Cada registro guarda a hora e o GPS do momento da ação. **Exigem internet:** criar e editar escolta, ações da gestão, a finalização (checklist de entrega e relatório final), a tela de conflitos e o login.
+
+**Como fica a confirmação:** sem sinal, a tela diz **"Guardado no aparelho. Será enviado quando houver sinal."** e nunca "a central foi avisada". A tela já mostra a etapa seguinte (o registro guardado conta). Quando o sinal volta, os registros sobem sozinhos, **na ordem em que foram feitos** (a emergência primeiro), uma vez só. O Telegram de cada registro sai nessa hora e, se a diferença passar de 2 minutos, diz "Registrado às HH:MM sem conexão, enviado às HH:MM (Brasília)". Fotos já enviadas aparecem como "Foto indisponível sem conexão"; as guardadas aparecem a partir do próprio aparelho.
+
+**Emergência sem internet:** a emergência fica guardada e é a primeira a subir quando o sinal voltar, mas **até lá ninguém foi avisado**. A tela fica vermelha com "SEM CONEXÃO: NINGUÉM FOI AVISADO. Use o rádio ou ligue para a central agora" e o botão **Ligar para a central** (o número cadastrado em Configurações; sem número, só o texto). Use o rádio ou o telefone na hora.
+
+**Registro não aceito (conflito):** se a escolta mudou enquanto você estava sem sinal (a gestão zerou, arquivou, concluiu ou voltou a etapa, outra viatura já registrou a mesma etapa, você saiu da equipe), o registro **não é aplicado e não se perde**: fica guardado no servidor com tudo o que você registrou, inclusive as fotos, e a supervisão é avisada. O Painel mostra "N registros não aceitos; a supervisão foi avisada". Não há como apagar.
+
+**Registro recusado:** registro de escolta com a qual você não tem vínculo nenhum é recusado pelo servidor e fica em **"Registros recusados"** no Painel, só no aparelho. Avise a central.
+
+**Para a supervisão (supervisor, gestor e administrador): Conflitos de campo.** No menu Gestão, **Conflitos de campo** lista os registros não aplicados, com o motivo, a hora no aparelho e a hora do recebimento (Brasília), o conteúdo completo e as fotos. **Marcar como tratado** pede justificativa (pelo menos 10 caracteres) e não grava o registro na escolta nem apaga nada. A Central recebe o aviso "Registro sem conexão em conflito" (até 5 por pessoa a cada 10 minutos; os demais ficam só na tela) e "EMERGÊNCIA não aceita" quando for o caso.
+
+**Limitações (leia antes de depender do modo sem internet):**
+
+- O **Campo**, o **Painel** e a **tela das escoltas que aparecem no seu Campo** abrem sem internet, desde que você já tenha entrado com internet neste aparelho (o primeiro login sempre exige internet). Outras telas mostram "Esta tela precisa de internet. Volte ao Painel".
+- **iPhone:** o envio só acontece com o aplicativo aberto (o Safari não envia em segundo plano). **Instale o aplicativo na tela de início**: sem isso, o iPhone pode apagar os dados guardados depois de alguns dias sem uso.
+- Registro que ainda está **só no aparelho se perde** se o aparelho for perdido, quebrado ou limpo antes do envio. Procure sinal assim que puder.
+- A hora gravada é a do **relógio do aparelho** no momento da ação; o servidor guarda também a hora em que recebeu. Relógio errado no aparelho dá hora errada no registro.
+- As fotos são guardadas já reduzidas (desde novembro de 2026, cerca de 200 a 400 KB cada); se o espaço do aparelho acabar, a câmera avisa e não deixa tirar a foto até liberar espaço ou enviar o que está guardado.
+- Sem internet, o endereço por extenso do check-in e da parada não é buscado na hora (fica só a coordenada). **Desde novembro de 2026, quando os registros sobem, o servidor busca o endereço uma única vez** e ele aparece na tela da escolta, marcado como aproximado. A coordenada do GPS continua sendo a verdade.
+- Ao **sair do sistema** com registros guardados, o aplicativo avisa: eles ficam no aparelho e só sobem quando você entrar de novo, neste aparelho, com internet.
+- A chave de liga e desliga é da administração (`offline_ligado`); desligada, o aplicativo grava direto, como antes, e continua enviando o que já estava guardado.
+
+**Roteiro do teste em aparelho real (obrigatório antes de depender do modo sem internet; um Android e um iPhone, com o aplicativo instalado na tela de início):**
+
+1. Com internet, entrar com um operador de teste, abrir o Campo e esperar a tela carregar; abrir uma vez o Painel.
+2. Pôr o aparelho em modo avião. Fechar o aplicativo e abrir de novo: o Campo deve abrir com a faixa "Sem conexão.".
+3. Pelo Painel, abrir a escolta de teste e fazer o pré-início e o checklist de partida com fotos; registrar a chegada na origem; fazer um check-in e uma parada; registrar uma ocorrência.
+4. Conferir a faixa e o contador ("N registros guardados no aparelho") e que a tela mostra a etapa seguinte.
+5. Esperar pelo menos 3 minutos, desligar o modo avião e manter o aplicativo aberto: o contador deve zerar; conferir na tela da escolta (de outro aparelho com internet) que cada registro apareceu uma vez, com a hora da ação, e o Telegram com "Registrado às ... sem conexão, enviado às ...".
+6. Repetir no iPhone com o aplicativo fechado durante a volta do sinal: o envio só deve acontecer ao abrir o aplicativo.
+7. Emergência de teste sem sinal (combinada com a central): conferir a tela vermelha e o botão de ligar; ao voltar o sinal, a emergência deve ser a primeira a chegar.
+8. Anotar modelo do aparelho, versão do sistema, tempo até o envio e qualquer diferença, e registrar no relatório de prontidão.
+
+`[PRINT P36]` faixa sem conexão e contador; `[PRINT P37]` emergência sem conexão; `[PRINT P38]` Conflitos de campo.
 
 ---
 
@@ -391,7 +502,7 @@ Rascunho, Agendada, Pré-Início, Em Andamento, Na Origem, Trânsito p/ Destino,
 
 ## Anexo 3: O que o sistema não faz
 
-- **Não funciona sem internet.** Sem fila offline, sem sincronização posterior.
+- **Sem internet, só o essencial.** O Campo, o Painel e a tela das escoltas do operador abrem e registram sem conexão (seção B9); criar e editar escolta, ações da gestão, finalização, a tela de conflitos e login exigem internet.
 - **Não substitui o rádio.**
 - **Não rastreia continuamente.** A posição é gravada nos pontos, check-ins e paradas.
 - **Não há cadastro de equipamentos/ferramentas.** Arma vai em Armamentos; colete, rádio e lanterna são itens de checklist conferidos no pré-início.

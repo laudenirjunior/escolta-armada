@@ -1,47 +1,29 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { Plus, Search, Eye, Pencil, ArrowRight, MapPin, Clock, Truck, CheckCircle2, Shield, FileDown } from 'lucide-react'
+import { Plus, Eye, Pencil, MapPin, Clock, Truck, CheckCircle2, Shield, FileDown } from 'lucide-react'
 import { printEscolta } from '@/utils/print'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
-import { PODE_CRIAR_ESCOLTA, PODE_EDITAR_ESCOLTA } from '@/lib/permissions'
+import { PODE_CRIAR_ESCOLTA, PODE_EDITAR_ESCOLTA, PODE_PODER_TOTAL } from '@/lib/permissions'
 import { DialogoAssumirEscolta } from '@/components/escolta/dialogo-assumir-escolta'
+import { AcaoMural } from '@/components/escolta/acao-mural'
+import { AvisosMural } from '@/components/escolta/avisos-mural'
+import { MapaInfoMural, lerInfoMural, confirmarPresencaBase, horaBrasilia } from '@/lib/mural'
+import { CartaoEscolta } from '@/components/escolta/cartao-escolta'
+import { FiltrosEscoltas } from '@/components/escolta/filtros-escoltas'
+import { SELECT_CARTAO, type CartaoEscolta as CartaoDados, temEquipeGestao, lerCoresClientes, aplicarCoresClientes } from '@/lib/cartao-escolta'
+import { STATUS_ATIVOS } from '@/lib/fluxo-escolta'
+import { useFiltrosEscoltas, aplicarFiltrosServidor, type Filtros } from '@/hooks/useFiltrosEscoltas'
 
-interface EscoltaRow {
-  id: string
-  codigo_escolta: string | null
-  status: string
-  data_hora_prevista: string
-  origem_endereco: string
-  destino_endereco: string
-  checklist_pendente_no_inicio: boolean
-  cliente: { nome_cliente: string; cor_destaque: string } | null
-}
+// Onda K: o cartão padrão (lib/cartao-escolta.ts) traz cliente, UF, etiquetas, criador e
+// equipe; status e rótulos vêm de lib/fluxo-escolta.ts (acabou o STATUS_MAP duplicado).
+type EscoltaRow = CartaoDados
 
-const STATUS_MAP: Record<string, { label: string; cls: string }> = {
-  rascunho:      { label: 'Rascunho',     cls: 'badge-neutral' },
-  agendada:      { label: 'Agendada',     cls: 'badge-info' },
-  em_pre_inicio: { label: 'Pré-Início',   cls: 'badge-warning' },
-  em_andamento:  { label: 'Em Andamento', cls: 'badge-info' },
-  na_origem:     { label: 'Na Origem',    cls: 'badge-info' },
-  em_transito_destino: { label: 'Trânsito p/ Destino', cls: 'badge-info' },
-  no_destino:    { label: 'No Destino',   cls: 'badge-success' },
-  retornando:    { label: 'Retornando',   cls: 'badge-warning' },
-  na_base:       { label: 'Na Base',      cls: 'badge-success' },
-  finalizada:    { label: 'Finalizada',   cls: 'badge-success' },
-  cancelada:     { label: 'Cancelada',    cls: 'badge-danger' },
-}
-
-const STATUS_OPTIONS = [
-  { value: 'todos', label: 'Todos' },
-  { value: 'em_andamento', label: 'Em Andamento' },
-  { value: 'agendada', label: 'Agendada' },
-  { value: 'em_pre_inicio', label: 'Pré-Início' },
-  { value: 'finalizada', label: 'Finalizada' },
-  { value: 'cancelada', label: 'Cancelada' },
-]
+const GRUPO_NAO_INICIADAS = ['rascunho', 'agendada', 'em_pre_inicio']
+const GRUPO_ATIVAS = ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando', 'na_base']
+const GRUPO_HISTORICO = ['finalizada', 'cancelada', 'com_pendencias']
 
 const PODE_CRIAR = PODE_CRIAR_ESCOLTA
 
@@ -50,9 +32,16 @@ const sb = supabase as any
 
 export default function EscoltasPage() {
   const [escoltas, setEscoltas] = useState<EscoltaRow[]>([])
-  const [busca, setBusca] = useState('')
-  const [filtroStatus, setFiltroStatus] = useState('todos')
+  // Onda K: filtros combinados e lembrados por usuário no aparelho.
+  const [opcoesClientes, setOpcoesClientes] = useState<{ id: string; nome: string }[]>([])
+  const [opcoesCriadores, setOpcoesCriadores] = useState<{ id: string; nome: string }[]>([])
+  const [opcoesProntas, setOpcoesProntas] = useState(false)
+  const [avisoFiltro, setAvisoFiltro] = useState<string | null>(null)
+  // "Carregando" só na primeira carga; depois, a lista anterior fica na tela enquanto a nova
+  // chega (revisão adversarial K, médio 3), com um aviso discreto de atualização.
   const [loading, setLoading] = useState(true)
+  const [atualizando, setAtualizando] = useState(false)
+  const jaCarregou = useRef(false)
   // Operador: alternador "Minhas / Disponíveis / Todas".
   //
   // "Disponíveis" é o mural, decidido com Pecanha em 2026-08-19: escolta agendada e ainda
@@ -67,87 +56,231 @@ export default function EscoltasPage() {
   // Escolta que o operador esta assumindo agora, e o vigilante vinculado a ele.
   const [assumindo, setAssumindo] = useState<EscoltaRow | null>(null)
   const [meuVigilanteId, setMeuVigilanteId] = useState<string | null>(null)
-  const { user } = useAuth()
+  // Lote 2026-10 (M5): estado das travas, lido do servidor (mural_info).
+  const [infoMural, setInfoMural] = useState<MapaInfoMural>({})
+  const [travasAtivas, setTravasAtivas] = useState(false)
+  const { user, loading: carregandoAuth } = useAuth()
   const router = useRouter()
   const perfil = (user?.perfil?.codigo ?? '') as any
+  const { filtros, definir: definirFiltros, limpar: limparFiltros, pronto: filtrosProntos } = useFiltrosEscoltas(user?.id ?? null)
+  const filtroStatus = filtros.status
+  // Revisão adversarial K, médio 3: a carga do servidor depende só dos filtros de servidor.
+  // Busca e equipe filtram no navegador (escoltasFiltradas), sem nova consulta.
+  const { status: fStatus, cliente: fCliente, periodo: fPeriodo, de: fDe, ate: fAte, criador: fCriador, interestadual: fInter } = filtros
+  const filtrosServidor = useMemo<Filtros>(() => ({
+    status: fStatus, cliente: fCliente, periodo: fPeriodo, de: fDe, ate: fAte, criador: fCriador, interestadual: fInter,
+    busca: '', equipe: 'todas',
+  }), [fStatus, fCliente, fPeriodo, fDe, fAte, fCriador, fInter])
+  const seqCarga = useRef(0)
+  // Leituras auxiliares (mural_info e cores) só quando o conjunto de ids muda, ou quando uma
+  // ação do mural pede (forçar). Guardam a chave dos ids e o último resultado.
+  const auxMural = useRef<{ chave: string; lido: Awaited<ReturnType<typeof lerInfoMural>> | null }>({ chave: '', lido: null })
+  const auxCores = useRef<{ chave: string; cores: Map<string, string> | null }>({ chave: '', cores: null })
+  const auxOperador = useRef<{ vig: { id: string } | null; escoltaIds: string[]; comandoIds: string[] } | null>(null)
+  // Onda G: sem perfil a lista não carrega (sairia como não operador). Se o perfil não
+  // chegar (conta sem perfil, leitura falhou, sessão perdida), a tela não fica presa em
+  // "Carregando": mostra a mensagem depois do login terminar, ou de 15 s no máximo.
+  const [semPerfil, setSemPerfil] = useState(false)
+  useEffect(() => {
+    if (perfil) { setSemPerfil(false); return }
+    if (!carregandoAuth) { setSemPerfil(true); setLoading(false); return }
+    const t = setTimeout(() => { setSemPerfil(true); setLoading(false) }, 15_000)
+    return () => clearTimeout(t)
+  }, [perfil, carregandoAuth])
 
-  const carregar = useCallback(async () => {
-    setLoading(true)
+  // Onda G: decide a aba inicial do operador só uma vez, depois da primeira carga feita
+  // já como operador (ver o fim de carregar()).
+  const jaEscolheuModo = useRef(false)
+
+  const carregar = useCallback(async (forcar = false) => {
+    // Onda G: enquanto o login não termina, o perfil é vazio e a carga sairia como se
+    // fosse de não operador, sem as escoltas dele. Espera o usuário e o perfil chegarem.
+    if (!user || !perfil || !filtrosProntos) return
+    const seq = ++seqCarga.current
+    if (jaCarregou.current) setAtualizando(true)
+    else setLoading(true)
+    // Onda I: "Concluída com pendências" é filtrada no banco (embed !inner com a conclusão
+    // válida), não no navegador: o limite de linhas do PostgREST não esconde as antigas.
+    const soComPendencias = filtrosServidor.status === 'com_pendencias'
     let q = sb
       .from('escoltas')
-      .select(`
-        id, codigo_escolta, status, data_hora_prevista,
-        origem_endereco, destino_endereco, checklist_pendente_no_inicio,
-        cliente:clientes(nome_cliente, cor_destaque)
-      `)
+      .select(soComPendencias
+        ? SELECT_CARTAO.replace('conclusao:escolta_conclusoes_antecipadas(', 'conclusao:escolta_conclusoes_antecipadas!inner(')
+        : SELECT_CARTAO)
+      // Onda I: arquivada fora (o administrador as vê em Arquivadas).
+      .is('arquivada_em', null)
       .order('data_hora_prevista', { ascending: false })
 
-    if (filtroStatus !== 'todos') {
-      q = q.eq('status', filtroStatus)
+    if (soComPendencias) {
+      q = q.eq('status', 'finalizada').is('conclusao.anulado_em', null)
     }
+    // Onda K: status, cliente, período, quem criou e interestadual no servidor.
+    q = aplicarFiltrosServidor(q, filtrosServidor)
 
     const { data } = await q
+    if (seq !== seqCarga.current) return
     let rows = (data ?? []) as EscoltaRow[]
 
+    let escoltaIdsOperador: string[] = []
     // Filtragem de Visibilidade (Operador vê apenas escoltas ativas)
     if (perfil === 'operador') {
       rows = rows.filter((e) =>
         ['rascunho', 'agendada', 'em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando', 'na_base'].includes(e.status)
       )
 
-      // Resolve as escoltas em que este operador está escalado (via vigilante)
-      const { data: vig } = await sb.from('vigilantes').select('id').eq('usuario_id', user?.id).maybeSingle()
-      setMeuVigilanteId(vig?.id ?? null)
-      let escoltaIds: string[] = []
-      let comandoIds: string[] = []
-      if (vig) {
-        const { data: efet } = await sb
-          .from('escolta_efetivo')
-          .select('escolta_id, papel_na_escolta')
-          .eq('vigilante_id', vig.id)
-        escoltaIds = Array.from(new Set((efet ?? []).map((e: any) => e.escolta_id).filter(Boolean)))
-        comandoIds = Array.from(new Set((efet ?? [])
-          .filter((e: any) => e.papel_na_escolta === 'comandante')
-          .map((e: any) => e.escolta_id).filter(Boolean)))
+      // Resolve as escoltas em que este operador está escalado (via vigilante). Só relê
+      // quando forçado (ação do mural) ou na primeira carga: trocar filtro não muda a equipe.
+      if (forcar || !auxOperador.current) {
+        const { data: vig } = await sb.from('vigilantes').select('id').eq('usuario_id', user?.id).maybeSingle()
+        let escoltaIds: string[] = []
+        let comandoIds: string[] = []
+        if (vig) {
+          const { data: efet } = await sb
+            .from('escolta_efetivo')
+            .select('escolta_id, papel_na_escolta')
+            .eq('vigilante_id', vig.id)
+          escoltaIds = Array.from(new Set((efet ?? []).map((e: any) => e.escolta_id).filter(Boolean)))
+          comandoIds = Array.from(new Set((efet ?? [])
+            .filter((e: any) => e.papel_na_escolta === 'comandante')
+            .map((e: any) => e.escolta_id).filter(Boolean)))
+        }
+        auxOperador.current = { vig: vig ?? null, escoltaIds, comandoIds }
       }
-      setMinhasEscoltaIds(escoltaIds)
-      setSouComandanteIds(comandoIds)
+      if (seq !== seqCarga.current) return
+      const op = auxOperador.current
+      setMeuVigilanteId(op?.vig?.id ?? null)
+      escoltaIdsOperador = op?.escoltaIds ?? []
+      setMinhasEscoltaIds(escoltaIdsOperador)
+      setSouComandanteIds(op?.comandoIds ?? [])
+      // Decisão S17 (revisão K, médio 1): nas escoltas que não são dele (agendadas de outras
+      // equipes, no mural), a faixa sai no cinza neutro; a cor identificaria o cliente.
+      rows = rows.map(e => (escoltaIdsOperador.includes(e.id) ? e : { ...e, cor_sigilosa: true }))
     }
 
-    // Mural: agendadas que ainda não têm ninguém escalado. A consulta é sobre o efetivo
-    // das agendadas, e não sobre todas, para não trazer o efetivo do sistema inteiro.
+    // Mural: agendadas que ainda não têm ninguém escalado. Onda G: "sem equipe" vem só do
+    // servidor (mural_info). O efetivo lido pelo próprio operador não serve, porque a RLS
+    // esconde o efetivo dos colegas e toda escolta de outra dupla pareceria livre. Sem
+    // mural_info (minutos entre o deploy e o bloco 2), toda escolta conta como com equipe.
+    // Revisão K, médio 3: só relê quando o conjunto de agendadas muda (ou forçado); o relógio
+    // de 30 s abaixo mantém o estado do mural em dia.
     const agendadas = rows.filter(e => e.status === 'agendada').map(e => e.id)
-    if (agendadas.length > 0) {
-      const { data: comEquipe } = await sb
-        .from('escolta_efetivo')
-        .select('escolta_id')
-        .in('escolta_id', agendadas)
-      const ocupadas = new Set((comEquipe ?? []).map((e: any) => e.escolta_id))
-      setSemEquipeIds(agendadas.filter(id => !ocupadas.has(id)))
+    const chaveMural = [...agendadas].sort().join(',')
+    let lido = auxMural.current.lido
+    if (forcar || !lido || chaveMural !== auxMural.current.chave) {
+      // Falha passageira (rede, tempo esgotado), já com uma nova tentativa: mantém o último
+      // estado lido e não escolhe a aba com base nela.
+      lido = await lerInfoMural(sb, agendadas)
+      if (seq !== seqCarga.current) return
+      if (!lido.falhou) auxMural.current = { chave: chaveMural, lido }
+    }
+    const livres = lido.ativo ? agendadas.filter(id => lido!.info[id] && !lido!.info[id].tem_equipe) : []
+    if (lido.falhou) {
+      setSemEquipeIds(ant => ant.filter(id => agendadas.includes(id)))
     } else {
-      setSemEquipeIds([])
+      setTravasAtivas(lido.ativo)
+      setInfoMural(lido.info)
+      setSemEquipeIds(livres)
     }
 
+    // Operador sem escolta nenhuma cai numa lista vazia e não descobre sozinho que existe
+    // uma aba com escoltas para pegar. Nesse caso a tela já abre no mural. Onda G: a
+    // escolha é feita aqui, com as escoltas dele já calculadas, e uma vez só; depois
+    // disso a escolha é dele.
+    if (perfil === 'operador' && !jaEscolheuModo.current && !lido.falhou) {
+      jaEscolheuModo.current = true
+      const minhas = rows.filter(e => escoltaIdsOperador.includes(e.id)).length
+      const livresVisiveis = livres.filter(id => !escoltaIdsOperador.includes(id) && !lido!.info[id]?.escala_fixa)
+      if (minhas === 0 && livresVisiveis.length > 0) setModoLista('disponiveis')
+    }
+
+    // Onda K: cor do cliente das linhas que vieram sem o cliente (nunca das sigilosas, S17).
+    // Só relê quando o conjunto de ids muda.
+    const semCliente = rows.filter(l => !l.cliente && !l.cor_sigilosa).map(l => l.id)
+    const chaveCores = [...semCliente].sort().join(',')
+    if (forcar || chaveCores !== auxCores.current.chave) {
+      const cores = await lerCoresClientes(sb, semCliente)
+      if (seq !== seqCarga.current) return
+      auxCores.current = { chave: chaveCores, cores }
+    }
+    rows = aplicarCoresClientes(rows, auxCores.current.cores)
     setEscoltas(rows)
+    jaCarregou.current = true
     setLoading(false)
-  }, [filtroStatus, perfil, user])
+    setAtualizando(false)
+  }, [filtrosServidor, filtrosProntos, perfil, user])
+
+  // Opções dos filtros de cliente e de quem criou. O operador só lê os clientes das escoltas
+  // em que está escalado (RLS); os das linhas carregadas entram também.
+  // Revisão K, menor 15: "Quem criou" traz também quem foi inativado e criou escoltas.
+  useEffect(() => {
+    if (!user) return
+    ;(async () => {
+      const [{ data: cls }, { data: us }, { data: criadas }] = await Promise.all([
+        sb.from('clientes').select('id, nome_cliente').order('nome_cliente'),
+        sb.from('usuarios').select('id, nome_completo').eq('status', 'ativo').order('nome_completo'),
+        sb.from('escoltas').select('criada_por, criador:usuarios!criada_por(id, nome_completo, status)').not('criada_por', 'is', null),
+      ])
+      setOpcoesClientes((cls ?? []).map((c: any) => ({ id: c.id, nome: c.nome_cliente })))
+      const m = new Map<string, string>((us ?? []).map((u: any) => [u.id, u.nome_completo]))
+      for (const e of (criadas ?? []) as any[]) {
+        const c = e.criador
+        if (c?.id && !m.has(c.id)) m.set(c.id, c.status === 'ativo' ? c.nome_completo : `${c.nome_completo} (inativo)`)
+      }
+      setOpcoesCriadores(Array.from(m, ([id, nome]) => ({ id, nome })).sort((a, b) => a.nome.localeCompare(b.nome)))
+      setOpcoesProntas(true)
+    })()
+  }, [user])
 
   useEffect(() => { carregar() }, [carregar])
 
-  const ehOperador = perfil === 'operador'
-  const podeEditar = PODE_EDITAR_ESCOLTA.includes(perfil)
-
-  // Operador sem escolta nenhuma cai numa lista vazia e nao descobre sozinho que existe
-  // uma aba com escoltas para pegar. Nesse caso a tela ja abre no mural. A ref garante
-  // que isso aconteca uma vez so: depois disso a escolha e dele.
-  const jaEscolheuModo = useRef(false)
+  // Pedido, presença e janela mudam com o tempo: o estado do mural é relido a cada 30 s.
   useEffect(() => {
-    if (!ehOperador || jaEscolheuModo.current || loading) return
-    if (minhasEscoltaIds.length === 0 && semEquipeIds.length > 0) {
-      setModoLista('disponiveis')
-      jaEscolheuModo.current = true
-    }
-  }, [ehOperador, loading, minhasEscoltaIds.length, semEquipeIds.length])
+    const t = setInterval(async () => {
+      const ids = escoltas.filter(e => e.status === 'agendada').map(e => e.id)
+      const lido = await lerInfoMural(sb, ids)
+      if (lido.falhou) return
+      setTravasAtivas(lido.ativo)
+      setInfoMural(lido.info)
+      setSemEquipeIds(lido.ativo ? ids.filter(id => lido.info[id] && !lido.info[id].tem_equipe) : [])
+    }, 30_000)
+    return () => clearInterval(t)
+  }, [escoltas])
+
+  // Sem as travas no banco (entre o deploy e a migration 204), puxar não passa pelo
+  // diálogo de assumir: a assumir_escolta antiga trocaria a equipe na hora. A
+  // puxar_escolta recusa escolta com equipe também na versão antiga.
+  const puxar = async (e: EscoltaRow) => {
+    if (travasAtivas) { abrirAssumir(e); return }
+    setPuxando(e.id)
+    setAvisoMural(null)
+    const { error } = await sb.rpc('puxar_escolta', { p_escolta_id: e.id })
+    setAvisoMural(error ? { tipo: 'erro', texto: error.message ?? 'Não foi possível puxar a escolta.' } : { tipo: 'ok', texto: 'Escolta puxada. Você é o comandante.' })
+    setPuxando(null)
+    await carregar(true)
+  }
+
+  const estouNaBase = async (id: string) => {
+    setPuxando(id)
+    setAvisoMural(null)
+    const erro = await confirmarPresencaBase(sb, id)
+    setAvisoMural(erro ? { tipo: 'erro', texto: erro } : { tipo: 'ok', texto: 'Presença na base confirmada. Com a equipe na base, ninguém assume esta escolta.' })
+    setPuxando(null)
+    await carregar(true)
+  }
+
+  const cancelarPedido = async (pedidoId: string, escoltaId: string) => {
+    setPuxando(escoltaId)
+    const { error } = await sb.rpc('cancelar_meu_pedido_mural', { p_pedido_id: pedidoId })
+    setAvisoMural(error ? { tipo: 'erro', texto: error.message } : { tipo: 'ok', texto: 'Pedido cancelado.' })
+    setPuxando(null)
+    await carregar(true)
+  }
+
+  const ehOperador = perfil === 'operador'
+  const qtdMinhas = escoltas.filter(e => minhasEscoltaIds.includes(e.id)).length
+  // Contador da aba Disponíveis: o mesmo recorte da lista (escala fixa some do mural).
+  const qtdDisponiveis = semEquipeIds.filter(id => !infoMural[id]?.escala_fixa && !minhasEscoltaIds.includes(id)).length
+  const podeEditar = PODE_EDITAR_ESCOLTA.includes(perfil)
 
   /**
    * Abre o dialogo de assumir. Ele mostra a equipe ja escalada, pede confirmacao e
@@ -173,7 +306,7 @@ export default function EscoltasPage() {
       setAvisoMural({ tipo: 'ok', texto: 'Escolta devolvida ao mural.' })
     }
     setPuxando(null)
-    await carregar()
+    await carregar(true)
   }
 
   const escoltasFiltradas = escoltas.filter((e) => {
@@ -186,15 +319,50 @@ export default function EscoltasPage() {
     // confirmacao e motivo, que ficam no historico.
     if (ehOperador && modoLista === 'disponiveis'
         && (e.status !== 'agendada' || minhasEscoltaIds.includes(e.id))) return false
+    // T6: escala fixa some do mural para o operador.
+    if (ehOperador && modoLista === 'disponiveis' && infoMural[e.id]?.escala_fixa) return false
+    // Onda K: equipe e busca no navegador. Equipe da gestão pelo efetivo embutido; do
+    // operador, só pela mural_info (agendada sem equipe), nunca pelo efetivo que ele lê.
+    if (filtros.equipe !== 'todas') {
+      const tem = ehOperador ? !semEquipeIds.includes(e.id) : temEquipeGestao(e)
+      if (filtros.equipe === 'com' ? !tem : tem) return false
+    }
+    const busca = filtros.busca.trim()
     if (!busca) return true
     const termo = busca.toLowerCase()
-    return (
+    return Boolean(
       e.codigo_escolta?.toLowerCase().includes(termo) ||
-      e.origem_endereco.toLowerCase().includes(termo) ||
-      e.destino_endereco.toLowerCase().includes(termo) ||
-      e.cliente?.nome_cliente.toLowerCase().includes(termo)
+      (e.origem_endereco ?? '').toLowerCase().includes(termo) ||
+      (e.destino_endereco ?? '').toLowerCase().includes(termo) ||
+      e.cliente?.nome_cliente?.toLowerCase().includes(termo) ||
+      e.criador?.nome_completo?.toLowerCase().includes(termo)
     )
   })
+
+  const opcoesClientesTela = (() => {
+    const m = new Map(opcoesClientes.map(c => [c.id, c.nome]))
+    escoltas.forEach(e => { if (e.cliente?.id && !m.has(e.cliente.id)) m.set(e.cliente.id, e.cliente.nome_cliente) })
+    return Array.from(m, ([id, nome]) => ({ id, nome })).sort((a, b) => a.nome.localeCompare(b.nome))
+  })()
+  const statusPermitidos = useMemo(() => (ehOperador ? ['rascunho', ...STATUS_ATIVOS] : undefined), [ehOperador])
+
+  // Revisão K, menor 15: filtro lembrado cujo valor não existe mais (cliente fora da lista,
+  // pessoa sem escolta criada, status que o perfil não oferece) é descartado, com aviso, em vez
+  // de deixar a lista vazia sem motivo. Uma vez por usuário, depois das opções e da 1ª carga.
+  const validadoPara = useRef<string | null>(null)
+  useEffect(() => {
+    if (!user?.id || !filtrosProntos || !opcoesProntas || loading || validadoPara.current === user.id) return
+    validadoPara.current = user.id
+    const descartes: string[] = []
+    const novo: Partial<Filtros> = {}
+    if (filtros.cliente !== 'todos' && !opcoesClientesTela.some(c => c.id === filtros.cliente)) { novo.cliente = 'todos'; descartes.push('cliente') }
+    if (filtros.criador !== 'todos' && !opcoesCriadores.some(c => c.id === filtros.criador)) { novo.criador = 'todos'; descartes.push('quem criou') }
+    if (statusPermitidos && filtros.status !== 'todos' && !statusPermitidos.includes(filtros.status)) { novo.status = 'todos'; descartes.push('status') }
+    if (descartes.length) {
+      definirFiltros(novo)
+      setAvisoFiltro(`O filtro lembrado de ${descartes.join(', ')} não existe mais e foi descartado.`)
+    }
+  }, [user?.id, filtrosProntos, opcoesProntas, loading, filtros, opcoesClientesTela, opcoesCriadores, statusPermitidos, definirFiltros])
 
   // Cálculos dos Cards
   const countNaoIniciadas = escoltas.filter(e => ['rascunho', 'agendada', 'em_pre_inicio'].includes(e.status)).length
@@ -203,9 +371,32 @@ export default function EscoltasPage() {
   const countRetornoBase = escoltas.filter(e => ['retornando', 'na_base'].includes(e.status)).length
 
   // Segmentação por tabelas
-  const naoIniciadas = escoltasFiltradas.filter(e => ['rascunho', 'agendada', 'em_pre_inicio'].includes(e.status))
-  const ativas = escoltasFiltradas.filter(e => ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando', 'na_base'].includes(e.status))
+  const naoIniciadas = escoltasFiltradas.filter(e => GRUPO_NAO_INICIADAS.includes(e.status))
+  const ativas = escoltasFiltradas.filter(e => GRUPO_ATIVAS.includes(e.status))
   const concluidas = escoltasFiltradas.filter(e => ['finalizada', 'cancelada'].includes(e.status))
+
+  const podeEditarLinha = (e: EscoltaRow) => podeEditar && (['rascunho', 'agendada'].includes(e.status) || PODE_PODER_TOTAL.includes(perfil))
+
+  // Selos de cada tela ao lado do código (as etiquetas da onda K vêm do cartão).
+  const selos = (e: EscoltaRow) => (
+    <>
+      {e.checklist_pendente_no_inicio && <span className="badge-warning ml-2 text-[10px]">Checklist</span>}
+      {/* Aviso antes do clique: assumir esta pede confirmacao e motivo. */}
+      {ehOperador && e.status === 'agendada' && !semEquipeIds.includes(e.id) && (
+        <span className="ml-2 text-[9px] font-black uppercase tracking-wider px-1 py-0.5"
+          style={{ backgroundColor: '#FFF7E6', color: '#8A5A10' }}>já escalada</span>
+      )}
+    </>
+  )
+
+  // Mural: puxar e devolver, so para operador e so em escolta agendada. Quem valida de
+  // verdade sao as RPCs, que travam a linha da escolta antes de escalar.
+  const acaoMural = (e: EscoltaRow, compacto: boolean) => ehOperador && e.status === 'agendada' ? (
+    <AcaoMural compacto={compacto} semEquipe={semEquipeIds.includes(e.id)} souComandante={souComandanteIds.includes(e.id)}
+      info={infoMural[e.id]} travasAtivas={travasAtivas} ocupado={puxando === e.id}
+      onPuxar={() => puxar(e)} onPedir={() => abrirAssumir(e)} onDevolver={() => devolver(e.id)}
+      onEstouNaBase={() => estouNaBase(e.id)} onCancelarPedido={(pid) => cancelarPedido(pid, e.id)} />
+  ) : null
 
   const renderTabelaEscoltas = (lista: EscoltaRow[], tituloVazio: string) => {
     if (lista.length === 0) {
@@ -216,251 +407,94 @@ export default function EscoltasPage() {
       )
     }
 
+    const botaoIcone = (titulo: string, rotulo: string, onClick: () => void, icone: React.ReactNode, fundo: string, cor: string) => (
+      <button
+        onClick={onClick}
+        className="flex items-center justify-center transition-all"
+        style={{ color: '#6B7E8A', width: '36px', height: '36px', borderRadius: '2px' }}
+        onMouseEnter={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = fundo; (ev.currentTarget as HTMLElement).style.color = cor }}
+        onMouseLeave={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = ''; (ev.currentTarget as HTMLElement).style.color = '#6B7E8A' }}
+        title={titulo}
+        aria-label={rotulo}
+      >
+        {icone}
+      </button>
+    )
+
     return (
       <>
-        {/* Tabela — visível apenas em desktop (md+) */}
+        {/* Tabela: visível apenas em desktop (md+) */}
         <div className="hidden md:block card-light overflow-x-auto">
           <table className="table-content">
             <thead>
               <tr>
-                <th>Código</th>
-                <th>Cliente</th>
+                <th style={{ paddingLeft: '16px' }}>Código</th>
+                <th>Cliente e equipe</th>
                 <th className="hidden md:table-cell">Origem → Destino</th>
-                <th className="hidden lg:table-cell">Data / Hora</th>
+                <th className="hidden lg:table-cell">Data / Hora (Brasília)</th>
                 <th>Status</th>
                 <th className="text-right">Ações</th>
               </tr>
             </thead>
             <tbody>
-              {lista.map((e) => {
-                const s = STATUS_MAP[e.status] ?? { label: e.status, cls: 'badge-neutral' }
-                const cor = e.cliente?.cor_destaque ?? '#4A90A4'
-                return (
-                  <tr
-                    key={e.id}
-                    onClick={() => router.push(`/dashboard/escoltas/${e.id}`)}
-                    style={{ cursor: 'pointer', borderLeft: `3px solid ${cor}` }}
-                  >
-                    <td>
-                      <span className="font-mono text-xs font-bold" style={{ color: '#1E2D35' }}>
-                        {e.codigo_escolta ?? 'Pendente'}
-                      </span>
-                      {e.checklist_pendente_no_inicio && (
-                        <span className="badge-warning ml-2">Checklist</span>
-                      )}
-                      {/* Aviso antes do clique: assumir esta pede confirmacao e motivo. */}
-                      {ehOperador && e.status === 'agendada' && !semEquipeIds.includes(e.id) && (
-                        <span className="ml-2 text-[9px] font-black uppercase tracking-wider px-1 py-0.5"
-                          style={{ backgroundColor: '#FFF7E6', color: '#8A5A10' }}>já escalada</span>
-                      )}
-                    </td>
-                    <td>
-                      <span className="text-sm font-medium" style={{ color: '#1E2D35' }}>
-                        {e.cliente?.nome_cliente ?? '—'}
-                      </span>
-                    </td>
-                    <td className="hidden md:table-cell">
-                      <div className="flex items-center gap-2 max-w-xs">
-                        <MapPin size={11} style={{ color: '#C8D5DC', flexShrink: 0 }} />
-                        <span className="text-xs truncate" style={{ color: '#6B7E8A' }}>{e.origem_endereco}</span>
-                        <ArrowRight size={11} style={{ color: '#C8D5DC', flexShrink: 0 }} />
-                        <span className="text-xs truncate" style={{ color: '#6B7E8A' }}>{e.destino_endereco}</span>
-                      </div>
-                    </td>
-                    <td className="hidden lg:table-cell">
-                      <span className="text-xs" style={{ color: '#6B7E8A' }}>
-                        {new Date(e.data_hora_prevista).toLocaleDateString('pt-BR')}
-                        {' '}
-                        {new Date(e.data_hora_prevista).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                      </span>
-                    </td>
-                    <td>
-                      <span className={s.cls}>{s.label}</span>
-                    </td>
-                    <td>
-                      <div className="flex items-center justify-end gap-1" onClick={(ev) => ev.stopPropagation()}>
-                        {/* Mural: puxar e devolver, so para operador e so em escolta agendada.
-                            Quem valida de verdade sao as RPCs, que travam a linha da escolta
-                            antes de escalar. */}
-                        {ehOperador && e.status === 'agendada' && !souComandanteIds.includes(e.id) && (
-                          <button
-                            onClick={() => abrirAssumir(e)}
-                            disabled={puxando === e.id}
-                            className="px-3 h-9 text-[10px] font-black uppercase tracking-wider text-white transition-all disabled:opacity-50"
-                            style={{ backgroundColor: semEquipeIds.includes(e.id) ? '#1E7C52' : '#C8813A', borderRadius: '2px' }}
-                            title="Assumir esta escolta como comandante"
-                          >
-                            {semEquipeIds.includes(e.id) ? 'Puxar' : 'Assumir'}
-                          </button>
-                        )}
-                        {ehOperador && e.status === 'agendada' && souComandanteIds.includes(e.id) && (
-                          <button
-                            onClick={() => devolver(e.id)}
-                            disabled={puxando === e.id}
-                            className="px-3 h-9 text-[10px] font-black uppercase tracking-wider transition-all disabled:opacity-50"
-                            style={{ border: '1px solid #C8813A', color: '#8A5A10', borderRadius: '2px' }}
-                            title="Devolver ao mural, enquanto não começou"
-                          >
-                            {puxando === e.id ? '...' : 'Devolver'}
-                          </button>
-                        )}
-                        <button
-                          onClick={() => router.push(`/dashboard/escoltas/${e.id}`)}
-                          className="flex items-center justify-center transition-all"
-                          style={{ color: '#6B7E8A', width: '36px', height: '36px', borderRadius: '2px' }}
-                          onMouseEnter={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = '#EBF3FC'; (ev.currentTarget as HTMLElement).style.color = '#2166A8' }}
-                          onMouseLeave={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = ''; (ev.currentTarget as HTMLElement).style.color = '#6B7E8A' }}
-                          title="Ver detalhes"
-                          aria-label="Ver detalhes da escolta"
-                        >
-                          <Eye size={14} />
-                        </button>
-                        {/* Editar so aparece para gestao e so enquanto a escolta nao
-                            comecou. Mostrar para operador seria oferecer um caminho que a
-                            trigger do banco recusa, e mostrar em escolta iniciada levaria
-                            a uma tela que abre so para dizer que nao da. */}
-                        {podeEditar && ['rascunho', 'agendada'].includes(e.status) && (
-                        <button
-                          onClick={() => router.push(`/dashboard/escoltas/nova?editar=${e.id}`)}
-                          className="flex items-center justify-center transition-all"
-                          style={{ color: '#6B7E8A', width: '36px', height: '36px', borderRadius: '2px' }}
-                          onMouseEnter={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = '#EBF7F1'; (ev.currentTarget as HTMLElement).style.color = '#1E7C52' }}
-                          onMouseLeave={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = ''; (ev.currentTarget as HTMLElement).style.color = '#6B7E8A' }}
-                          title="Editar"
-                          aria-label="Editar escolta"
-                        >
-                          <Pencil size={13} />
-                        </button>
-                        )}
-                        <button
-                          onClick={() => printEscolta(e.id)}
-                          className="flex items-center justify-center transition-all"
-                          style={{ color: '#6B7E8A', width: '36px', height: '36px', borderRadius: '2px' }}
-                          onMouseEnter={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = '#F0F4FA'; (ev.currentTarget as HTMLElement).style.color = '#1A2F4A' }}
-                          onMouseLeave={(ev) => { (ev.currentTarget as HTMLElement).style.backgroundColor = ''; (ev.currentTarget as HTMLElement).style.color = '#6B7E8A' }}
-                          title="Exportar PDF"
-                          aria-label="Exportar PDF da escolta"
-                        >
-                          <FileDown size={13} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
+              {lista.map((e) => (
+                <CartaoEscolta key={e.id} variante="linha" escolta={e} perfil={perfil}
+                  semEquipe={ehOperador && e.status === 'agendada' && travasAtivas ? semEquipeIds.includes(e.id) : null}
+                  onAbrir={() => router.push(`/dashboard/escoltas/${e.id}`)}
+                  selos={selos(e)}
+                  acoes={<>
+                    {acaoMural(e, true)}
+                    {botaoIcone('Ver detalhes', 'Ver detalhes da escolta', () => router.push(`/dashboard/escoltas/${e.id}`), <Eye size={14} />, '#EBF3FC', '#2166A8')}
+                    {/* Onda I: gestor e administrador editam em qualquer status. */}
+                    {podeEditarLinha(e) && botaoIcone('Editar', 'Editar escolta', () => router.push(`/dashboard/escoltas/nova?editar=${e.id}`), <Pencil size={13} />, '#EBF7F1', '#1E7C52')}
+                    {botaoIcone('Exportar PDF', 'Exportar PDF da escolta', () => printEscolta(e.id), <FileDown size={13} />, '#F0F4FA', '#1A2F4A')}
+                  </>} />
+              ))}
             </tbody>
           </table>
         </div>
 
-        {/* Cards mobile — visível apenas em telas menores que md */}
+        {/* Cartões no celular */}
         <div className="md:hidden space-y-3">
-          {lista.map((e) => {
-            const s = STATUS_MAP[e.status] ?? { label: e.status, cls: 'badge-neutral' }
-            const cor = e.cliente?.cor_destaque ?? '#4A90A4'
-            return (
-              <div
-                key={e.id}
-                className="bg-white rounded-xl p-4 shadow-sm border border-gray-100"
-                style={{ borderLeft: `4px solid ${cor}` }}
-                onClick={() => router.push(`/dashboard/escoltas/${e.id}`)}
-              >
-                {/* Linha 1: código + status */}
-                <div className="flex items-start justify-between gap-2 mb-2">
-                  <div>
-                    <span className="font-mono text-sm font-black" style={{ color: '#1E2D35' }}>
-                      {e.codigo_escolta ?? 'Pendente'}
-                    </span>
-                    {e.checklist_pendente_no_inicio && (
-                      <span className="badge-warning ml-2 text-[10px]">Checklist</span>
-                    )}
-                    {ehOperador && e.status === 'agendada' && !semEquipeIds.includes(e.id) && (
-                      <span className="ml-2 text-[9px] font-black uppercase tracking-wider px-1 py-0.5"
-                        style={{ backgroundColor: '#FFF7E6', color: '#8A5A10' }}>já escalada</span>
-                    )}
-                  </div>
-                  <span className={s.cls}>{s.label}</span>
-                </div>
-
-                {/* Linha 2: cliente */}
-                <p className="text-sm font-semibold mb-1" style={{ color: '#0E1A33' }}>
-                  {e.cliente?.nome_cliente ?? '—'}
-                </p>
-
-                {/* Linha 3: data/hora */}
-                <p className="text-xs mb-2" style={{ color: '#5A6A80' }}>
-                  {new Date(e.data_hora_prevista).toLocaleDateString('pt-BR')}
-                  {' às '}
-                  {new Date(e.data_hora_prevista).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                </p>
-
-                {/* Linha 4: origem → destino */}
-                <div className="flex items-start gap-1 mb-3">
-                  <MapPin size={11} className="mt-0.5 shrink-0" style={{ color: '#ABB5C9' }} />
-                  <p className="text-xs leading-snug" style={{ color: '#5A6A80' }}>
-                    <span className="font-medium">{e.origem_endereco}</span>
-                    <ArrowRight size={10} className="inline mx-1" style={{ color: '#ABB5C9' }} />
-                    <span>{e.destino_endereco}</span>
-                  </p>
-                </div>
-
-                {/* Puxar e devolver no celular, que e onde o operador de fato usa.
-                    Botao de largura inteira e altura de toque, separado dos demais para
-                    ninguem puxar escolta por engano ao mirar em Ver. */}
-                {ehOperador && e.status === 'agendada' && !souComandanteIds.includes(e.id) && (
+          {lista.map((e) => (
+            <CartaoEscolta key={e.id} variante="cartao" escolta={e} perfil={perfil}
+              semEquipe={ehOperador && e.status === 'agendada' && travasAtivas ? semEquipeIds.includes(e.id) : null}
+              onAbrir={() => router.push(`/dashboard/escoltas/${e.id}`)}
+              selos={selos(e)}
+              // Puxar e devolver no celular, que e onde o operador de fato usa: largura inteira,
+              // separado dos demais para ninguem puxar escolta por engano ao mirar em Ver.
+              rodape={acaoMural(e, false)}
+              acoes={<>
+                <button
+                  onClick={() => router.push(`/dashboard/escoltas/${e.id}`)}
+                  className="flex-1 flex items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors"
+                  style={{ minHeight: '44px', backgroundColor: '#EBF3FC', color: '#2166A8' }}
+                  aria-label="Ver detalhes da escolta"
+                >
+                  <Eye size={14} />
+                  Ver
+                </button>
+                {podeEditarLinha(e) && (
                   <button
-                    onClick={(ev) => { ev.stopPropagation(); abrirAssumir(e) }}
-                    disabled={puxando === e.id}
-                    className="w-full flex items-center justify-center gap-2 rounded-lg text-xs font-black uppercase tracking-wider text-white mb-2 disabled:opacity-50"
-                    style={{ minHeight: '44px', backgroundColor: semEquipeIds.includes(e.id) ? '#1E7C52' : '#C8813A' }}
-                  >
-                    {semEquipeIds.includes(e.id) ? 'Puxar esta escolta para mim' : 'Assumir esta escolta (já escalada)'}
-                  </button>
-                )}
-                {ehOperador && e.status === 'agendada' && souComandanteIds.includes(e.id) && (
-                  <button
-                    onClick={(ev) => { ev.stopPropagation(); devolver(e.id) }}
-                    disabled={puxando === e.id}
-                    className="w-full flex items-center justify-center gap-2 rounded-lg text-xs font-bold mb-2 disabled:opacity-50"
-                    style={{ minHeight: '44px', border: '1px solid #C8813A', color: '#8A5A10' }}
-                  >
-                    {puxando === e.id ? 'Devolvendo...' : 'Devolver ao mural'}
-                  </button>
-                )}
-
-                {/* Botões de ação */}
-                <div className="flex gap-2 pt-2 border-t border-gray-100" onClick={(ev) => ev.stopPropagation()}>
-                  <button
-                    onClick={() => router.push(`/dashboard/escoltas/${e.id}`)}
+                    onClick={() => router.push(`/dashboard/escoltas/nova?editar=${e.id}`)}
                     className="flex-1 flex items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors"
-                    style={{ minHeight: '44px', backgroundColor: '#EBF3FC', color: '#2166A8' }}
-                    aria-label="Ver detalhes da escolta"
+                    style={{ minHeight: '44px', backgroundColor: '#EBF7F1', color: '#1E7C52' }}
+                    aria-label="Editar escolta"
                   >
-                    <Eye size={14} />
-                    Ver
+                    <Pencil size={13} />
+                    Editar
                   </button>
-                  {podeEditar && ['rascunho', 'agendada'].includes(e.status) && (
-                    <button
-                      onClick={() => router.push(`/dashboard/escoltas/nova?editar=${e.id}`)}
-                      className="flex-1 flex items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors"
-                      style={{ minHeight: '44px', backgroundColor: '#EBF7F1', color: '#1E7C52' }}
-                      aria-label="Editar escolta"
-                    >
-                      <Pencil size={13} />
-                      Editar
-                    </button>
-                  )}
-                  <button
-                    onClick={() => printEscolta(e.id)}
-                    className="flex items-center justify-center rounded-lg transition-colors"
-                    style={{ minHeight: '44px', minWidth: '44px', backgroundColor: '#F0F4FA', color: '#1A2F4A' }}
-                    aria-label="Exportar PDF da escolta"
-                  >
-                    <FileDown size={14} />
-                  </button>
-                </div>
-              </div>
-            )
-          })}
+                )}
+                <button
+                  onClick={() => printEscolta(e.id)}
+                  className="flex items-center justify-center rounded-lg transition-colors"
+                  style={{ minHeight: '44px', minWidth: '44px', backgroundColor: '#F0F4FA', color: '#1A2F4A' }}
+                  aria-label="Exportar PDF da escolta"
+                >
+                  <FileDown size={14} />
+                </button>
+              </>} />
+          ))}
         </div>
       </>
     )
@@ -493,13 +527,16 @@ export default function EscoltasPage() {
         )}
       </div>
 
+      {/* Avisos do mural (pedidos, decisões e substituições) para a gestão. */}
+      {!ehOperador && <AvisosMural />}
+
       {/* ── Alternador Minhas ⇄ Disponíveis ⇄ Todas (operador) ── */}
       {ehOperador && (
         <div className="space-y-2">
           <div className="inline-flex p-1 rounded-lg" style={{ backgroundColor: '#EEF0F5', border: '1px solid #E2E8EC' }}>
             {([
               { val: 'minhas' as const, label: `Minha${minhasEscoltaIds.length > 1 ? 's' : ''} Escolta${minhasEscoltaIds.length > 1 ? 's' : ''}` },
-              { val: 'disponiveis' as const, label: `Disponíveis${semEquipeIds.length ? ` (${semEquipeIds.length})` : ''}` },
+              { val: 'disponiveis' as const, label: `Disponíveis${qtdDisponiveis ? ` (${qtdDisponiveis})` : ''}` },
               { val: 'todas' as const, label: 'Todas as Ativas' },
             ]).map(opt => (
               <button
@@ -518,12 +555,25 @@ export default function EscoltasPage() {
 
           {modoLista === 'disponiveis' && (
             <p className="text-[11px] leading-relaxed" style={{ color: '#6B7E8A' }}>
-              Escoltas agendadas. Ao assumir, você vira o comandante e escolhe quem vai
-              junto. As marcadas como <strong>já escalada</strong> têm equipe designada:
-              assumir uma delas pede confirmação e motivo, que ficam no histórico.
+              Escoltas agendadas. Ao puxar uma escolta livre, você vira o comandante e escolhe
+              quem vai junto. As marcadas como <strong>já escalada</strong> têm equipe
+              designada: a partir de 60 minutos antes do horário, e se a equipe não tiver
+              confirmado presença na base, você pode pedir para assumir, com o motivo. O pedido
+              vai para a supervisão; sem resposta em 15 minutos, é liberado sozinho.
               Pode devolver enquanto não começar.
             </p>
           )}
+
+          {/* Onda G: quem tem escolta e está no mural sabe que as dele estão na outra aba. */}
+          {modoLista === 'disponiveis' && qtdMinhas > 0 && (
+            <button type="button" onClick={() => { setModoLista('minhas'); setAvisoMural(null) }}
+              className="block w-full text-left p-2.5 rounded text-[11px] font-bold leading-relaxed"
+              style={{ backgroundColor: '#EBF3FC', border: '1px solid #B8D3EE', color: '#2166A8' }}>
+              Você tem {qtdMinhas} escolta{qtdMinhas > 1 ? 's' : ''} em Minhas Escoltas. Toque para ver.
+            </button>
+          )}
+
+          <AvisosMural />
 
           {avisoMural && (
             <div className="p-2.5 rounded text-[11px] leading-relaxed" style={{
@@ -671,65 +721,29 @@ export default function EscoltasPage() {
         })}
       </div>
 
-      {/* ── Filtros ── */}
-      <div className="card-light p-4">
-        <div className="flex flex-col md:flex-row gap-3">
-          {/* Search */}
-          <div className="relative flex-1">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: '#A8B8C2' }} />
-            <input
-              type="text"
-              placeholder="Buscar por código, endereço ou cliente..."
-              value={busca}
-              onChange={(e) => setBusca(e.target.value)}
-              className="input-light pl-9 w-full"
-            />
-          </div>
-
-          {/* Status filter */}
-          <select
-            value={filtroStatus}
-            onChange={(e) => setFiltroStatus(e.target.value)}
-            className="select-light w-full md:w-auto"
-            style={{ minWidth: '160px' }}
-          >
-            {STATUS_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-        </div>
-
-        {/* Quick filter pills */}
-        <div className="flex gap-2 mt-3 flex-wrap">
-          {STATUS_OPTIONS.slice(0, 5).map((opt) => (
-            <button
-              key={opt.value}
-              onClick={() => setFiltroStatus(opt.value)}
-              className="px-3 py-1 rounded text-[11px] font-semibold transition-all"
-              style={
-                filtroStatus === opt.value
-                  ? { backgroundColor: '#3A5464', color: '#fff' }
-                  : { backgroundColor: '#F0F2F4', color: '#6B7E8A' }
-              }
-              onMouseEnter={(e) => {
-                if (filtroStatus !== opt.value) {
-                  (e.currentTarget as HTMLElement).style.backgroundColor = '#E2E8EC'
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (filtroStatus !== opt.value) {
-                  (e.currentTarget as HTMLElement).style.backgroundColor = '#F0F2F4'
-                }
-              }}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* ── Filtros (onda K): combinados e lembrados por usuário neste aparelho ── */}
+      <FiltrosEscoltas filtros={filtros} definir={definirFiltros} limpar={() => { setAvisoFiltro(null); limparFiltros() }}
+        clientes={opcoesClientesTela} criadores={opcoesCriadores}
+        statusPermitidos={statusPermitidos} aviso={avisoFiltro} />
+      {atualizando && !loading && (
+        <p data-teste="lista-atualizando" className="text-[11px] -mt-4" style={{ color: '#8A99A6' }}>Atualizando a lista...</p>
+      )}
 
       {/* ── Listagem de Escoltas ── */}
-      {loading ? (
+      {semPerfil ? (
+        <div className="py-12 px-4 text-center space-y-3" data-aviso="sem-perfil">
+          <p className="text-sm font-bold" style={{ color: '#B83832' }}>
+            Não foi possível carregar o seu perfil de acesso.
+          </p>
+          <p className="text-xs" style={{ color: '#6B7E8A' }}>
+            Recarregue a página ou entre de novo. Se continuar, fale com o administrador.
+          </p>
+          <button type="button" onClick={() => window.location.reload()}
+            className="px-4 text-xs font-bold" style={{ minHeight: '44px', border: '1px solid #C8D5DC', color: '#5A6A80' }}>
+            Recarregar
+          </button>
+        </div>
+      ) : loading ? (
         <div className="py-16 flex items-center justify-center gap-3">
           <div className="w-5 h-5 rounded border-2 border-t-transparent animate-spin"
             style={{ borderColor: '#4A90A4', borderTopColor: 'transparent' }} />
@@ -738,7 +752,7 @@ export default function EscoltasPage() {
       ) : (
         <div className="space-y-6">
           {/* Seção 1: Não Iniciadas */}
-          {filtroStatus === 'todos' || ['rascunho', 'agendada', 'em_pre_inicio'].includes(filtroStatus) ? (
+          {filtroStatus === 'todos' || GRUPO_NAO_INICIADAS.includes(filtroStatus) ? (
             <div className="space-y-0">
               <div className="cc-panel-header">
                 <div style={{ width: '6px', height: '6px', borderRadius: '1px', backgroundColor: '#D97706', flexShrink: 0 }} />
@@ -750,7 +764,7 @@ export default function EscoltasPage() {
           ) : null}
 
           {/* Seção 2: Ativas */}
-          {filtroStatus === 'todos' || ['em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando', 'na_base'].includes(filtroStatus) ? (
+          {filtroStatus === 'todos' || GRUPO_ATIVAS.includes(filtroStatus) ? (
             <div className="space-y-0">
               <div className="cc-panel-header">
                 <div style={{ width: '6px', height: '6px', borderRadius: '1px', backgroundColor: '#53648A', flexShrink: 0 }} />
@@ -762,7 +776,7 @@ export default function EscoltasPage() {
           ) : null}
 
           {/* Seção 3: Histórico */}
-          {filtroStatus === 'todos' || ['finalizada', 'cancelada'].includes(filtroStatus) ? (
+          {filtroStatus === 'todos' || GRUPO_HISTORICO.includes(filtroStatus) ? (
             <div className="space-y-0">
               <div className="cc-panel-header">
                 <div style={{ width: '6px', height: '6px', borderRadius: '1px', backgroundColor: '#ABB5C9', flexShrink: 0 }} />
@@ -783,16 +797,18 @@ export default function EscoltasPage() {
           codigo={assumindo.codigo_escolta}
           meuVigilanteId={meuVigilanteId}
           onFechar={() => setAssumindo(null)}
-          onAssumido={async (substituiu) => {
+          onAssumido={async (r) => {
             setAssumindo(null)
-            setModoLista('minhas')
+            if (!r.pedido) setModoLista('minhas')
             setAvisoMural({
               tipo: 'ok',
-              texto: substituiu
-                ? 'Escolta assumida. A equipe anterior foi substituída e o registro ficou no histórico.'
-                : 'Escolta assumida. Você é o comandante e já pode iniciar o pré-início.',
+              texto: r.pedido
+                ? `Pedido enviado à supervisão. Se ninguém responder até ${horaBrasilia(r.pedido.expira_em)}, ele é liberado e você assume.`
+                : r.substituiu
+                  ? 'Escolta assumida. A equipe anterior foi substituída e o registro ficou no histórico.'
+                  : 'Escolta assumida. Você é o comandante e já pode iniciar o pré-início.',
             })
-            await carregar()
+            await carregar(true)
           }}
         />
       )}

@@ -11,17 +11,22 @@ import {
 } from 'lucide-react'
 import { printEscolta } from '@/utils/print'
 import { createClient } from '@/lib/supabase/client'
+import { COR_NEUTRA_SIGILO, corDoCliente } from '@/lib/paleta-clientes'
+import { textoInterestadual } from '@/lib/uf-endereco'
 import { useAuth } from '@/hooks/useAuth'
 import { formatarDataHora, formatarPlaca } from '@/utils/formatters'
 import { TextAreaWithTools } from '@/components/ui/textarea-with-tools'
+import { SugestoesTexto } from '@/components/ui/sugestoes-texto'
 import {
   PODE_AVANCAR_ESCOLTA,
   PODE_CANCELAR_ESCOLTA,
   PODE_VER_FINANCEIRO,
   PODE_ALTERAR_PERIODICIDADE,
+  PODE_PODER_TOTAL,
+  temPermissao,
 } from '@/lib/permissions'
 import { podeOperarEscolta } from '@/lib/acesso-escolta'
-import { minutosAteCheckin as calcularMinutosAteCheckin, inicioOperacaoEm, registrarCheckin, TIPO_CHECKIN } from '@/lib/checkin'
+import { minutosAteCheckin as calcularMinutosAteCheckin, inicioOperacaoEm, linhaCheckin, registrarCheckin, TIPO_CHECKIN, periodicidadePadraoDoCliente } from '@/lib/checkin'
 import { useModoGuiado } from '@/hooks/useModoGuiado'
 import {
   LABELS_STATUS,
@@ -36,12 +41,37 @@ import {
   TEXTO_PADRAO_PONTO,
   TEXTO_PADRAO_MATERIAIS,
   SUGESTAO_PARADA,
+  SUGESTOES_WIZARD,
+  SUGESTOES_PARADA,
+  SUGESTOES_CANCELAMENTO,
+  SUGESTOES_REAGENDAMENTO,
+  SUGESTOES_RELATORIO_FINAL,
+  juntarSugestao,
+  faltaComplementoDaSugestao,
+  MENSAGEM_COMPLETAR_SUGESTAO,
   PLACEHOLDER,
   ehTextoPadrao,
   comporObservacao,
   modeloRelatorioFinal,
 } from '@/lib/textos-padrao'
 import { serializarObservacao, lerObservacao, fotoIdsDoPonto } from '@/lib/pontos-controle'
+import { urlsAssinadas, urlDoMapa, urlAssinada } from '@/lib/fotos-url'
+import { carregarLocaisAtivos } from '@/lib/locais'
+import { CombustivelViaturas } from '@/components/escolta/combustivel-viaturas'
+import { rotuloDoPonto } from '@/lib/rotulo-ponto'
+import { AcoesGestao, PendenciasConclusao } from '@/components/escolta/acoes-gestao'
+import { COLUNAS_ANULACAO, textoAnulado, type Anulacao } from '@/lib/gestao'
+// Lote 2026-10 (onda L, 16.3.10): os handlers de campo passam as mesmas linhas ao envelope.
+import { novoId, lerSnapshot } from '@/lib/offline/fila'
+import { prepararFoto, MENSAGEM_GUARDADO, type FotoPreparada, type LinhasEnvelope, type EtapaEnvelope } from '@/lib/offline/registro-campo'
+import { aplicarPendentes, lerPendentes } from '@/lib/offline/pendentes'
+import { gpsRapido, obterGpsPreciso, textoPrecisao } from '@/lib/gps'
+import { foiCarimbada, marcarCarimbada } from '@/lib/foto-captura'
+import { aplicarCarimbo, reduzirECarimbarImagem } from '@/lib/carimbo-foto'
+import {
+  FOTO_SEM_CONEXAO, aparelhoSemRede, conferirEspacoParaFoto, envelopeLigado, erroDeRede, fotosDosPendentes,
+  gravarPeloEnvelope, horaDaCaptura, textoConflito, textoErroGravacao, textoRecusado, urlsDosPendentes,
+} from '@/lib/offline/tela'
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -57,11 +87,23 @@ interface EscoltaDetalhe {
   checklist_pendente_no_inicio: boolean
   criada_por: string
   criado_em: string
-  cliente: { id: string; nome_cliente: string; cor_destaque: string; telefone: string } | null
+  // Onda I: arquivada só aparece para o administrador (faixa e só Recuperar).
+  arquivada_em?: string | null
+  motivo_arquivamento?: string | null
+  arquivador?: { nome_completo: string | null } | null
+  cliente: { id: string; nome_cliente: string; cor_destaque: string; telefone: string; metadados?: Record<string, unknown> | null } | null
   valor_cobrado: number | null
   outros_custos: number | null
   observacao_financeira: string | null
   periodicidade_checkin_min: number | null
+  // Onda L: versão da gestão vista pela tela (o envelope manda junto; mudou, vira conflito).
+  versao_gestao?: number | null
+  // Onda K: UF de origem e destino e a coluna gerada interestadual (migration 216).
+  origem_uf?: string | null
+  destino_uf?: string | null
+  origem_uf_estimada?: boolean | null
+  destino_uf_estimada?: boolean | null
+  interestadual?: boolean | null
 }
 
 interface ViaturaDetalhe {
@@ -133,6 +175,8 @@ interface TimelineItem {
   descricao: string | null
   usuario: string | null
   coordenadas?: { lat: number; lng: number } | null
+  /** Lote 2026-10 (M1): local salvo próximo ou endereço reverso marcado como aproximado. */
+  rotulo?: string | null
   foto_url?: string | null
   /** Todas as fotos do evento. `foto_url` continua sendo a primeira, por compatibilidade. */
   foto_urls?: string[]
@@ -186,6 +230,18 @@ const TIPO_PONTO_IDS = {
   BASE_RETORNO:     'c9bc3e19-d55d-4174-8acb-12fe1e2b50b7',
   PARADA:           'e1601f15-5ef9-44e8-abd0-17f65b3aa760',
 } as const
+
+// Onda L: tipo dos pontos guardados no aparelho (a leitura traz o nome pelo join).
+const TIPO_PONTO_POR_ID: Record<string, { codigo: string; nome_exibicao: string }> = {
+  [TIPO_PONTO_IDS.BASE_SAIDA]: { codigo: 'base_saida', nome_exibicao: 'Base de Saída' },
+  [TIPO_PONTO_IDS.ORIGEM]: { codigo: 'origem', nome_exibicao: 'Origem' },
+  [TIPO_PONTO_IDS.TRANSITO_DESTINO]: { codigo: 'transito_destino', nome_exibicao: 'Trânsito para o Destino' },
+  [TIPO_PONTO_IDS.DESTINO]: { codigo: 'destino', nome_exibicao: 'Destino' },
+  [TIPO_PONTO_IDS.TRANSITO_RETORNO]: { codigo: 'transito_retorno', nome_exibicao: 'Trânsito para o Retorno' },
+  [TIPO_PONTO_IDS.RETORNO]: { codigo: 'retorno', nome_exibicao: 'Retorno' },
+  [TIPO_PONTO_IDS.BASE_RETORNO]: { codigo: 'base_retorno', nome_exibicao: 'Base de Retorno' },
+  [TIPO_PONTO_IDS.PARADA]: { codigo: 'parada', nome_exibicao: 'Parada em Rota' },
+}
 
 const TIPO_FOTO_IDS = {
   PONTO_CONTROLE:      'db608f8f-322e-4748-b4f8-fef572a6c1e6',
@@ -263,29 +319,48 @@ function CameraInput({
   onChange,
   max = 1,
   prefixoNome = 'foto',
+  iniciais,
 }: {
   onChange: (files: File[]) => void
   max?: number
   prefixoNome?: string
+  /** Fotos já registradas no estado do pai: o componente volta mostrando as miniaturas ao ser remontado. */
+  iniciais?: File[]
 }) {
-  const [fotos, setFotos] = useState<Array<{ file: File; url: string }>>([])
+  const [fotos, setFotos] = useState<Array<{ file: File; url: string }>>(
+    () => (iniciais ?? []).map((file) => ({ file, url: URL.createObjectURL(file) })),
+  )
   const [aberto, setAberto] = useState(false)
   const [stream, setStream] = useState<MediaStream | null>(null)
   const [erro, setErro] = useState<string | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    // Onda L (S12): sem espaço no aparelho, a captura é bloqueada com aviso.
+    try { await conferirEspacoParaFoto(file.size) } catch (err) {
+      setErro(textoErroGravacao(err, 'O espaço do aparelho acabou.'))
+      e.target.value = ''
+      return
+    }
     const agora = new Date()
+    e.target.value = ''
+    // Onda M (D7 e docs/12 item 2.1): o seletor de arquivo passa pelo mesmo carimbo do Campo,
+    // que já reduz (lado maior de 1600 px, JPEG 0,7). Falha do carimbo é declarada: a foto
+    // vale como veio e o banco grava carimbo_aplicado = false.
+    const gps = await gpsRapido()
+    const r = await aplicarCarimbo(file, { timestamp: agora.toISOString(), gps })
     const tsStr = agora.toISOString().replace(/[:.]/g, '-').slice(0, 19)
-    const namedFile = new File([file], `${prefixoNome}_${tsStr}.jpg`, { type: 'image/jpeg' })
-    const novas = [...fotos, { file: namedFile, url: URL.createObjectURL(file) }]
+    // Revisão cruzada (2.6): sem carimbo, o arquivo é o original (HEIC, PNG...): nome e tipo
+    // reais, nunca um rótulo de JPEG sobre bytes de outro formato.
+    const ext = r.carimbado ? 'jpg' : (r.file.name.split('.').pop() || 'jpg').toLowerCase()
+    const namedFile = new File([r.file], `${prefixoNome}_${tsStr}.${ext}`, { type: r.carimbado ? 'image/jpeg' : (r.file.type || 'application/octet-stream') })
+    if (r.carimbado) marcarCarimbada(namedFile)
+    const novas = [...fotos, { file: namedFile, url: URL.createObjectURL(namedFile) }]
     setFotos(novas)
     onChange(novas.map(f => f.file))
-    e.target.value = ''
   }
 
   const abrirCamera = async () => {
@@ -317,33 +392,36 @@ function CameraInput({
     }
   }, [stream])
 
-  const capturar = () => {
-    if (!videoRef.current || !canvasRef.current) return
+  const capturar = async () => {
+    if (!videoRef.current) return
     const v = videoRef.current
-    const c = canvasRef.current
-    c.width = v.videoWidth
-    c.height = v.videoHeight
-    const ctx = c.getContext('2d')
-    if (!ctx) return
-    ctx.drawImage(v, 0, 0)
+    // Revisão cruzada (2.8): o vídeo ainda sem dimensões daria uma foto de 1 por 1.
+    if (!v.videoWidth || !v.videoHeight) {
+      setErro('A câmera ainda está abrindo. Aguarde um instante e toque de novo.')
+      return
+    }
     const agora = new Date()
-    const ts = agora.toLocaleDateString('pt-BR') + ' ' + agora.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-    const fs = Math.max(14, Math.floor(c.width * 0.022))
-    ctx.font = `bold ${fs}px monospace`
-    const tw = ctx.measureText(ts).width + 20
-    ctx.fillStyle = 'rgba(0,0,0,0.55)'
-    ctx.fillRect(8, c.height - fs * 2.2, tw, fs * 1.8)
-    ctx.fillStyle = '#FFFFFF'
-    ctx.fillText(ts, 16, c.height - fs * 0.5)
-    c.toBlob((blob) => {
-      if (!blob) return
-      const tsStr = agora.toISOString().replace(/[:.]/g, '-').slice(0, 19)
-      const file = new File([blob], `${prefixoNome}_${tsStr}.jpg`, { type: 'image/jpeg' })
-      const novas = [...fotos, { file, url: URL.createObjectURL(blob) }]
-      setFotos(novas)
-      onChange(novas.map(f => f.file))
-      if (novas.length >= max) fechar()
-    }, 'image/jpeg', 0.92)
+    // Onda M (D7): o vídeo ao vivo passa pela mesma redução e pelo mesmo carimbo do seletor de
+    // arquivo e do Campo (lado maior de 1600 px, JPEG 0,7, data, hora e coordenada).
+    const gps = await gpsRapido()
+    const r = await reduzirECarimbarImagem(v, v.videoWidth, v.videoHeight, { timestamp: agora.toISOString(), gps })
+    if (!r.blob) {
+      setErro('Não foi possível capturar a foto. Tente de novo ou use o seletor de arquivo.')
+      return
+    }
+    const blob = r.blob
+    // Onda L (S12): sem espaço no aparelho, a captura é bloqueada com aviso.
+    try { await conferirEspacoParaFoto(blob.size) } catch (err) {
+      setErro(textoErroGravacao(err, 'O espaço do aparelho acabou.'))
+      return
+    }
+    const tsStr = agora.toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    const file = new File([blob], `${prefixoNome}_${tsStr}.jpg`, { type: 'image/jpeg' })
+    if (r.carimbado) marcarCarimbada(file)
+    const novas = [...fotos, { file, url: URL.createObjectURL(blob) }]
+    setFotos(novas)
+    onChange(novas.map(f => f.file))
+    if (novas.length >= max) fechar()
   }
 
   const remover = (idx: number) => {
@@ -361,6 +439,10 @@ function CameraInput({
   }
 
   useEffect(() => () => { stream?.getTracks().forEach(t => t.stop()) }, [stream])
+  // Onda M (revisão da onda L, achado 6): miniaturas liberadas quando o componente sai da tela.
+  const fotosRef = useRef(fotos)
+  fotosRef.current = fotos
+  useEffect(() => () => { fotosRef.current.forEach(f => URL.revokeObjectURL(f.url)) }, [])
 
   const cols = Math.min(fotos.length + (fotos.length < max ? 1 : 0), 4)
 
@@ -430,7 +512,6 @@ function CameraInput({
                 {stream ? `Foto ${fotos.length + 1} de ${max} — Enquadre e capture` : 'Iniciando câmera...'}
               </p>
               <video ref={videoRef} playsInline autoPlay muted style={{ width: '100%', maxWidth: '480px', maxHeight: '60vh', objectFit: 'cover', backgroundColor: '#111' }} />
-              <canvas ref={canvasRef} style={{ display: 'none' }} />
               <div style={{ display: 'flex', gap: '0.75rem', width: '100%', maxWidth: '480px' }}>
                 <button type="button" onClick={capturar} disabled={!stream}
                   style={{ flex: 1, height: '48px', backgroundColor: stream ? '#1E7C52' : '#333', color: '#fff', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.12em', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
@@ -463,6 +544,25 @@ type FotosPorViatura = Record<string, File[]>
 /** KM digitado por viatura, chaveado pelo id de `escolta_veiculos`. */
 type KmPorViatura = Record<string, string>
 
+/** Onda H: mesma frase do aviso de FotosViaturasInput, para o wizard sem viatura vinculada. */
+const ERRO_SEM_VIATURA_WIZARD = 'Escolta sem viatura vinculada. Vincule a viatura na aba Veículos antes de continuar.'
+
+/** Onda H: miniatura de um arquivo local (a foto do painel no resumo do Passo 3). */
+function MiniaturaArquivo({ arquivo, rotulo }: { arquivo?: File; rotulo: string }) {
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    if (!arquivo) { setUrl(null); return }
+    const u = URL.createObjectURL(arquivo)
+    setUrl(u)
+    return () => URL.revokeObjectURL(u)
+  }, [arquivo])
+  if (!url) {
+    return <div style={{ width: 48, height: 48, flexShrink: 0, border: '1.5px dashed #D6DAE5', backgroundColor: '#FFFFFF' }} />
+  }
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={url} alt={rotulo} data-miniatura-painel style={{ width: 48, height: 48, flexShrink: 0, objectFit: 'cover', border: '1px solid #D6DAE5' }} />
+}
+
 /** Rotulo curto da viatura, para titulo de secao e mensagem de erro. */
 function rotuloViatura(v: ViaturaDetalhe): string {
   return v.veiculo?.placa ? formatarPlaca(v.veiculo.placa) : 'Viatura sem placa'
@@ -480,12 +580,15 @@ function FotosViaturasInput({
   onChange,
   prefixoNome,
   max = FOTOS_POR_PONTO.max,
+  manterRegistradas = false,
 }: {
   viaturas: ViaturaDetalhe[]
   valor: FotosPorViatura
   onChange: (viaturaId: string, files: File[]) => void
   prefixoNome: string
   max?: number
+  /** Onda H: ao remontar (Voltar do wizard), mostra as fotos já registradas em `valor`. */
+  manterRegistradas?: boolean
 }) {
   const varias = viaturas.length > 1
 
@@ -532,6 +635,7 @@ function FotosViaturasInput({
             <CameraInput
               max={max}
               prefixoNome={prefixoNome}
+              iniciais={manterRegistradas ? valor[v.id] : undefined}
               onChange={(fs) => onChange(v.id, fs)}
             />
             {max > 1 && (
@@ -624,7 +728,7 @@ export default function EscoltaDetalhePage() {
   const router = useRouter()
   const params = useParams()
   const id = params.id as string
-  const { user } = useAuth()
+  const { user, authUserId } = useAuth()
   const supabase = createClient()
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sb = supabase as any
@@ -668,6 +772,9 @@ export default function EscoltaDetalhePage() {
   const [avisoSemGps, setAvisoSemGps] = useState(false)
   // KM que ficou no ponto de controle mas nao entrou na coluna da viatura.
   const [avisoKm, setAvisoKm] = useState<string | null>(null)
+  // Onda L: resultado do envelope que não foi "aplicado" (guardado no aparelho, conflito,
+  // recusado). Estado próprio, como o avisoKm: carregar() zera `erro`.
+  const [avisoOffline, setAvisoOffline] = useState<{ tipo: 'guardado' | 'erro'; texto: string } | null>(null)
 
   // Dialogs de Ações do Operador
   const [dialogStartBase, setDialogStartBase] = useState(false)
@@ -785,28 +892,77 @@ export default function EscoltaDetalhePage() {
   const [fotosPartida, setFotosPartida] = useState<FotosPorViatura>({})
   const [obsPartida, setObsPartida] = useState('')
 
+  // Onda L: dono da fila (useAuth resolve depois da primeira leitura), leitura que precisou
+  // dele, leitura sem dados e URLs locais das fotos guardadas no aparelho.
+  const authUserIdRef = useRef<string | null>(authUserId)
+  authUserIdRef.current = authUserId
+  const userRef = useRef(user)
+  userRef.current = user
+  const carregouSemDonoRef = useRef(false)
+  const semDadosRef = useRef(false)
+  const urlsLocaisRef = useRef<string[]>([])
+  useEffect(() => () => { for (const u of urlsLocaisRef.current) URL.revokeObjectURL(u); urlsLocaisRef.current = [] }, [])
+
   const carregar = useCallback(async () => {
     setLoading(true)
     setErro(null)
+    // Onda L (16.3.4): dono da fila e da cópia do aparelho; sem rede, a leitura vem da cópia
+    // do service worker e, sem ela, da escolta guardada pelo Campo.
+    const dono = authUserIdRef.current
+    const eu = userRef.current
+    carregouSemDonoRef.current = !dono
+    let semRedeNaLeitura = false
 
     // ── Escolta principal ──────────────────────────────────────────────────────
-    const { data: esc, error: escErr } = await sb
+    // eslint-disable-next-line prefer-const
+    let { data: esc, error: escErr } = await sb
       .from('escoltas')
       .select(`
         id, codigo_escolta, status, data_hora_prevista, data_finalizacao,
         origem_endereco, destino_endereco, observacao_fechamento,
         checklist_pendente_no_inicio, criada_por, criado_em,
         valor_cobrado, outros_custos, observacao_financeira,
-        periodicidade_checkin_min,
-        cliente:clientes(id, nome_cliente, cor_destaque, telefone)
+        periodicidade_checkin_min, versao_gestao, origem_uf, destino_uf, origem_uf_estimada, destino_uf_estimada, interestadual,
+        arquivada_em, motivo_arquivamento, arquivador:usuarios!arquivada_por(nome_completo),
+        cliente:clientes(id, nome_cliente, cor_destaque, telefone, metadados)
       `)
       .eq('id', id)
       .maybeSingle()
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let copiaCampo: any = null
+    if (escErr && erroDeRede(escErr)) {
+      semRedeNaLeitura = true
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const guardadas = dono ? await lerSnapshot<any[]>(dono, 'escoltas').catch(() => null) : null
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      copiaCampo = guardadas?.dados?.find((e: any) => e?.id === id) ?? null
+      if (copiaCampo) {
+        const { viaturas: _v, efetivo: _e, conclusao: _c, criador: _cr, ...resto } = copiaCampo
+        void _v; void _e; void _c; void _cr
+        esc = {
+          data_finalizacao: null, observacao_fechamento: null, criado_em: copiaCampo.data_hora_prevista, valor_cobrado: null, outros_custos: null,
+          observacao_financeira: null, ...resto,
+          cliente: copiaCampo.cliente ? { telefone: '', metadados: null, ...copiaCampo.cliente } : null,
+        }
+        escErr = null
+      }
+    }
     if (escErr) {
-      setErro(`Erro ao carregar: ${escErr.message}`)
+      setErro(erroDeRede(escErr)
+        ? 'Sem conexão e sem os dados desta escolta guardados neste aparelho. Volte ao Painel.'
+        : `Erro ao carregar: ${escErr.message}`)
+      semDadosRef.current = true
       setLoading(false)
       return
+    }
+    semDadosRef.current = false
+
+    // Onda L: registros guardados no aparelho desta escolta (status otimista e pontos pendentes).
+    const pendentes = dono ? (await lerPendentes(dono)).filter(r => r.escolta_id === id) : []
+    if (esc && pendentes.length > 0) {
+      const { escoltas: [sobre] } = aplicarPendentes([esc as EscoltaDetalhe], [], pendentes)
+      esc = sobre
     }
 
     setEscolta(esc as EscoltaDetalhe | null)
@@ -830,8 +986,15 @@ export default function EscoltaDetalhePage() {
         veiculo:veiculos(placa, modelo, tipo:dom_tipos_veiculo(nome))
       `)
       .eq('escolta_id', id)
+      // Ordem estável: a "primeira viatura" é a mais antiga, como nas RPCs (ORDER BY criado_em), na impressão e no Campo.
+      .order('criado_em')
+      .order('id')
 
-    const viatsNorm = (viats ?? []) as Omit<ViaturaDetalhe, 'efetivo'>[]
+    // Onda L: sem rede e sem cópia do SW, as viaturas guardadas pelo Campo.
+    const viatsNorm = (viats ?? (copiaCampo?.viaturas ?? []).map((v: { id: string; placa: string | null; modelo: string | null }) => ({
+      id: v.id, veiculo_id: '', quilometragem_saida: null, quilometragem_retorno: null, abastecimento_litros: null,
+      abastecimento_valor: null, veiculo: { placa: v.placa ?? '', modelo: v.modelo, tipo: null },
+    }))) as Omit<ViaturaDetalhe, 'efetivo'>[]
     const viaturaIds = viatsNorm.map((v) => v.id)
 
     // ── Efetivo ───────────────────────────────────────────────────────────────
@@ -842,60 +1005,80 @@ export default function EscoltaDetalhePage() {
           .in('escolta_veiculo_id', viaturaIds)
       : { data: null }
 
-    const efetNorm = (efet ?? []) as (EfetivoItem & { escolta_veiculo_id: string })[]
+    // Onda L: sem rede e sem cópia do SW, o próprio vínculo guardado pelo Campo (para o
+    // operador continuar operando a escolta dele).
+    const efetNorm = (efet ?? (copiaCampo && eu?.id && copiaCampo.escolta_veiculo_id ? [{
+      id: `aparelho-${eu.id}`, vigilante_id: '', papel_na_escolta: copiaCampo.papel ?? null, confirmado: true,
+      valor_pago_vigilante: null, escolta_veiculo_id: copiaCampo.escolta_veiculo_id,
+      vigilante: { nome_completo: eu.nome_completo, usuario_id: eu.id },
+    }] : [])) as (EfetivoItem & { escolta_veiculo_id: string })[]
     setViaturas(viatsNorm.map((v) => ({ ...v, efetivo: efetNorm.filter((e) => e.escolta_veiculo_id === v.id) })))
 
     // ── Histórico de status ───────────────────────────────────────────────────
     const { data: hist } = await sb
       .from('escolta_status_historico')
-      .select(`id, status_anterior, status_novo, data_hora, observacao, alterado_por, autor:usuarios!alterado_por(nome_completo)`)
+      .select(`id, status_anterior, status_novo, data_hora, observacao, alterado_por, autor:usuarios!alterado_por(nome_completo), ${COLUNAS_ANULACAO}`)
       .eq('escolta_id', id)
       .order('data_hora', { ascending: true })
 
-    const histNorm = (hist ?? []) as HistoricoItem[]
-    setHistorico(histNorm)
+    // Onda I: anulados (voltar etapa, zerar) só na timeline, marcados; fora das contagens.
+    const histNorm = (hist ?? []) as (HistoricoItem & Anulacao)[]
+    setHistorico(histNorm.filter((h) => !h.anulado_em))
 
     // ── Ocorrências ───────────────────────────────────────────────────────────
     const { data: ocorrs } = await sb
       .from('ocorrencias')
-      .select(`id, descricao, data_hora, registrado_por, tipo:dom_tipos_ocorrencia(nome), autor:usuarios!registrado_por(nome_completo)`)
+      .select(`id, descricao, data_hora, registrado_por, tipo:dom_tipos_ocorrencia(nome), autor:usuarios!registrado_por(nome_completo), ${COLUNAS_ANULACAO}`)
       .eq('escolta_id', id)
       .order('data_hora', { ascending: false })
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    setOcorrencias((ocorrs ?? []) as any[])
+    setOcorrencias((ocorrs ?? []).filter((o: any) => !o.anulado_em) as any[])
 
     // ── Pontos de controle ────────────────────────────────────────────────────
-    const { data: pts } = viaturaIds.length > 0
+    const { data: ptsLidos } = viaturaIds.length > 0
       ? await sb
           .from('pontos_controle')
-          .select(`id, escolta_veiculo_id, data_hora, latitude, longitude, sem_sinal_gps, lancado_por, observacoes, tipo:dom_tipos_ponto(codigo, nome_exibicao), foto:fotos(id, caminho_arquivo), autor:usuarios!lancado_por(nome_completo)`)
+          .select(`id, escolta_veiculo_id, data_hora, latitude, longitude, precisao_metros, sem_sinal_gps, lancado_por, observacoes, tipo:dom_tipos_ponto(codigo, nome_exibicao), foto:fotos(id, caminho_arquivo), autor:usuarios!lancado_por(nome_completo), ${COLUNAS_ANULACAO}`)
           .in('escolta_veiculo_id', viaturaIds)
       : { data: null }
+    // Onda L: os pontos guardados no aparelho entram com o formato da leitura, marcados.
+    const fotosPendentes = fotosDosPendentes(pendentes)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pts: any[] = [
+      ...(ptsLidos ?? []),
+      ...aplicarPendentes([{ id, status: '' }], [], pendentes).pontos.map((p) => ({
+        ...p,
+        tipo: TIPO_PONTO_POR_ID[String(p.tipo_ponto_id)] ?? null,
+        foto: p.foto_id ? { id: String(p.foto_id), caminho_arquivo: fotosPendentes[String(p.foto_id)] ?? null } : null,
+        autor: { nome_completo: `${eu?.nome_completo ?? 'Operador'} (guardado no aparelho, aguardando envio)` },
+      })),
+    ]
 
     // ── Presenças ─────────────────────────────────────────────────────────────
     const { data: pres } = await sb
       .from('presencas')
-      .select(`id, escolta_id, vigilante_id, data_hora, latitude, longitude, vigilante:vigilantes(nome_completo), foto:fotos(id, caminho_arquivo), autor:usuarios!criado_por(nome_completo)`)
+      .select(`id, escolta_id, vigilante_id, data_hora, latitude, longitude, vigilante:vigilantes(nome_completo), foto:fotos(id, caminho_arquivo), autor:usuarios!criado_por(nome_completo), ${COLUNAS_ANULACAO}`)
       .eq('escolta_id', id)
 
     // ── Checklists ────────────────────────────────────────────────────────────
     const { data: chks } = viaturaIds.length > 0
       ? await sb
           .from('checklists')
-          .select(`id, escolta_veiculo_id, tipo, concluido, data_inicio, data_conclusao, modelo:checklist_modelos(nome), autor:usuarios!responsavel_id(nome_completo), respostas:checklist_respostas(id, descricao_item, conforme, observacao, foto:fotos(id, caminho_arquivo))`)
+          .select(`id, escolta_veiculo_id, tipo, concluido, data_inicio, data_conclusao, modelo:checklist_modelos(nome), autor:usuarios!responsavel_id(nome_completo), respostas:checklist_respostas(id, descricao_item, conforme, observacao, foto:fotos(id, caminho_arquivo)), ${COLUNAS_ANULACAO}`)
           .in('escolta_veiculo_id', viaturaIds)
       : { data: null }
-    setChecklists(chks ?? [])
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    setChecklists((chks ?? []).filter((c: any) => !c.anulado_em))
 
     // ── Montar timeline integrada ─────────────────────────────────────────────
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const getFotoUrl = (foto: any) => {
       if (!foto) return null
-      const path = foto.caminho_arquivo as string
-      if (path.startsWith('http://') || path.startsWith('https://')) return path
-      return supabase.storage.from('fotos').getPublicUrl(path).data.publicUrl
+      // Lote 2026-10: bucket privado; a URL vem do lote assinado logo abaixo.
+      return urlDoMapa(urlsFotos, foto.caminho_arquivo as string)
     }
+    const urlsFotos: Record<string, string> = {}
 
     // ── Fotos dos pontos de controle, em lote ─────────────────────────────────
     // A coleta antes era feita so para os pontos filtrados como parada, entao as
@@ -906,7 +1089,7 @@ export default function EscoltaDetalhePage() {
       todosFotoIds.push(...fotoIdsDoPonto({ foto_id: p.foto?.id ?? null, observacoes: p.observacoes }))
     })
 
-    const fotoPathMap: Record<string, string> = {}
+    const fotoPathMap: Record<string, string> = { ...fotosPendentes }
     if (todosFotoIds.length > 0) {
       const { data: fotosData } = await sb
         .from('fotos')
@@ -914,6 +1097,34 @@ export default function EscoltaDetalhePage() {
         .in('id', Array.from(new Set(todosFotoIds)))
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       fotosData?.forEach((f: any) => { fotoPathMap[f.id] = f.caminho_arquivo })
+    }
+
+    // Uma chamada só para assinar todas as fotos da tela (pontos, presenças, checklists).
+    const caminhosDaTela = [
+      ...Object.values(fotoPathMap),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...(pts ?? []).map((p: any) => p.foto?.caminho_arquivo),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...(pres ?? []).map((p: any) => p.foto?.caminho_arquivo),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...(chks ?? []).flatMap((c: any) => (c.respostas ?? []).map((r: any) => r.foto?.caminho_arquivo)),
+    ]
+    // Onda L (16.3.4): a URL assinada é um POST e não entra em cache. Sem rede, as fotos
+    // já enviadas aparecem como "Foto indisponível sem conexão" e as guardadas no aparelho,
+    // a partir do blob local.
+    if (aparelhoSemRede() || semRedeNaLeitura) {
+      for (const c of caminhosDaTela) if (c) urlsFotos[c] = FOTO_SEM_CONEXAO
+    } else {
+      Object.assign(urlsFotos, await urlsAssinadas(sb, caminhosDaTela))
+    }
+    // Onda M (revisão da onda L, achado 6): as URLs locais antigas são liberadas em toda carga,
+    // inclusive quando a fila esvaziou (antes ficavam presas na memória da aba).
+    for (const u of urlsLocaisRef.current) URL.revokeObjectURL(u)
+    urlsLocaisRef.current = []
+    if (pendentes.length > 0) {
+      const locais = await urlsDosPendentes(pendentes)
+      urlsLocaisRef.current = Object.values(locais)
+      Object.assign(urlsFotos, locais)
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -932,6 +1143,7 @@ export default function EscoltaDetalhePage() {
     }
 
     const tl: TimelineItem[] = []
+    const locaisAtivos = await carregarLocaisAtivos(sb)
 
     histNorm.forEach((h) => {
       tl.push({
@@ -941,7 +1153,7 @@ export default function EscoltaDetalhePage() {
         titulo: `${STATUS_INFO[h.status_anterior]?.label ?? h.status_anterior} → ${STATUS_INFO[h.status_novo]?.label ?? h.status_novo}`,
         descricao: h.observacao,
         usuario: h.autor?.nome_completo ?? 'Sistema',
-        extra: { status_anterior: h.status_anterior, status_novo: h.status_novo },
+        extra: { status_anterior: h.status_anterior, status_novo: h.status_novo, anulado: textoAnulado(h) },
       })
     })
 
@@ -959,9 +1171,10 @@ export default function EscoltaDetalhePage() {
         descricao: info.observacao,
         usuario: p.autor?.nome_completo ?? 'Operador',
         coordenadas: p.latitude && p.longitude ? { lat: Number(p.latitude), lng: Number(p.longitude) } : null,
+        rotulo: rotuloDoPonto({ latitude: p.latitude, longitude: p.longitude, precisao_metros: p.precisao_metros, endereco: info.endereco }, locaisAtivos),
         foto_url: fotosPonto[0] ?? null,
         foto_urls: fotosPonto,
-        extra: { sem_sinal_gps: p.sem_sinal_gps === true },
+        extra: { sem_sinal_gps: p.sem_sinal_gps === true, anulado: textoAnulado(p) },
       })
     })
 
@@ -976,12 +1189,23 @@ export default function EscoltaDetalhePage() {
         usuario: p.autor?.nome_completo ?? 'Sistema',
         coordenadas: p.latitude && p.longitude ? { lat: Number(p.latitude), lng: Number(p.longitude) } : null,
         foto_url: getFotoUrl(p.foto),
+        extra: { anulado: textoAnulado(p) },
       })
     })
 
     // Consolidar TODOS os checklists em UM único entry na timeline
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const checklistsConcluidos = (chks ?? []).filter((c: any) => !!c.data_conclusao)
+    const checklistsConcluidos = (chks ?? []).filter((c: any) => !!c.data_conclusao && !c.anulado_em)
+    // Onda I: checklist anulado fica na timeline, marcado, fora do consolidado.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(chks ?? []).filter((c: any) => !!c.anulado_em).forEach((c: any) => {
+      const viat = viatsNorm.find((v) => v.id === c.escolta_veiculo_id)
+      tl.push({
+        id: c.id, tipo: 'checklist', data_hora: c.data_conclusao ?? c.data_inicio,
+        titulo: `Checklist de ${c.tipo === 'material' ? 'material' : 'viatura'}${viat?.veiculo?.placa ? ` (${formatarPlaca(viat.veiculo.placa)})` : ''}`,
+        descricao: null, usuario: c.autor?.nome_completo ?? null, extra: { anulado: textoAnulado(c), checklists: [] },
+      })
+    })
     if (checklistsConcluidos.length > 0) {
       // Foto representativa — primeira foto encontrada em qualquer checklist
       let primeiraFotoUrl: string | null = null
@@ -1041,6 +1265,7 @@ export default function EscoltaDetalhePage() {
         titulo: `Ocorrência: ${o.tipo?.nome ?? 'Geral'}`,
         descricao: o.descricao,
         usuario: o.autor?.nome_completo ?? 'Operador',
+        extra: { anulado: textoAnulado(o) },
       })
     })
 
@@ -1048,11 +1273,12 @@ export default function EscoltaDetalhePage() {
     setTimeline(tl)
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    setInicioOperacao(inicioOperacaoEm(((pts ?? []) as any[]).map((p: any) => ({ data_hora: p.data_hora }))))
+    setInicioOperacao(inicioOperacaoEm(((pts ?? []) as any[]).filter((p: any) => !p.anulado_em).map((p: any) => ({ data_hora: p.data_hora }))))
 
     // ── Paradas registradas ────────────────────────────────────────────────────
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const paradasFiltradas = (pts ?? []).filter((p: any) => {
+      if (p.anulado_em) return false
       const { tipo } = lerObservacao(p.observacoes)
       return !!tipo && TIPOS_PARADA.some(t => t.value === tipo)
     })
@@ -1079,9 +1305,23 @@ export default function EscoltaDetalhePage() {
     })
     setParadas(paradasProcessadas)
     setLoading(false)
-  }, [id, sb, supabase])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, sb])
 
   useEffect(() => { carregar() }, [carregar])
+
+  // Onda L: a primeira leitura costuma sair antes de o usuário ser conhecido. Se ela
+  // precisava dele (sem rede, ou com registros guardados no aparelho), lê de novo.
+  useEffect(() => {
+    authUserIdRef.current = authUserId
+    if (!authUserId || !carregouSemDonoRef.current) return
+    carregouSemDonoRef.current = false
+    void (async () => {
+      const pend = await lerPendentes(authUserId)
+      if (semDadosRef.current || aparelhoSemRede() || pend.some(r => r.escolta_id === id)) carregar()
+    })()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUserId])
 
   // ── Countdown para próximo check-in ──────────────────────────────────────────
   // A regra e a de lib/checkin.ts, a mesma do alerta global e do Painel Guiado.
@@ -1120,43 +1360,46 @@ export default function EscoltaDetalhePage() {
     setAvancando(true)
     setErro(null)
 
-    const { data: atualizadas, error } = await sb
-      .from('escoltas')
-      .update({ status: proximo.status })
-      .eq('id', escolta.id)
-      .eq('status', escolta.status)
-      .select('id')
+    // Onda L: o pré-início (agendada para em_pre_inicio) é ação de campo e vai pelo envelope;
+    // a transição de rascunho para agendada é da gestão e continua direta.
+    if (escolta.status === 'agendada') await iniciarGravacao()
+    else gravacaoRef.current = null
+    const g = gravacaoRef.current
+    if (g) {
+      g.etapa = { pontos: [], status_atual: escolta.status, status_novo: proximo.status, observacao: motivoAvanco.trim() || null }
+      g.statusEsperado = escolta.status
+    }
+
+    // Lote 2026-10 (onda F): status e histórico numa transação (registrar_etapa_escolta).
+    const { error } = g ? { error: null } : await sb.rpc('registrar_etapa_escolta', {
+      p_escolta_id: escolta.id,
+      p_status_atual: escolta.status,
+      p_status_novo: proximo.status,
+      p_observacao: motivoAvanco.trim() || null,
+    })
 
     if (error) {
-      setErro(error.message ?? 'Erro ao avançar status.')
+      setErro(error.message === 'ERRO_SEM_TRANSICAO'
+        ? 'A escolta mudou de status em outro dispositivo. Recarregue a página e tente de novo.'
+        : (error.message ?? 'Erro ao avançar status.'))
       setAvancando(false)
+      if (error.message === 'ERRO_SEM_TRANSICAO') carregar()
       return
     }
-
-    // O PostgREST devolve sucesso com zero linhas quando a pre-condicao ou a RLS
-    // barram. Sem esta checagem a tela anunciava exito sem transicao nenhuma.
-    if (!atualizadas || atualizadas.length === 0) {
-      setErro('A escolta mudou de status em outro dispositivo. Recarregue a página e tente de novo.')
-      setAvancando(false)
-      carregar()
-      return
-    }
-
-    await sb.from('escolta_status_historico').insert({
-      escolta_id: escolta.id,
-      status_anterior: escolta.status,
-      status_novo: proximo.status,
-      observacao: motivoAvanco.trim() || null,
-      alterado_por: user?.id ?? null,
-    })
 
     // Notificar Telegram sobre mudança de status
     const statusLabel = STATUS_INFO[proximo.status]?.label ?? proximo.status
-    notificarTelegram({
-      titulo: proximo.label,
-      status_atual: statusLabel,
-      descricao: descricaoTelegram(motivoAvanco, TEXTO_PADRAO_ETAPA[proximo.status]),
-    })
+    try {
+      await fecharGravacao({
+        titulo: proximo.label,
+        status_atual: statusLabel,
+        descricao: descricaoTelegram(motivoAvanco, TEXTO_PADRAO_ETAPA[proximo.status]),
+      })
+    } catch (err) {
+      setErro(textoErroGravacao(err, 'Erro ao avançar status.'))
+      setAvancando(false)
+      return
+    }
 
     setDialogAvanco(false)
     setMotivoAvanco('')
@@ -1189,6 +1432,7 @@ export default function EscoltaDetalhePage() {
       setErro('A observação do checklist de materiais é obrigatória no Passo 1.')
       return
     }
+    if (faltaComplementoDaSugestao(obsMateriais, SUGESTOES_WIZARD.materiais)) { setErro(MENSAGEM_COMPLETAR_SUGESTAO); return }
     const fotosFaltando = FOTOS_VIATURA_DEF.filter(f => !fotosViatura[f.key])
     if (fotosFaltando.length > 0) {
       setErro(`Fotos obrigatórias da viatura: ${fotosFaltando.map(f => f.label).join(', ')}.`)
@@ -1198,23 +1442,21 @@ export default function EscoltaDetalhePage() {
       setErro('As observações do checklist de viatura são obrigatórias no Passo 2.')
       return
     }
-    const faltamFotosPartida = erroFotosFaltando(fotosPartida, 'do hodômetro/saída (Passo 3)')
-    if (faltamFotosPartida) { setErro(faltamFotosPartida); return }
-    const semKm = viaturas.filter((v) => !kmPartida[v.id])
-    if (semKm.length > 0) {
-      setErro(viaturas.length === 1
-        ? 'O KM de partida é obrigatório no Passo 3.'
-        : `Informe o KM de partida das viaturas: ${semKm.map(rotuloViatura).join(', ')}.`)
-      return
-    }
+    if (faltaComplementoDaSugestao(obsViatura, SUGESTOES_WIZARD.viatura)) { setErro(MENSAGEM_COMPLETAR_SUGESTAO); return }
+    // Onda H: KM inicial e foto do painel saem do Passo 2, por viatura. A mesma
+    // conferência do avanço do Passo 2 roda aqui de novo, como defesa.
+    const faltaPorViatura = erroPorViaturaPasso2()
+    if (faltaPorViatura) { setErro(faltaPorViatura); return }
     if (!obsPartida.trim()) {
       setErro('As observações de partida são obrigatórias no Passo 3.')
       return
     }
+    if (faltaComplementoDaSugestao(obsPartida, SUGESTOES_WIZARD.partida)) { setErro(MENSAGEM_COMPLETAR_SUGESTAO); return }
 
     setLoading(true)
     setErro(null)
     try {
+      await iniciarGravacao()
       // Posicao que nao lanca: sem sinal na garagem o operador precisa conseguir
       // iniciar a escolta assim mesmo.
       const pos = await obterPosicaoPonto()
@@ -1236,7 +1478,8 @@ export default function EscoltaDetalhePage() {
       // fotos de angulo) continuam cobrindo apenas a primeira viatura do comboio. Esta
       // rodada abriu por viatura apenas os pontos de controle e o KM. Faltam os
       // checklists de partida e o de entrega da finalizacao.
-      const { data: clMat, error: clMatErr } = await sb.from('checklists').insert({
+      // Onda L: inserirLinhaCampo grava direto (chave desligada) ou acrescenta ao envelope.
+      const clMat = await inserirLinhaCampo('checklists', {
         escolta_veiculo_id: viaturas[0].id,
         modelo_id: null,
         tipo: 'material',
@@ -1245,11 +1488,10 @@ export default function EscoltaDetalhePage() {
         data_conclusao: new Date().toISOString(),
         responsavel_id: user?.id,
         sincronizado: true,
-      }).select('id').single()
-      if (clMatErr) throw new Error(clMatErr.message)
+      })
 
       for (const item of ITENS_CHECKLIST_MATERIAL) {
-        await sb.from('checklist_respostas').insert({
+        await inserirLinhaCampo('checklist_respostas', {
           checklist_id: clMat.id,
           descricao_item: item.label,
           conforme: checkMateriais[item.key] || false,
@@ -1259,7 +1501,7 @@ export default function EscoltaDetalhePage() {
       }
 
       // 3. Salvar Checklist Viatura
-      const { data: clViat, error: clViatErr } = await sb.from('checklists').insert({
+      const clViat = await inserirLinhaCampo('checklists', {
         escolta_veiculo_id: viaturas[0].id,
         modelo_id: null,
         tipo: 'viatura',
@@ -1268,8 +1510,7 @@ export default function EscoltaDetalhePage() {
         data_conclusao: new Date().toISOString(),
         responsavel_id: user?.id,
         sincronizado: true,
-      }).select('id').single()
-      if (clViatErr) throw new Error(clViatErr.message)
+      })
 
       // Inserir respostas do checklist viatura — cada item leva a foto correspondente (se houver)
       const fotoKeyPorItem: Record<string, string> = {
@@ -1279,7 +1520,7 @@ export default function EscoltaDetalhePage() {
       }
       for (const item of ITENS_CHECKLIST_VIATURA) {
         const fotoKey = fotoKeyPorItem[item.key] ?? 'frente'
-        await sb.from('checklist_respostas').insert({
+        await inserirLinhaCampo('checklist_respostas', {
           checklist_id: clViat.id,
           descricao_item: item.label,
           conforme: checkViatura[item.key] || false,
@@ -1290,7 +1531,7 @@ export default function EscoltaDetalhePage() {
       // Inserir uma resposta para cada foto tirada (registro fotográfico)
       for (const def of FOTOS_VIATURA_DEF) {
         if (fotosViaturaIds[def.key]) {
-          await sb.from('checklist_respostas').insert({
+          await inserirLinhaCampo('checklist_respostas', {
             checklist_id: clViat.id,
             descricao_item: `Foto obrigatória — ${def.label}`,
             conforme: true,
@@ -1316,29 +1557,16 @@ export default function EscoltaDetalhePage() {
         observacao: obsPartida,
         pos,
         km: kmPartida,
+        transicao: { statusNovo: 'em_andamento', observacao: obsPartida.trim() },
       })
 
       // 6. Atualizar status escolta
-      const { data: atualizadas, error: escErr } = await sb.from('escoltas')
-        .update({ status: 'em_andamento' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
       // 6b. KM de saida na coluna da viatura, depois do ponto (que ja o guarda) e do
       // status. Antes vinha antes de tudo e sem conferir se o banco aceitou.
       await gravarKmViaturas('quilometragem_saida', kmPartida)
 
-      // 7. Histórico de status
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'em_andamento',
-        observacao: obsPartida.trim(),
-        alterado_por: user?.id ?? null,
-      })
 
       // 8. Notificar Telegram — Checklist inicial concluído / Escolta iniciada
       const matConformes = Object.values(checkMateriais).filter(Boolean).length
@@ -1354,7 +1582,7 @@ export default function EscoltaDetalhePage() {
         `📏 KM de partida: ${kmResumo}`,
         obsPartida.trim(),
       ].filter(Boolean).join(' · ')
-      notificarTelegram({
+      await fecharGravacao({
         titulo: 'Escolta Iniciada — Checklist Concluído',
         tipo: 'status',
         status_atual: 'Em Trânsito',
@@ -1373,22 +1601,19 @@ export default function EscoltaDetalhePage() {
   // ── Cancelar escolta ─────────────────────────────────────────────────────────
   const cancelarEscolta = async () => {
     if (!motivoCancelamento.trim()) { setErro('Informe o motivo do cancelamento.'); return }
+    if (faltaComplementoDaSugestao(motivoCancelamento, SUGESTOES_CANCELAMENTO)) { setErro(MENSAGEM_COMPLETAR_SUGESTAO); return }
     setCancelando(true)
     setErro(null)
     try {
-      const { error } = await sb
-        .from('escoltas')
-        .update({ status: 'cancelada', observacao_fechamento: motivoCancelamento.trim() })
-        .eq('id', escolta!.id)
-      if (error) throw new Error(error.message)
-
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta!.id,
-        status_anterior: escolta!.status,
-        status_novo: 'cancelada',
-        observacao: `Cancelamento: ${motivoCancelamento.trim()}`,
-        alterado_por: user?.id ?? null,
+      // Lote 2026-10 (onda F): status e histórico numa transação (registrar_etapa_escolta).
+      const { error } = await sb.rpc('registrar_etapa_escolta', {
+        p_escolta_id: escolta!.id,
+        p_status_atual: escolta!.status,
+        p_status_novo: 'cancelada',
+        p_observacao: `Cancelamento: ${motivoCancelamento.trim()}`,
+        p_observacao_fechamento: motivoCancelamento.trim(),
       })
+      if (error) throw new Error(error.message === 'ERRO_SEM_TRANSICAO' ? 'A escolta mudou de status em outro dispositivo. Recarregue a página.' : error.message)
 
       setDialogCancelar(false)
       setMotivoCancelamento('')
@@ -1404,25 +1629,22 @@ export default function EscoltaDetalhePage() {
   // ── Reagendar escolta ────────────────────────────────────────────────────────
   const reagendarEscolta = async () => {
     if (!motivoReagendamento.trim()) { setErro('Informe o motivo do reagendamento.'); return }
+    if (faltaComplementoDaSugestao(motivoReagendamento, SUGESTOES_REAGENDAMENTO)) { setErro(MENSAGEM_COMPLETAR_SUGESTAO); return }
     if (!novaDataReagendamento) { setErro('Informe a nova data.'); return }
     setCancelando(true)
     setErro(null)
     try {
       const novaDataHora = new Date(`${novaDataReagendamento}T${novaHoraReagendamento}:00`).toISOString()
 
-      const { error } = await sb
-        .from('escoltas')
-        .update({ status: 'agendada', data_hora_prevista: novaDataHora, observacao_fechamento: null })
-        .eq('id', escolta!.id)
-      if (error) throw new Error(error.message)
-
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta!.id,
-        status_anterior: escolta!.status,
-        status_novo: 'agendada',
-        observacao: `Reagendamento para ${new Date(novaDataHora).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })}. Motivo: ${motivoReagendamento.trim()}`,
-        alterado_por: user?.id ?? null,
+      // Lote 2026-10 (onda F): status, nova data e histórico numa transação.
+      const { error } = await sb.rpc('registrar_etapa_escolta', {
+        p_escolta_id: escolta!.id,
+        p_status_atual: escolta!.status,
+        p_status_novo: 'agendada',
+        p_observacao: `Reagendamento para ${new Date(novaDataHora).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' }).replace(',', '')}. Motivo: ${motivoReagendamento.trim()}`,
+        p_data_hora_prevista: novaDataHora,
       })
+      if (error) throw new Error(error.message === 'ERRO_SEM_TRANSICAO' ? 'A escolta mudou de status em outro dispositivo. Recarregue a página.' : error.message)
 
       setDialogCancelar(false)
       setMotivoReagendamento('')
@@ -1438,30 +1660,9 @@ export default function EscoltaDetalhePage() {
   }
 
   // ── Obter GPS local com fallback ─────────────────────────────────────────────
-  const obterGPS = async (): Promise<{ lat: number; lng: number; precisao: number }> => {
-    if (!navigator.geolocation) throw new Error('GPS não disponível neste dispositivo')
-
-    const tentarObter = (highAccuracy: boolean, timeout: number, maximumAge: number) =>
-      new Promise<{ lat: number; lng: number; precisao: number }>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(
-          (pos) => resolve({
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude,
-            precisao: pos.coords.accuracy,
-          }),
-          reject,
-          { enableHighAccuracy: highAccuracy, timeout, maximumAge }
-        )
-      })
-
-    try {
-      // 1ª tentativa: GPS de alta precisão, sem cache, 15s
-      return await tentarObter(true, 15000, 0)
-    } catch {
-      // 2ª tentativa: rede/torre celular, aceita cache de 30s, 10s
-      return await tentarObter(false, 10000, 30000)
-    }
-  }
+  // Onda M (B3): alta precisão (15 s), depois rede (10 s, cache de 30 s); se a leitura vier
+  // pior que 100 m, nova tentativa de até 10 s, gravando a melhor (lib/gps.ts).
+  const obterGPS = (): Promise<{ lat: number; lng: number; precisao: number }> => obterGpsPreciso()
 
   /**
    * Guardas de entrada dos handlers da jornada, verificadas antes de qualquer chamada
@@ -1503,12 +1704,16 @@ export default function EscoltaDetalhePage() {
     'A etapa já foi avançada em outra tela ou por outra pessoa. Nenhum registro foi gravado. Recarregue a página e confira a etapa atual.'
 
   const conferirEtapa = async (escoltaId: string, statusEsperado: string) => {
+    // Onda L (16.3.10): sem rede, pula; a conferência fica no servidor (conflito, nunca descarte).
+    if (gravacaoRef.current?.semRede) return
     const { data, error } = await sb.from('escoltas').select('status').eq('id', escoltaId).maybeSingle()
+    if (error && gravacaoRef.current && erroDeRede(error)) return
     if (error) throw new Error(error.message)
     if (!data || data.status !== statusEsperado) throw new Error(ERRO_ETAPA_MUDOU)
   }
-  const ERRO_SEM_TRANSICAO =
-    'O registro do ponto de controle foi salvo, mas o status da escolta não mudou aqui. A etapa pode já ter sido avançada em outra tela ou por outra pessoa. Recarregue a página e confira a etapa atual antes de tentar de novo.'
+  // Lote 2026-10: com a gravacao atomica, transicao recusada nao deixa ponto nem historico.
+  const ERRO_TRANSICAO_NADA_GRAVADO =
+    'A etapa já tinha sido avançada em outra tela ou por outra pessoa. O ponto, o status e o histórico desta etapa não foram gravados. Recarregue a página e confira a etapa atual antes de registrar de novo.'
 
   /**
    * Posicao a gravar no ponto de controle, no unico formato que o CHECK
@@ -1540,8 +1745,117 @@ export default function EscoltaDetalhePage() {
   /** Aviso de tela quando o ponto foi gravado sem posicao. */
   const AVISO_SEM_GPS = 'Ponto registrado SEM localização: o GPS não respondeu. A escolta avançou normalmente.'
 
+  // ── Onda L: gravação pelo envelope (docs/14, 16.3.10) ───────────────────────
+  // Com a chave offline_ligado, os handlers de campo montam as mesmas linhas de hoje, mas
+  // em vez de gravar cada uma direto elas são juntadas aqui e vão num registro só pelo
+  // envelope (registrarCampo: guardado no aparelho e enviado; com sinal a tela espera a
+  // resposta). Desligada, cada helper grava direto, como antes.
+  const gravacaoRef = useRef<{
+    fotos: FotoPreparada[]
+    linhas: LinhasEnvelope
+    etapa: EtapaEnvelope | null
+    statusEsperado: string | null
+    quando: string
+    semRede: boolean
+  } | null>(null)
+
+  const iniciarGravacao = async () => {
+    gravacaoRef.current = null
+    const env = await envelopeLigado()
+    if (env.usar) {
+      gravacaoRef.current = { fotos: [], linhas: {}, etapa: null, statusEsperado: null, quando: new Date().toISOString(), semRede: aparelhoSemRede() }
+    }
+  }
+
+  /** Checklist e respostas: direto (lendo o erro, 16.3.11) ou acrescentados ao envelope. */
+  const inserirLinhaCampo = async (tabela: 'checklists' | 'checklist_respostas', linha: Record<string, unknown>): Promise<{ id: string }> => {
+    const g = gravacaoRef.current
+    if (g) {
+      const idLinha = novoId()
+      ;(g.linhas[tabela] ??= []).push({ id: idLinha, ...linha })
+      return { id: idLinha }
+    }
+    if (tabela === 'checklists') {
+      const { data, error } = await sb.from('checklists').insert(linha).select('id').single()
+      if (error) throw new Error(error.message)
+      return data
+    }
+    const { error } = await sb.from('checklist_respostas').insert(linha)
+    if (error) throw new Error(`Não foi possível salvar a resposta "${String(linha.descricao_item ?? '')}": ${error.message}`)
+    return { id: '' }
+  }
+
+  /** Pontos sem transição (parada, check-in): direto ou acrescentados ao envelope. */
+  const inserirPontosCampo = async (linha: Record<string, unknown>): Promise<{ error: { message: string } | null }> => {
+    const g = gravacaoRef.current
+    if (g) {
+      ;(g.linhas.pontos_controle ??= []).push({ id: novoId(), ...linha, criado_offline: g.semRede })
+      return { error: null }
+    }
+    return sb.from('pontos_controle').insert(linha)
+  }
+
+  /**
+   * Fecho do registro: sem envelope, o Telegram de hoje (notificarTelegram). Com envelope,
+   * o registro inteiro vai para registrarCampo com o Telegram de hoje como aviso (sai uma
+   * vez, depois de aplicado, com as duas horas se foi feito sem conexão). Guardado,
+   * conflito e recusado ficam no aviso da tela.
+   */
+  const fecharGravacao = async (params: Parameters<typeof notificarTelegram>[0]) => {
+    const g = gravacaoRef.current
+    gravacaoRef.current = null
+    if (!g) { notificarTelegram(params); return }
+    const efetivos = viaturas.flatMap(v => v.efetivo)
+      .map(e => `${e.vigilante?.nome_completo ?? '—'}${e.papel_na_escolta ? ` (${e.papel_na_escolta})` : ''}`)
+    const placas = viaturas.map((v) => v.veiculo?.placa).filter((p): p is string => Boolean(p))
+    const corpo: Record<string, unknown> = {
+      tipo: params.tipo ?? 'ponto_controle',
+      titulo: params.titulo,
+      descricao: params.descricao,
+      escolta_id: escolta!.id,
+      escolta_codigo: escolta!.codigo_escolta,
+      cliente: escolta!.cliente?.nome_cliente,
+      status_atual: params.status_atual ?? escolta!.status,
+      efetivos,
+      veiculo: placas.length > 0 ? placas.join(' · ') : null,
+      data_hora: new Date(g.quando).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }),
+    }
+    const pontos = [...(g.linhas.pontos_controle ?? []), ...(g.etapa?.pontos ?? [])]
+    const r = await gravarPeloEnvelope({ authUserId, usuarioId: user?.id ?? null }, {
+      tipo: g.etapa ? 'etapa' : 'linhas',
+      escoltaId: escolta!.id,
+      escoltaVeiculoId: (pontos[0]?.escolta_veiculo_id as string | undefined) ?? null,
+      versaoGestao: escolta!.versao_gestao ?? null,
+      statusEsperado: g.statusEsperado,
+      linhas: g.linhas,
+      etapa: g.etapa ?? undefined,
+      fotos: g.fotos,
+      dataHoraAcao: g.quando,
+      aviso: {
+        corpo,
+        fotoCaminho: params.fotoId ? g.fotos.find(f => f.id === params.fotoId)?.caminho ?? null : null,
+        soSeAvancou: !!g.etapa,
+      },
+    })
+    if (r.modo === 'guardado') setAvisoOffline({ tipo: 'guardado', texto: MENSAGEM_GUARDADO })
+    else if (r.modo === 'recusado') setAvisoOffline({ tipo: 'erro', texto: textoRecusado(r.erro) })
+    else if (r.resultado === 'conflito') setAvisoOffline({ tipo: 'erro', texto: textoConflito(r.motivo) })
+    else setAvisoOffline(null)
+  }
+
   // ── Upload de Foto ───────────────────────────────────────────────────────────
   const uploadFoto = async (file: File, prefix: string, lat: number | null, lng: number | null, prec: number | null, tipoFotoId: string = TIPO_FOTO_IDS.PONTO_CONTROLE) => {
+    // Onda L: pelo envelope, a mesma linha de `fotos` com id e caminho do aparelho; o arquivo
+    // sobe pela fila. Hora da captura (o File nasce na captura), não a do upload (16.3.11).
+    const g = gravacaoRef.current
+    if (g) {
+      const f = prepararFoto(escolta!.id, {
+        blob: file, tipoFotoId, dataHoraCaptura: horaDaCaptura(file),
+        gps: lat != null && lng != null ? { lat, lng, precisao: prec } : null, carimbado: foiCarimbada(file), criadoPor: user?.id ?? null,
+      })
+      g.fotos.push(f)
+      return f.id
+    }
     const ext = file.name.split('.').pop() ?? 'jpg'
     const path = `${prefix}/${escolta!.id}/${Date.now()}.${ext}`
     const { error: upErr } = await sb.storage.from('fotos').upload(path, file)
@@ -1553,8 +1867,10 @@ export default function EscoltaDetalhePage() {
       latitude: lat,
       longitude: lng,
       precisao_metros: prec,
-      data_hora_captura: new Date().toISOString(),
-      carimbo_aplicado: false,
+      // Onda L (16.3.11): hora da captura, não a do upload. Onda M: carimbo_aplicado diz se o
+      // arquivo saiu do carimbo do CameraInput (lib/foto-captura.ts).
+      data_hora_captura: horaDaCaptura(file),
+      carimbo_aplicado: foiCarimbada(file),
       enviada_telegram: false,
       sincronizada: true,
       criado_por: user?.id ?? null,
@@ -1566,7 +1882,7 @@ export default function EscoltaDetalhePage() {
 
   /**
    * Sobe as fotos de um ponto de controle e devolve os ids na ordem.
-   * A regra acordada e ate 5 fotos por ponto, no minimo 1. O bloqueio do minimo
+   * A regra e FOTOS_POR_PONTO (onda M: 1 a 3 por ponto). O bloqueio do minimo
    * fica em cada handler, porque a mensagem de erro precisa citar o ponto.
    */
   const uploadFotosPonto = async (
@@ -1610,6 +1926,32 @@ export default function EscoltaDetalhePage() {
   }
 
   /**
+   * Onda H (lote 2026-10): conferência do bloco "Por viatura" do Passo 2 do wizard.
+   * Cada viatura precisa de KM inicial (número maior que zero) e da foto do painel com
+   * o hodômetro. Usada no avanço do Passo 2 e de novo no "Confirmar e iniciar escolta".
+   */
+  const erroPorViaturaPasso2 = (): string | null => {
+    if (viaturas.length === 0) return ERRO_SEM_VIATURA_WIZARD
+    const varias = viaturas.length > 1
+    const semKm = viaturas.filter((v) => !(kmPartida[v.id] ?? '').trim())
+    if (semKm.length > 0) {
+      return varias
+        ? `Informe o KM inicial no Passo 2 das viaturas: ${semKm.map(rotuloViatura).join(', ')}.`
+        : 'O KM inicial é obrigatório no Passo 2.'
+    }
+    const kmInvalido = viaturas.filter((v) => {
+      const n = Number(kmPartida[v.id])
+      return !Number.isFinite(n) || n <= 0
+    })
+    if (kmInvalido.length > 0) {
+      return varias
+        ? `KM inicial inválido no Passo 2 (use um número maior que zero): ${kmInvalido.map(rotuloViatura).join(', ')}.`
+        : 'KM inicial inválido no Passo 2: use um número maior que zero.'
+    }
+    return erroFotosFaltando(fotosPartida, 'do painel com o hodômetro (Passo 2)')
+  }
+
+  /**
    * Grava UM ponto de controle POR VIATURA, com as fotos de cada uma.
    *
    * A posicao e a mesma para todas, de proposito: o GPS e do aparelho de quem
@@ -1638,6 +1980,11 @@ export default function EscoltaDetalhePage() {
     endereco?: string | null
     /** KM por viatura, so na saida e na chegada na base. Vai para o ponto de auditoria. */
     km?: KmPorViatura
+    /**
+     * Lote 2026-10 (onda F): status e historico gravados na MESMA transacao dos pontos,
+     * pela RPC registrar_etapa_escolta. Se a transicao falhar, nada fica gravado.
+     */
+    transicao?: { statusNovo: string; observacao: string | null }
   }): Promise<string | null> => {
     const { pos } = params
     const enviadas: { viatura: ViaturaDetalhe; fotoIds: string[] }[] = []
@@ -1658,8 +2005,11 @@ export default function EscoltaDetalhePage() {
     // primeira viatura ficaria com o ponto duplicado no relatorio do cliente, sem
     // ninguem conseguir apagar, porque pontos_controle nao tem policy de DELETE.
     // Insert com varias linhas e um statement so, portanto atomico.
-    const dataHora = new Date().toISOString()
+    const g = gravacaoRef.current
+    const dataHora = g?.quando ?? new Date().toISOString()
     const linhas = enviadas.map(({ viatura, fotoIds }) => ({
+      // Onda L: id do aparelho e a marca de ponto registrado sem conexão.
+      ...(g ? { id: novoId(), criado_offline: g.semRede } : {}),
       escolta_veiculo_id: viatura.id,
       tipo_ponto_id: params.tipoPontoId,
       data_hora: dataHora,
@@ -1685,7 +2035,29 @@ export default function EscoltaDetalhePage() {
       sincronizado: true,
     }))
 
-    if (linhas.length > 0) {
+    if (g) {
+      // Onda L: a etapa vai no envelope, fechado pelo handler (fecharGravacao).
+      if (params.transicao) {
+        g.etapa = {
+          pontos: linhas, status_atual: params.statusEsperado, status_novo: params.transicao.statusNovo,
+          observacao: params.transicao.observacao, latitude: pos.latitude, longitude: pos.longitude,
+        }
+        g.statusEsperado = params.statusEsperado
+      } else if (linhas.length > 0) {
+        ;(g.linhas.pontos_controle ??= []).push(...linhas)
+      }
+    } else if (params.transicao) {
+      const { error } = await sb.rpc('registrar_etapa_escolta', {
+        p_escolta_id: params.escoltaId,
+        p_pontos: linhas,
+        p_status_atual: params.statusEsperado,
+        p_status_novo: params.transicao.statusNovo,
+        p_observacao: params.transicao.observacao,
+        p_latitude: pos.latitude,
+        p_longitude: pos.longitude,
+      })
+      if (error) throw new Error(error.message === 'ERRO_SEM_TRANSICAO' ? ERRO_TRANSICAO_NADA_GRAVADO : error.message)
+    } else if (linhas.length > 0) {
       const { error } = await sb.from('pontos_controle').insert(linhas)
       if (error) throw new Error(error.message)
     }
@@ -1706,6 +2078,14 @@ export default function EscoltaDetalhePage() {
     km: KmPorViatura,
   ): Promise<boolean> => {
     const falharam: string[] = []
+    // Onda L: pelo envelope, o KM vai no mesmo registro (só as duas colunas de KM).
+    const g = gravacaoRef.current
+    if (g) {
+      for (const v of viaturas) {
+        if (km[v.id]) (g.linhas.km ??= []).push({ escolta_veiculo_id: v.id, [campo]: Number(km[v.id]) })
+      }
+      return true
+    }
     for (const v of viaturas) {
       const valor = km[v.id]
       if (!valor) continue
@@ -1732,6 +2112,7 @@ export default function EscoltaDetalhePage() {
     setLoading(true)
     setErro(null)
     try {
+      await iniciarGravacao()
       const pos = await obterPosicaoPonto()
 
       // Fotos e pontos ANTES do status: ponto sem transicao e recuperavel por conferencia,
@@ -1747,32 +2128,16 @@ export default function EscoltaDetalhePage() {
         observacao: obsStartBase,
         pos,
         km: kmStartBase,
+        transicao: { statusNovo: 'em_andamento', observacao: comporObservacao(obsStartBase) ?? 'Saída da base confirmada.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'em_andamento' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
       // Atualizar KM de saída de cada viatura vinculada
       await gravarKmViaturas('quilometragem_saida', kmStartBase)
 
-      // Registrar Histórico de Status
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'em_andamento',
-        observacao: comporObservacao(obsStartBase) ?? 'Saída da base confirmada.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
 
-      notificarTelegram({
+      await fecharGravacao({
         titulo: 'Saída da Base',
         status_atual: 'Em Trânsito',
         descricao: descricaoTelegram(obsStartBase, TEXTO_PADRAO_PONTO.startBase),
@@ -1796,6 +2161,7 @@ export default function EscoltaDetalhePage() {
     if (!escolta) return
     if (!validarPreRequisitos()) return
     if (!obsParada.trim()) { setErro('A justificativa é obrigatória.'); return }
+    if (faltaComplementoDaSugestao(obsParada, SUGESTOES_PARADA)) { setErro(MENSAGEM_COMPLETAR_SUGESTAO); return }
     // A parada e um registro de local como qualquer outro: exige foto.
     if (fotosParada.length < FOTOS_POR_PONTO.min) {
       setErro('É obrigatório registrar ao menos ' + FOTOS_POR_PONTO.min + ' foto da parada.')
@@ -1809,6 +2175,7 @@ export default function EscoltaDetalhePage() {
     }
     setLoading(true)
     try {
+      await iniciarGravacao()
       const lat = gpsParada.lat
       const lng = gpsParada.lng
       const precisao = gpsParada.precisao ?? 0
@@ -1822,10 +2189,10 @@ export default function EscoltaDetalhePage() {
       // Pedir foto das duas aqui obrigaria o operador a andar ate a outra viatura no
       // meio da estrada. As etapas da jornada, que sao paradas planejadas, ja gravam
       // ponto por viatura. Decisao a confirmar com Pecanha.
-      const { error: ptErr } = await sb.from('pontos_controle').insert({
+      const { error: ptErr } = await inserirPontosCampo({
         escolta_veiculo_id: viaturas[0].id,
         tipo_ponto_id: TIPO_PONTO_IDS.PARADA,
-        data_hora: new Date().toISOString(),
+        data_hora: gravacaoRef.current?.quando ?? new Date().toISOString(),
         latitude: lat,
         longitude: lng,
         precisao_metros: precisao,
@@ -1837,13 +2204,13 @@ export default function EscoltaDetalhePage() {
           tipoLabel: tipoInfo?.label ?? tipoParada,
           observacao: obsParada,
           fotoIds: fotosIds,
-          endereco: gpsParada?.endereco,
+          endereco: gpsParada?.endereco || null,
         }),
         sincronizado: true,
       })
       if (ptErr) throw new Error(ptErr.message)
 
-      notificarTelegram({
+      await fecharGravacao({
         titulo: tipoInfo?.label ?? tipoParada,
         descricao: obsParada.trim(),
         fotoId: fotoIdPrincipal,
@@ -1864,6 +2231,8 @@ export default function EscoltaDetalhePage() {
 
   // ── Check-in Periódico ────────────────────────────────────────────────────────
   const reverseGeocode = async (lat: number, lng: number): Promise<string> => {
+    // Onda L (16.3.10): sem rede, o endereço por extenso fica nulo (o servidor não preenche depois).
+    if (aparelhoSemRede()) return ''
     try {
       const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN
       const res = await fetch(
@@ -1910,8 +2279,8 @@ export default function EscoltaDetalhePage() {
       if (params.fotoId) {
         const { data: f } = await sb.from('fotos').select('caminho_arquivo').eq('id', params.fotoId).maybeSingle()
         if (f?.caminho_arquivo) {
-          const { data: pub } = sb.storage.from('fotos').getPublicUrl(f.caminho_arquivo)
-          fotoUrl = pub?.publicUrl ?? null
+          // Lote 2026-10: URL assinada; o Telegram baixa a foto na hora do envio.
+          fotoUrl = await urlAssinada(sb, f.caminho_arquivo)
         }
       }
       const viatIds = viaturas.map(v => v.id)
@@ -1991,7 +2360,7 @@ export default function EscoltaDetalhePage() {
         ) : gpsAcao ? (
           <>
             <p style={{ fontSize: '12px', fontWeight: 700, color: '#0E1A33', wordBreak: 'break-word' }}>{gpsAcao.endereco}</p>
-            <p style={{ fontSize: '10px', color: '#6B7E8A' }}>Precisão ~{Math.round(gpsAcao.precisao)}m</p>
+            <p data-precisao-gps style={{ fontSize: '10px', color: gpsAcao.precisao > 100 ? '#B83832' : '#6B7E8A' }}>{textoPrecisao(gpsAcao.precisao)}</p>
           </>
         ) : (
           <button type="button" onClick={capturarGpsAcao} style={{ fontSize: '11px', fontWeight: 700, color: '#B83832', textAlign: 'left' }}>
@@ -2025,8 +2394,10 @@ export default function EscoltaDetalhePage() {
     }
     if (!gpsCheckin) { setErro('Aguardando localização GPS. Tente novamente.'); return }
     if (!viaturaCheckinId) { setErro('Escolha a viatura deste check-in.'); return }
+    const quandoCheckin = new Date().toISOString()
     setLoading(true)
     try {
+      await iniciarGravacao()
       const fotoIds = await uploadFotosPonto(
         fotosCheckin, 'checkin', gpsCheckin.lat, gpsCheckin.lng, gpsCheckin.precisao,
       )
@@ -2034,16 +2405,25 @@ export default function EscoltaDetalhePage() {
 
       // Gravacao unica em lib/checkin.ts, a mesma do Painel Guiado. O check-in e um
       // ponto so, na viatura escolhida; antes ia sempre para viaturas[0].
-      await registrarCheckin(sb, {
+      // Onda L: pelo envelope, a mesma linha de lib/checkin.ts com o id do aparelho; a hora
+      // é a da ação (16.3.11), não a do envio.
+      const dadosCheckin = {
         escoltaVeiculoId: viaturaCheckinId,
         fotoIds,
         gps: { lat: gpsCheckin.lat, lng: gpsCheckin.lng, precisao: gpsCheckin.precisao },
         observacao: obsCheckin,
-        endereco: gpsCheckin.endereco,
+        endereco: gpsCheckin.endereco || null,
         userId: user?.id ?? null,
-      })
+        dataHora: quandoCheckin,
+      }
+      if (gravacaoRef.current) {
+        const { error: ckErr } = await inserirPontosCampo(linhaCheckin(dadosCheckin))
+        if (ckErr) throw new Error(ckErr.message)
+      } else {
+        await registrarCheckin(sb, dadosCheckin)
+      }
 
-      notificarTelegram({
+      await fecharGravacao({
         titulo: 'Check-in Periódico',
         descricao: comporObservacao(
           descricaoTelegram(obsCheckin, TEXTO_PADRAO_PONTO.checkin),
@@ -2073,6 +2453,7 @@ export default function EscoltaDetalhePage() {
     setLoading(true)
     setErro(null)
     try {
+      await iniciarGravacao()
       const pos = await obterPosicaoPonto()
 
       // A concatenacao antiga gravava o 'Obs: ' orfao quando o operador nao escrevia
@@ -2089,29 +2470,12 @@ export default function EscoltaDetalhePage() {
         tipoLabel: 'Chegada na Origem',
         observacao: observacaoOrigem,
         pos,
+        transicao: { statusNovo: 'na_origem', observacao: observacaoOrigem ?? 'Chegada na origem confirmada.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'na_origem' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
-      // Registrar Histórico
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'na_origem',
-        observacao: observacaoOrigem ?? 'Chegada na origem confirmada.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
-
-      notificarTelegram({
+      await fecharGravacao({
         titulo: 'Chegada na Origem',
         status_atual: 'Na Origem',
         fotoId: fotoPrincipal,
@@ -2139,6 +2503,7 @@ export default function EscoltaDetalhePage() {
     setLoading(true)
     setErro(null)
     try {
+      await iniciarGravacao()
       const pos = await obterPosicaoPonto()
 
       const fotoPrincipal = await gravarPontosPorViatura({
@@ -2151,29 +2516,12 @@ export default function EscoltaDetalhePage() {
         tipoLabel: 'Trânsito ao Destino',
         observacao: obsTransitoDestino,
         pos,
+        transicao: { statusNovo: 'em_transito_destino', observacao: comporObservacao(obsTransitoDestino) ?? 'Trânsito ao destino iniciado.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'em_transito_destino' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
-      // Registrar Histórico
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'em_transito_destino',
-        observacao: comporObservacao(obsTransitoDestino) ?? 'Trânsito ao destino iniciado.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
-
-      notificarTelegram({
+      await fecharGravacao({
         titulo: 'Trânsito ao Destino Iniciado',
         status_atual: 'Trânsito p/ Destino',
         fotoId: fotoPrincipal,
@@ -2200,6 +2548,7 @@ export default function EscoltaDetalhePage() {
     setLoading(true)
     setErro(null)
     try {
+      await iniciarGravacao()
       const pos = await obterPosicaoPonto()
 
       const fotoPrincipal = await gravarPontosPorViatura({
@@ -2212,29 +2561,12 @@ export default function EscoltaDetalhePage() {
         tipoLabel: 'Chegada no Destino',
         observacao: obsDestino,
         pos,
+        transicao: { statusNovo: 'no_destino', observacao: comporObservacao(obsDestino) ?? 'Chegada no destino confirmada.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'no_destino' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
-      // Registrar Histórico
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'no_destino',
-        observacao: comporObservacao(obsDestino) ?? 'Chegada no destino confirmada.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
-
-      notificarTelegram({
+      await fecharGravacao({
         titulo: 'Chegada no Destino',
         status_atual: 'No Destino',
         fotoId: fotoPrincipal,
@@ -2263,6 +2595,7 @@ export default function EscoltaDetalhePage() {
     setLoading(true)
     setErro(null)
     try {
+      await iniciarGravacao()
       const pos = await obterPosicaoPonto()
 
       const fotoPrincipal = await gravarPontosPorViatura({
@@ -2275,28 +2608,12 @@ export default function EscoltaDetalhePage() {
         tipoLabel: 'Trânsito para o Retorno',
         observacao: obsTransitoRetorno,
         pos,
+        transicao: { statusNovo: 'em_transito_retorno', observacao: comporObservacao(obsTransitoRetorno) ?? 'Trânsito de retorno iniciado.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'em_transito_retorno' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'em_transito_retorno',
-        observacao: comporObservacao(obsTransitoRetorno) ?? 'Trânsito de retorno iniciado.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
-
-      notificarTelegram({
+      await fecharGravacao({
         titulo: 'Trânsito de Retorno Iniciado',
         status_atual: 'Trânsito p/ Retorno',
         descricao: descricaoTelegram(obsTransitoRetorno, TEXTO_PADRAO_PONTO.transitoRetorno),
@@ -2322,6 +2639,7 @@ export default function EscoltaDetalhePage() {
     setLoading(true)
     setErro(null)
     try {
+      await iniciarGravacao()
       const pos = await obterPosicaoPonto()
 
       // Registrar o ponto de controle de cada viatura
@@ -2335,29 +2653,12 @@ export default function EscoltaDetalhePage() {
         tipoLabel: 'Retorno',
         observacao: obsRetorno,
         pos,
+        transicao: { statusNovo: 'retornando', observacao: comporObservacao(obsRetorno) ?? 'Retorno iniciado.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'retornando' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
-      // Registrar Histórico
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'retornando',
-        observacao: comporObservacao(obsRetorno) ?? 'Retorno iniciado.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
-
-      notificarTelegram({
+      await fecharGravacao({
         titulo: 'Retorno Iniciado',
         status_atual: 'Em Retorno',
         descricao: descricaoTelegram(obsRetorno, TEXTO_PADRAO_PONTO.retorno),
@@ -2384,11 +2685,16 @@ export default function EscoltaDetalhePage() {
 
     // Cada viatura tem o proprio hodometro: conferir o retorno contra a saida dela,
     // e nao contra a da primeira do comboio.
+    // Onda H: viatura sem KM de saída gravado na coluna (a gravação depois do ponto pode ter
+    // falhado) não é conferida contra zero em silêncio: a chegada é aceita, como antes da
+    // onda, e a tela avisa que o KM de retorno ficou sem conferência.
+    const semKmSaida: string[] = []
     for (const v of viaturas) {
       const digitado = kmChegadaBase[v.id]
       if (!digitado) continue
       const kmRetorno = Number(digitado)
-      const kmSaida = v.quilometragem_saida ?? 0
+      if (v.quilometragem_saida == null) { semKmSaida.push(rotuloViatura(v)); continue }
+      const kmSaida = v.quilometragem_saida
       if (kmRetorno < kmSaida) {
         const prefixo = viaturas.length > 1 ? `Viatura ${rotuloViatura(v)}: ` : ''
         setErro(`${prefixo}KM de chegada (${kmRetorno.toLocaleString('pt-BR')}) não pode ser menor que o KM de saída (${kmSaida.toLocaleString('pt-BR')}).`)
@@ -2399,6 +2705,7 @@ export default function EscoltaDetalhePage() {
     setLoading(true)
     setErro(null)
     try {
+      await iniciarGravacao()
       const pos = await obterPosicaoPonto()
 
       // A foto era capturada e descartada em silencio: uploadFoto nunca era chamado
@@ -2414,32 +2721,22 @@ export default function EscoltaDetalhePage() {
         observacao: obsChegadaBase,
         pos,
         km: kmChegadaBase,
+        transicao: { statusNovo: 'na_base', observacao: comporObservacao(obsChegadaBase) ?? 'Chegada na base confirmada.' },
       })
 
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({ status: 'na_base' })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) throw new Error(ERRO_SEM_TRANSICAO)
+      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
 
       // Atualizar KM de retorno de cada viatura
       await gravarKmViaturas('quilometragem_retorno', kmChegadaBase)
+      if (semKmSaida.length > 0) {
+        const msg = viaturas.length > 1
+          ? `${semKmSaida.length > 1 ? 'Viaturas' : 'Viatura'} ${semKmSaida.join(', ')} sem KM de saída gravado: o KM de chegada foi aceito sem conferência. Avise a central.`
+          : 'Viatura sem KM de saída gravado: o KM de chegada foi aceito sem conferência. Avise a central.'
+        setAvisoKm((prev) => (prev ? `${prev} ${msg}` : msg))
+      }
 
-      // Registrar Histórico
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'na_base',
-        observacao: comporObservacao(obsChegadaBase) ?? 'Chegada na base confirmada.',
-        alterado_por: user?.id ?? null,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-      })
 
-      notificarTelegram({
+      await fecharGravacao({
         titulo: 'Chegada na Base',
         status_atual: 'Na Base',
         descricao: descricaoTelegram(obsChegadaBase, TEXTO_PADRAO_PONTO.chegadaBase),
@@ -2468,10 +2765,13 @@ export default function EscoltaDetalhePage() {
         .map(e => `${e.vigilante?.nome_completo ?? '—'}${e.papel_na_escolta ? ` (${e.papel_na_escolta})` : ''}`)
 
       // Última foto de qualquer ponto de controle (mais recente)
-      const ultimaFotoUrl = [...paradas]
+      // Lote 2026-10: a URL guardada na tela pode ter vencido (validade de 1 hora);
+      // assina de novo, a partir do caminho, na hora do envio.
+      const ultimaFotoGuardada = [...paradas]
         .sort((a, b) => new Date(b.data_hora).getTime() - new Date(a.data_hora).getTime())
         .find(p => p.fotoUrls.length > 0)
         ?.fotoUrls[0] ?? null
+      const ultimaFotoUrl = ultimaFotoGuardada ? await urlAssinada(sb, ultimaFotoGuardada) : null
 
       // Duração: desde o primeiro status em_andamento
       const inicioAndamento = [...historico]
@@ -2498,7 +2798,7 @@ export default function EscoltaDetalhePage() {
 
       // Linha do tempo completa a partir da timeline
       const eventos = [...timeline]
-        .filter(t => t.tipo !== 'presenca')
+        .filter(t => t.tipo !== 'presenca' && !t.extra?.anulado)
         .sort((a, b) => new Date(a.data_hora).getTime() - new Date(b.data_hora).getTime())
         .map(t => {
           let label = ''
@@ -2601,6 +2901,8 @@ export default function EscoltaDetalhePage() {
 
   const handleFinalizacao = async () => {
     if (!escolta || viaturas.length === 0) return
+    // Onda L: a finalização exige internet e grava direto (fora do envelope).
+    gravacaoRef.current = null
 
     const fotosFaltando = FOTOS_VIATURA_DEF.filter(f => !fotosViaturaFinal[f.key])
     if (fotosFaltando.length > 0) {
@@ -2625,6 +2927,8 @@ export default function EscoltaDetalhePage() {
       setErro('O relatório diário é obrigatório para finalizar a escolta.')
       return
     }
+    // Revisão cruzada (2.1): os trechos sugeridos sozinhos não são um relatório.
+    if (faltaComplementoDaSugestao(relatorioFinal, SUGESTOES_RELATORIO_FINAL, true)) { setErro(MENSAGEM_COMPLETAR_SUGESTAO); return }
     setLoading(true)
     try {
       // Mesma regra dos outros dez caminhos: sem sinal nao bloqueia, registra a ausencia.
@@ -2689,31 +2993,22 @@ export default function EscoltaDetalhePage() {
       }
 
       // 2. Atualizar status da escolta para finalizada
-      const { data: atualizadas, error: escErr } = await sb
-        .from('escoltas')
-        .update({
-          status: 'finalizada',
-          observacao_fechamento: relatorioFinal.trim(),
-          data_finalizacao: new Date().toISOString()
-        })
-        .eq('id', escolta.id)
-        .eq('status', escolta.status)
-        .select('id')
-      if (escErr) throw new Error(escErr.message)
-      if (!atualizadas || atualizadas.length === 0) {
-        throw new Error('O status da escolta mudou em outro dispositivo ou a regra do banco recusou a finalização. Recarregue a página e repita a etapa.')
-      }
-
-      // 3. Registrar Histórico de Status
-      await sb.from('escolta_status_historico').insert({
-        escolta_id: escolta.id,
-        status_anterior: escolta.status,
-        status_novo: 'finalizada',
-        // Antes dizia "gerado pelo supervisor" mesmo quando quem finalizava era outro
-        // participante. O autor ja vai em alterado_por.
-        observacao: `Escolta finalizada. Relatório final registrado por ${user?.nome_completo ?? 'usuário do sistema'}.`,
-        alterado_por: user?.id ?? null,
+      // 2 e 3. Status, relatório final e histórico numa transação (registrar_etapa_escolta,
+      // lote 2026-10). O autor vai em alterado_por, pela sessão.
+      const { error: escErr } = await sb.rpc('registrar_etapa_escolta', {
+        p_escolta_id: escolta.id,
+        p_status_atual: escolta.status,
+        p_status_novo: 'finalizada',
+        p_observacao: `Escolta finalizada. Relatório final registrado por ${user?.nome_completo ?? 'usuário do sistema'}.`,
+        p_observacao_fechamento: relatorioFinal.trim(),
+        p_latitude: pos.latitude,
+        p_longitude: pos.longitude,
       })
+      if (escErr) {
+        throw new Error(escErr.message === 'ERRO_SEM_TRANSICAO'
+          ? 'O status da escolta mudou em outro dispositivo ou a regra do banco recusou a finalização. Recarregue a página e repita a etapa.'
+          : escErr.message)
+      }
 
       // 4. Enviar relatório executivo completo ao Telegram
       enviarRelatorioFinalTelegram()
@@ -2837,7 +3132,10 @@ export default function EscoltaDetalhePage() {
     }
     // Limpa a URL: um refresh nao pode reabrir o dialogo. Registro de etapa nao se
     // apaga, e reabrir e o primeiro passo para gravar duas vezes.
-    router.replace(`/dashboard/escoltas/${escolta.id}`)
+    // Onda L: sem rede, o roteador não busca o payload e recarregaria a página inteira
+    // (perdendo o diálogo aberto); a URL é trocada só no histórico.
+    if (aparelhoSemRede()) window.history.replaceState(null, '', `/dashboard/escoltas/${escolta.id}`)
+    else router.replace(`/dashboard/escoltas/${escolta.id}`)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, escolta, user])
 
@@ -2872,7 +3170,9 @@ export default function EscoltaDetalhePage() {
   // Acoes operacionais: quem esta no efetivo desta escolta, qualquer perfil, ou a
   // gestao. Antes o Painel de Acoes aparecia para qualquer um que abrisse a escolta,
   // com botoes que a RLS recusaria.
-  const podeOperar = podeOperarEscolta(perfil, vinculadoAEscolta)
+  // Onda I: escolta arquivada não tem ação de campo nem de status (o banco recusa): só Recuperar.
+  const arquivada = !!escolta.arquivada_em
+  const podeOperar = podeOperarEscolta(perfil, vinculadoAEscolta) && !arquivada
   const isSupervisorOrOperador = ['supervisor', 'operador'].includes(perfil)
   const isUnstarted = ['rascunho', 'agendada', 'em_pre_inicio'].includes(escolta.status)
 
@@ -2888,7 +3188,8 @@ export default function EscoltaDetalhePage() {
    * pre-inicio. `proximo` continua alimentando rotulo informativo e barra de jornada.
    */
   const proximoGenerico = proximo && !exigeDialogoDedicado(proximo.status) ? proximo : null
-  const cor = escolta.cliente?.cor_destaque ?? '#53648A'
+  // Decisão S17: sem o cliente (a RLS esconde do operador o de outra equipe), o cinza neutro.
+  const cor = escolta.cliente ? corDoCliente(escolta.cliente.cor_destaque) : COR_NEUTRA_SIGILO
   const etapaAtual = JORNADA_ETAPAS.findIndex((e) => e.statuses.includes(escolta.status))
   const totalEfetivo = viaturas.reduce((acc, v) => acc + v.efetivo.length, 0)
   const isFinalizado = ['finalizada', 'cancelada'].includes(escolta.status)
@@ -2897,7 +3198,7 @@ export default function EscoltaDetalhePage() {
 
   const TABS: { key: Tab; label: string; count?: number }[] = [
     { key: 'geral',       label: 'Visão Geral' },
-    { key: 'timeline',    label: 'Timeline',    count: timeline.length },
+    { key: 'timeline',    label: 'Timeline',    count: timeline.filter(t => !t.extra?.anulado).length },
     { key: 'efetivo',     label: 'Efetivo',     count: totalEfetivo },
     { key: 'veiculos',    label: 'Veículos',    count: viaturas.length },
     { key: 'ocorrencias', label: 'Ocorrências', count: ocorrencias.length },
@@ -2992,6 +3293,7 @@ export default function EscoltaDetalhePage() {
                   textareaClassName="input-light resize-none text-xs"
                   contextoAI="Relatório de entrega e conformidade de materiais de escolta armada"
                 />
+                <SugestoesTexto className="mt-2" titulo="Sugestões (toque para inserir e edite)" sugestoes={SUGESTOES_WIZARD.materiais} onInserir={(f) => setObsMateriais(v => juntarSugestao(v, f))} />
               </div>
 
               <div className="flex justify-end pt-3 border-t">
@@ -3000,6 +3302,7 @@ export default function EscoltaDetalhePage() {
                   onClick={() => {
                     if (!fotoMateriais) { setErro('A foto dos materiais é obrigatória.'); return }
                     if (!obsMateriais.trim()) { setErro('As observações são obrigatórias.'); return }
+                    if (faltaComplementoDaSugestao(obsMateriais, SUGESTOES_WIZARD.materiais)) { setErro(MENSAGEM_COMPLETAR_SUGESTAO); return }
                     setErro(null)
                     setWizardStep(2)
                   }}
@@ -3017,12 +3320,12 @@ export default function EscoltaDetalhePage() {
               <div>
                 <h3 className="font-bold text-xs text-[#53648A] uppercase tracking-wider">Passo 2: Checklist do Veículo (VTR)</h3>
                 <p className="text-[11px] mt-1" style={{ color: '#7A8FA6' }}>
-                  Fotografe a viatura em <strong>5 ângulos obrigatórios</strong> e marque todos os itens do checklist. A viatura só é liberada para saída após a conclusão completa deste passo.
+                  Fotografe a viatura em <strong>5 ângulos obrigatórios</strong>, marque todos os itens do checklist e informe, <strong>para cada viatura</strong>, o KM inicial e a foto do painel com o hodômetro. A viatura só é liberada para saída após a conclusão completa deste passo.
                 </p>
                 {/* Lacuna declarada: o checklist de partida ainda cobre so a primeira viatura. */}
                 {viaturas.length > 1 && (
                   <p className="text-[11px] mt-2 p-2" style={{ color: '#8B6914', backgroundColor: '#FBF3DE', border: '1px solid rgba(139,105,20,0.25)' }}>
-                    Esta escolta tem {viaturas.length} viaturas. Este checklist registra apenas a viatura {rotuloViatura(viaturas[0])}. O ponto de controle de saída e o KM, no Passo 3, são registrados para cada viatura.
+                    Esta escolta tem {viaturas.length} viaturas. As 5 fotos de ângulo e o checklist de condições registram apenas a viatura {rotuloViatura(viaturas[0])}. O KM inicial e a foto do painel, no bloco Por viatura abaixo, são de cada viatura.
                   </p>
                 )}
               </div>
@@ -3049,6 +3352,7 @@ export default function EscoltaDetalhePage() {
                         </div>
                         <CameraInput
                           prefixoNome={`vtr_${def.key}`}
+                          iniciais={fotosViatura[def.key] ? [fotosViatura[def.key] as File] : undefined}
                           onChange={(fs) => setFotosViatura(prev => ({ ...prev, [def.key]: fs[0] ?? null }))}
                         />
                       </div>
@@ -3104,6 +3408,74 @@ export default function EscoltaDetalhePage() {
                   textareaClassName="input-light resize-none text-xs"
                   contextoAI="Inspeção de viatura para escolta armada"
                 />
+                <SugestoesTexto className="mt-2" titulo="Sugestões (toque para inserir e edite)" sugestoes={SUGESTOES_WIZARD.viatura} onInserir={(f) => setObsViatura(v => juntarSugestao(v, f))} />
+              </div>
+
+              {/* Onda H (lote 2026-10): KM inicial e foto do painel, um cartão por viatura. */}
+              <div>
+                <div className="flex items-center gap-2 mb-3 pb-2" style={{ borderBottom: '1px solid #EEF1F7' }}>
+                  <div style={{ width: '3px', height: '14px', backgroundColor: '#1A294A' }} />
+                  <span className="text-[10px] font-black uppercase tracking-widest" style={{ color: '#1A294A' }}>Por viatura: KM inicial e foto do painel</span>
+                </div>
+                {viaturas.length === 0 && (
+                  <div className="p-3" style={{ border: '1.5px solid rgba(184,56,50,0.35)', backgroundColor: 'rgba(184,56,50,0.05)' }}>
+                    <div className="flex items-start gap-2">
+                      <AlertCircle size={14} style={{ color: '#B83832', flexShrink: 0, marginTop: 1 }} />
+                      <p className="text-[11px] leading-relaxed" style={{ color: '#B83832' }}>{ERRO_SEM_VIATURA_WIZARD}</p>
+                    </div>
+                  </div>
+                )}
+                <div className="space-y-3">
+                  {viaturas.map((v) => {
+                    const kmOk = Number(kmPartida[v.id]) > 0
+                    const fotoOk = (fotosPartida[v.id]?.length ?? 0) >= FOTOS_POR_PONTO.min
+                    const ok = kmOk && fotoOk
+                    return (
+                      <div key={v.id} data-viatura-passo2={rotuloViatura(v)} style={{ border: `1.5px solid ${ok ? '#1E7C52' : '#D6DAE5'}`, padding: '12px', backgroundColor: ok ? 'rgba(30,124,82,0.04)' : '#F8FAFC' }}>
+                        <div className="flex items-center gap-2 mb-2">
+                          {ok
+                            ? <CheckCircle2 size={13} style={{ color: '#1E7C52', flexShrink: 0 }} />
+                            : <Truck size={13} style={{ color: '#B83832', flexShrink: 0 }} />
+                          }
+                          <span className="text-[11px] font-black uppercase tracking-wide" style={{ color: ok ? '#1E7C52' : '#B83832' }}>
+                            {rotuloViatura(v)}{v.veiculo?.modelo ? ` · ${v.veiculo.modelo}` : ''}
+                          </span>
+                        </div>
+                        <div className="space-y-3">
+                          <KmViaturasInput
+                            viaturas={[v]}
+                            valor={kmPartida}
+                            label="KM inicial *"
+                            placeholder="Ex: 104500"
+                            className="input-light text-xs w-full"
+                            labelClassName="block text-xs font-bold mb-1.5 text-[#5A6A80] uppercase tracking-wide"
+                            onChange={(viaturaId, km) => setKmPartida((prev) => ({ ...prev, [viaturaId]: km }))}
+                          />
+                          <div>
+                            <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 mb-1.5">
+                              <label className="block text-xs font-bold text-[#5A6A80] uppercase tracking-wide">
+                                Foto do painel com o hodômetro * (use a câmera)
+                              </label>
+                              <span data-estado-foto-painel className="text-[10px] font-black uppercase tracking-wide px-1.5 py-0.5"
+                                style={{ color: fotoOk ? '#1E7C52' : '#B83832', backgroundColor: fotoOk ? 'rgba(30,124,82,0.08)' : 'rgba(184,56,50,0.06)' }}>
+                                {fotoOk ? 'Registrada' : 'Pendente'}
+                              </span>
+                            </div>
+                            {/* Uma foto por viatura: vai no ponto de saída daquela viatura, no Passo 3. */}
+                            <FotosViaturasInput
+                              viaturas={[v]}
+                              valor={fotosPartida}
+                              prefixoNome="wizard_partida"
+                              max={1}
+                              manterRegistradas
+                              onChange={(viaturaId, fs) => setFotosPartida((prev) => ({ ...prev, [viaturaId]: fs }))}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
 
               <div className="flex flex-col-reverse sm:flex-row justify-between gap-2 pt-3 border-t">
@@ -3116,6 +3488,9 @@ export default function EscoltaDetalhePage() {
                     const faltando = FOTOS_VIATURA_DEF.filter(f => !fotosViatura[f.key])
                     if (faltando.length > 0) { setErro(`Fotos obrigatórias: ${faltando.map(f => f.label).join(', ')}.`); return }
                     if (!obsViatura.trim()) { setErro('As observações são obrigatórias.'); return }
+                    if (faltaComplementoDaSugestao(obsViatura, SUGESTOES_WIZARD.viatura)) { setErro(MENSAGEM_COMPLETAR_SUGESTAO); return }
+                    const faltaPorViatura = erroPorViaturaPasso2()
+                    if (faltaPorViatura) { setErro(faltaPorViatura); return }
                     setErro(null)
                     setWizardStep(3)
                   }}
@@ -3132,28 +3507,18 @@ export default function EscoltaDetalhePage() {
             <div className="space-y-4">
               <h3 className="font-bold text-xs text-[#53648A] uppercase tracking-wider">Passo 3: Registro de Partida (Saída da Base)</h3>
               
-              <KmViaturasInput
-                viaturas={viaturas}
-                valor={kmPartida}
-                label="Quilometragem Inicial (KM) da Viatura *"
-                placeholder="Ex: 104500"
-                className="input-light text-xs w-full"
-                labelClassName="block text-xs font-bold mb-1.5 text-[#5A6A80] uppercase tracking-wide"
-                onChange={(viaturaId, km) => setKmPartida((prev) => ({ ...prev, [viaturaId]: km }))}
-              />
-
-              <div>
-                <label className="block text-xs font-bold mb-1.5 text-[#5A6A80] uppercase tracking-wide">
-                  Foto do Hodômetro / Painel * (Use a Câmera)
-                </label>
-                {/* Uma foto de hodometro por viatura: cada uma sai da base com o proprio KM. */}
-                <FotosViaturasInput
-                  viaturas={viaturas}
-                  valor={fotosPartida}
-                  prefixoNome="wizard_partida"
-                  max={1}
-                  onChange={(viaturaId, fs) => setFotosPartida((prev) => ({ ...prev, [viaturaId]: fs }))}
-                />
+              {/* Onda H: KM e foto do painel vêm do Passo 2; aqui só a conferência. */}
+              <div data-resumo-km-partida className="p-3" style={{ border: '1px solid #D6DAE5', backgroundColor: '#F8FAFC' }}>
+                <p className="text-[10px] font-black uppercase tracking-widest mb-1.5" style={{ color: '#1A294A' }}>KM inicial e foto do painel informados no Passo 2</p>
+                <ul className="space-y-2">
+                  {viaturas.map((v) => (
+                    <li key={v.id} data-resumo-viatura={rotuloViatura(v)} className="flex items-center gap-3 text-xs" style={{ color: '#0E1A33' }}>
+                      <MiniaturaArquivo arquivo={fotosPartida[v.id]?.[0]} rotulo={`Foto do painel de ${rotuloViatura(v)}`} />
+                      <span>{rotuloViatura(v)}: <strong>{Number(kmPartida[v.id] || 0).toLocaleString('pt-BR')} km</strong></span>
+                    </li>
+                  ))}
+                </ul>
+                <p className="text-[10px] mt-2" style={{ color: '#5A6A80' }}>Para corrigir o KM ou trocar a foto, use Voltar.</p>
               </div>
 
               <div>
@@ -3168,10 +3533,11 @@ export default function EscoltaDetalhePage() {
                   textareaClassName="input-light resize-none text-xs"
                   contextoAI="Observações gerais de saída para escolta armada"
                 />
+                <SugestoesTexto className="mt-2" titulo="Sugestões (toque para inserir e edite)" sugestoes={SUGESTOES_WIZARD.partida} onInserir={(f) => setObsPartida(v => juntarSugestao(v, f))} />
               </div>
 
               <div className="flex flex-col-reverse sm:flex-row justify-between gap-2 pt-3 border-t">
-                <button type="button" onClick={() => setWizardStep(2)} className="btn-outline px-5 w-full sm:w-auto">
+                <button type="button" onClick={() => { setErro(null); setWizardStep(2) }} className="btn-outline px-5 w-full sm:w-auto">
                   Voltar
                 </button>
                 <button
@@ -3193,9 +3559,25 @@ export default function EscoltaDetalhePage() {
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-5">
+      <AcoesGestao escolta={escolta} perfil={perfil} onAlterado={carregar} />
+
+      {/* Onda L: registro guardado no aparelho, ou não aceito (conflito ou recusado). */}
+      {avisoOffline && (
+        <div data-teste="aviso-offline" className="flex items-start gap-2 p-3"
+          style={avisoOffline.tipo === 'guardado'
+            ? { backgroundColor: '#FEF6E7', border: '1.5px solid #E9C46A' }
+            : { backgroundColor: '#FDECEC', border: '1.5px solid #E8A3A0' }}>
+          <AlertTriangle size={14} style={{ color: avisoOffline.tipo === 'guardado' ? '#A07212' : '#B83832', flexShrink: 0, marginTop: 1 }} />
+          <p className="flex-1 text-xs font-semibold" style={{ color: avisoOffline.tipo === 'guardado' ? '#7A5A0E' : '#8A2420' }}>{avisoOffline.texto}</p>
+          <button type="button" onClick={() => setAvisoOffline(null)}
+            style={{ fontSize: '10px', fontWeight: 900, color: '#A07212', textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+            Ciente
+          </button>
+        </div>
+      )}
 
       {/* ── Retorno ao Painel Operacional Guiado ── */}
-      {(voltaCampo || (modoGuiado && vinculadoAEscolta)) && (
+      {(voltaCampo || (modoGuiado && (vinculadoAEscolta || temPermissao(perfil, PODE_PODER_TOTAL)))) && (
         <button
           type="button"
           onClick={() => router.push('/dashboard/campo')}
@@ -3207,7 +3589,7 @@ export default function EscoltaDetalhePage() {
       )}
 
       {/* ── Painel de Designação de Responsabilidade ── */}
-      {['rascunho', 'agendada'].includes(escolta.status) && (
+      {['rascunho', 'agendada'].includes(escolta.status) && !arquivada && (
         <div className="card-light p-5 space-y-4 border-l-4 border-amber-500">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
@@ -3253,6 +3635,8 @@ export default function EscoltaDetalhePage() {
                       {escolta.checklist_pendente_no_inicio && (
                         <span className="badge-warning">Checklist pendente</span>
                       )}
+                      <PendenciasConclusao escoltaId={escolta.id} modo="faixa" chave={escolta.status} />
+                      {escolta.interestadual === true && <span className="badge-warning" data-teste="etiqueta-interestadual">{textoInterestadual(escolta)}</span>}
                     </div>
                     {escolta.cliente && (
                       <p className="text-sm mt-0.5" style={{ color: '#6B7E8A' }}>
@@ -3276,7 +3660,7 @@ export default function EscoltaDetalhePage() {
                   >
                     <FileDown size={13} /> PDF
                   </button>
-                  {PODE_CANCELAR.includes(perfil) && !isFinalizado && (
+                  {PODE_CANCELAR.includes(perfil) && !isFinalizado && !arquivada && (
                     <button
                       onClick={() => { setErro(null); setDialogCancelar(true) }}
                       className="bg-[#FAEAE9] hover:bg-[#F5D5D3] text-[#B83832] border border-[#EAB5B0] font-black text-[10px] uppercase tracking-widest px-4 py-2 flex items-center justify-center gap-1.5 transition-all active:scale-95"
@@ -3470,7 +3854,10 @@ export default function EscoltaDetalhePage() {
                     {escolta.periodicidade_checkin_min ? `A cada ${escolta.periodicidade_checkin_min} min` : 'Desativado'}
                   </span>
                   {/* Periodicidade e planejamento: so a gestao altera (PODE_ALTERAR_PERIODICIDADE). */}
-                  {PODE_ALTERAR_PERIODICIDADE.includes(perfil) && (
+                  {/* Lote 2026-10 (M4): check-in desligado por padrão; "Alterar" só aparece se a
+                      escolta já tem periodicidade ou se o cliente foi religado (metadados). */}
+                  {PODE_ALTERAR_PERIODICIDADE.includes(perfil) && !arquivada
+                    && (escolta.periodicidade_checkin_min != null || periodicidadePadraoDoCliente(escolta.cliente?.metadados) != null) && (
                     <button onClick={() => { setPeriodicidadeEdit(escolta.periodicidade_checkin_min ? String(escolta.periodicidade_checkin_min) : ''); setEditandoPeriodicidade(true) }}
                       style={{ fontSize: '10px', color: '#1E7C52', textDecoration: 'underline' }}>
                       Alterar
@@ -3766,6 +4153,7 @@ export default function EscoltaDetalhePage() {
             </div>
           </div>
 
+          <PendenciasConclusao escoltaId={escolta.id} modo="secao" chave={escolta.status} />
           {historico.length > 0 && (
             <div className="card-light p-5">
               <h3 className="text-[10px] font-black uppercase tracking-widest mb-3" style={{ color: '#5A6A80' }}>Histórico de Status</h3>
@@ -3900,9 +4288,12 @@ export default function EscoltaDetalhePage() {
                                       </span>
                                     )}
                                   </div>
-                                  <h4 style={{ fontSize: '13px', fontWeight: 800, color: '#0E1A33', margin: 0, letterSpacing: '0.01em', lineHeight: 1.3 }}>
+                                  <h4 style={{ fontSize: '13px', fontWeight: 800, color: '#0E1A33', margin: 0, letterSpacing: '0.01em', lineHeight: 1.3, textDecoration: item.extra?.anulado ? 'line-through' : undefined, opacity: item.extra?.anulado ? 0.6 : undefined }}>
                                     {item.titulo}
                                   </h4>
+                                  {typeof item.extra?.anulado === 'string' && (
+                                    <p data-teste="anulado" style={{ fontSize: '11px', fontWeight: 700, color: '#B83832', margin: '3px 0 0' }}>{String(item.extra.anulado)}</p>
+                                  )}
                                   {item.descricao && (
                                     <p style={{ fontSize: '12px', color: '#5A6A80', margin: '3px 0 0', lineHeight: 1.4 }}>{item.descricao}</p>
                                   )}
@@ -4087,13 +4478,14 @@ export default function EscoltaDetalhePage() {
                     {v.quilometragem_retorno != null ? `${v.quilometragem_retorno.toLocaleString('pt-BR')} km` : '—'}
                   </p>
                 </div>
-                {v.abastecimento_litros != null && (
+                {/* Lote 2026-10 (M3): combustível é dado financeiro; só quem vê o Financeiro. */}
+                {verFinanceiroDet && v.abastecimento_litros != null && (
                   <div>
                     <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#A8B8C2' }}>Abastecimento</p>
                     <p className="text-sm font-medium mt-0.5" style={{ color: '#1E2D35' }}>{v.abastecimento_litros} L</p>
                   </div>
                 )}
-                {v.abastecimento_valor != null && (
+                {verFinanceiroDet && v.abastecimento_valor != null && (
                   <div>
                     <p className="text-[10px] font-semibold uppercase tracking-wider" style={{ color: '#A8B8C2' }}>Combustível</p>
                     <p className="text-sm font-medium mt-0.5" style={{ color: '#1E2D35' }}>
@@ -4161,6 +4553,11 @@ export default function EscoltaDetalhePage() {
                 </div>
               ))}
             </div>
+
+            {/* Lote 2026-10 (M3): lançamento do combustível por viatura. */}
+            <CombustivelViaturas
+              viaturas={viaturas.map(v => ({ id: v.id, rotulo: rotuloViatura(v), litros: v.abastecimento_litros, valor: v.abastecimento_valor }))}
+              onSalvo={() => carregar()} />
 
             {/* Breakdown */}
             <div className="card-light overflow-hidden">
@@ -4365,6 +4762,7 @@ export default function EscoltaDetalhePage() {
                 {item.coordenadas && (
                   <div>
                     <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#A8B8C2', marginBottom: '6px' }}>Localização GPS</p>
+                    {item.rotulo && <p style={{ fontSize: '12px', color: '#0E1A33', marginBottom: '6px' }}>{item.rotulo}</p>}
                     <a href={`https://www.google.com/maps/search/?api=1&query=${item.coordenadas.lat},${item.coordenadas.lng}`}
                       target="_blank" rel="noopener noreferrer"
                       className="flex items-center gap-2 h-9 px-4 text-white font-black text-[10px] uppercase tracking-widest w-fit"
@@ -4620,6 +5018,7 @@ export default function EscoltaDetalhePage() {
                       textareaClassName="input-light resize-none"
                       contextoAI="Motivo de cancelamento de escolta armada"
                     />
+                    <SugestoesTexto className="mt-2" titulo="Sugestões (toque para inserir e edite)" sugestoes={SUGESTOES_CANCELAMENTO} onInserir={(f) => setMotivoCancelamento(v => juntarSugestao(v, f))} />
                   </div>
                 </>
               )}
@@ -4664,6 +5063,7 @@ export default function EscoltaDetalhePage() {
                       textareaClassName="input-light resize-none"
                       contextoAI="Motivo de reagendamento de escolta armada"
                     />
+                    <SugestoesTexto className="mt-2" titulo="Sugestões (toque para inserir e edite)" sugestoes={SUGESTOES_REAGENDAMENTO} onInserir={(f) => setMotivoReagendamento(v => juntarSugestao(v, f))} />
                   </div>
                 </>
               )}
@@ -4800,7 +5200,7 @@ export default function EscoltaDetalhePage() {
                       <>
                         <p style={{ fontSize: '11px', fontWeight: 600, color: '#0E1A33', marginTop: '2px', lineHeight: 1.4 }}>{gpsCheckin.endereco}</p>
                         <p style={{ fontSize: '9px', color: '#A8B8C2', marginTop: '2px' }}>
-                          {gpsCheckin.lat.toFixed(6)}, {gpsCheckin.lng.toFixed(6)} · ±{gpsCheckin.precisao.toFixed(0)}m
+                          {gpsCheckin.lat.toFixed(6)}, {gpsCheckin.lng.toFixed(6)} · {textoPrecisao(gpsCheckin.precisao)}
                         </p>
                       </>
                     )}
@@ -4907,7 +5307,7 @@ export default function EscoltaDetalhePage() {
                       <div>
                         <p style={{ fontSize: '11px', fontWeight: 600, color: '#0E1A33', marginTop: '2px', lineHeight: 1.4 }}>{gpsParada.endereco}</p>
                         <p style={{ fontSize: '10px', color: '#A8B8C2', fontFamily: 'monospace', marginTop: '2px' }}>
-                          {gpsParada.lat.toFixed(6)}, {gpsParada.lng.toFixed(6)} · ±{gpsParada.precisao.toFixed(0)}m
+                          {gpsParada.lat.toFixed(6)}, {gpsParada.lng.toFixed(6)} · {textoPrecisao(gpsParada.precisao)}
                         </p>
                       </div>
                     )}
@@ -4940,17 +5340,7 @@ export default function EscoltaDetalhePage() {
 
               <div>
                 <label className="block text-xs font-semibold mb-1.5 text-[#5A6A80]">Justificativa da Parada *</label>
-                {/* Sugestao por clique, nunca valor inicial: aqui a unica barreira e o campo nao estar vazio. */}
-                {SUGESTAO_PARADA[tipoParada] && (
-                  <button
-                    type="button"
-                    onClick={() => setObsParada(SUGESTAO_PARADA[tipoParada])}
-                    className="text-left w-full mb-1.5 px-2.5 py-1.5"
-                    style={{ fontSize: '11px', color: '#53648A', backgroundColor: '#F5F7FA', border: '1px dashed #D6DAE5' }}
-                  >
-                    Usar sugestão: {SUGESTAO_PARADA[tipoParada]}
-                  </button>
-                )}
+                {/* Onda M (D9): sugestões por toque logo abaixo do campo; nunca valor inicial. */}
                 <TextAreaWithTools
                   value={obsParada}
                   onChange={(v) => setObsParada(v)}
@@ -4959,6 +5349,7 @@ export default function EscoltaDetalhePage() {
                   textareaClassName="input-light resize-none"
                   contextoAI="Justificativa de parada em escolta armada"
                 />
+                <SugestoesTexto className="mt-2" titulo="Sugestões (toque para inserir e edite)" sugestoes={[SUGESTAO_PARADA[tipoParada], ...SUGESTOES_PARADA].filter(Boolean)} onInserir={(f) => setObsParada(v => juntarSugestao(v, f))} />
               </div>
             </div>
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
@@ -5453,6 +5844,7 @@ export default function EscoltaDetalhePage() {
                   textareaClassName="input-light resize-none"
                   contextoAI="Relatório diário da operação de escolta armada"
                 />
+                <SugestoesTexto className="mt-2" titulo="Trechos sugeridos (toque para inserir e complete com o que aconteceu)" sugestoes={SUGESTOES_RELATORIO_FINAL} onInserir={(f) => setRelatorioFinal(v => juntarSugestao(v, f))} />
               </div>
             </div>
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>

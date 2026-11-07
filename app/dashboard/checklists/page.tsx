@@ -71,10 +71,13 @@ export default function ChecklistsPage() {
       .select(`
         id, concluido, data_conclusao, criado_em,
         modelo:checklist_modelos(nome, tipo),
-        escolta_veiculo:escolta_veiculos(
-          escolta:escoltas(codigo_escolta)
+        escolta_veiculo:escolta_veiculos!inner(
+          escolta:escoltas!inner(codigo_escolta, arquivada_em)
         )
       `)
+      // Onda I: checklist anulado e de escolta arquivada fora da lista.
+      .is('anulado_em', null)
+      .is('escolta_veiculo.escolta.arquivada_em', null)
       .order('criado_em', { ascending: false })
       .limit(50)
     setChecklists((data ?? []) as ChecklistRow[])

@@ -34,10 +34,12 @@ export const STATUS_COM_CHECKIN: string[] = [
 interface PontoLido {
   data_hora: string
   observacoes: string | null
+  /** Onda I: ponto anulado pela gestão (voltar etapa, zerar) não conta. */
+  anulado_em?: string | null
 }
 
 export function ehPontoCheckin(p: PontoLido): boolean {
-  return lerObservacao(p.observacoes).tipo === TIPO_CHECKIN
+  return !p.anulado_em && lerObservacao(p.observacoes).tipo === TIPO_CHECKIN
 }
 
 /** Horario do check-in mais recente entre os pontos informados, ou null. */
@@ -47,8 +49,8 @@ export function ultimoCheckinEm(pontos: PontoLido[]): string | null {
 }
 
 /** Horario do primeiro ponto de controle da escolta, que marca a saida para a rua. */
-export function inicioOperacaoEm(pontos: { data_hora: string }[]): string | null {
-  const datas = pontos.map((p) => p.data_hora).sort()
+export function inicioOperacaoEm(pontos: { data_hora: string; anulado_em?: string | null }[]): string | null {
+  const datas = pontos.filter((p) => !p.anulado_em).map((p) => p.data_hora).sort()
   return datas.length ? datas[0] : null
 }
 
@@ -85,43 +87,67 @@ export function minutosAteCheckin(params: {
  * Le as linhas afetadas, porque insert negado pela RLS pode voltar sem erro e sem
  * linha.
  */
+export interface DadosCheckin {
+  escoltaVeiculoId: string
+  fotoIds: string[]
+  gps: { lat: number; lng: number; precisao: number }
+  observacao: string | null
+  endereco?: string | null
+  userId: string | null
+  /**
+   * Lote 2026-10 (onda L, 16.3.11): hora da ação (o toque de confirmar). Antes o ponto levava
+   * a hora do envio, depois do upload das fotos.
+   */
+  dataHora?: string
+}
+
+/** A linha do check-in em pontos_controle (a mesma do insert direto e do envelope da onda L). */
+export function linhaCheckin(dados: DadosCheckin): Record<string, unknown> {
+  return {
+    escolta_veiculo_id: dados.escoltaVeiculoId,
+    tipo_ponto_id: TIPO_PONTO_PARADA_ID,
+    data_hora: dados.dataHora ?? new Date().toISOString(),
+    latitude: dados.gps.lat,
+    longitude: dados.gps.lng,
+    precisao_metros: dados.gps.precisao,
+    sem_sinal_gps: false,
+    foto_id: dados.fotoIds[0] ?? null,
+    lancado_por: dados.userId,
+    observacoes: serializarObservacao({
+      tipo: TIPO_CHECKIN,
+      tipoLabel: ROTULO_CHECKIN,
+      observacao: dados.observacao,
+      fotoIds: dados.fotoIds,
+      endereco: dados.endereco ?? null,
+    }),
+    sincronizado: true,
+  }
+}
+
 export async function registrarCheckin(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   sb: any,
-  dados: {
-    escoltaVeiculoId: string
-    fotoIds: string[]
-    gps: { lat: number; lng: number; precisao: number }
-    observacao: string | null
-    endereco?: string | null
-    userId: string | null
-  },
+  dados: DadosCheckin,
 ): Promise<string> {
   const { data, error } = await sb
     .from('pontos_controle')
-    .insert({
-      escolta_veiculo_id: dados.escoltaVeiculoId,
-      tipo_ponto_id: TIPO_PONTO_PARADA_ID,
-      data_hora: new Date().toISOString(),
-      latitude: dados.gps.lat,
-      longitude: dados.gps.lng,
-      precisao_metros: dados.gps.precisao,
-      sem_sinal_gps: false,
-      foto_id: dados.fotoIds[0] ?? null,
-      lancado_por: dados.userId,
-      observacoes: serializarObservacao({
-        tipo: TIPO_CHECKIN,
-        tipoLabel: ROTULO_CHECKIN,
-        observacao: dados.observacao,
-        fotoIds: dados.fotoIds,
-        endereco: dados.endereco ?? null,
-      }),
-      sincronizado: true,
-    })
+    .insert(linhaCheckin(dados))
     .select('id')
   if (error) throw new Error(error.message)
   if (!data || data.length === 0) {
     throw new Error('O check-in não foi aceito pelo sistema. Confira se você está vinculado a esta escolta.')
   }
   return data[0].id as string
+}
+
+/**
+ * Lote 2026-10 (M4, decisão 3): o check-in periódico fica desligado por padrão e o
+ * campo some do formulário. Para religar para um cliente, sem migration, basta gravar
+ * `checkin_periodico_min` (minutos) em `clientes.metadados`: o formulário volta a
+ * mostrar o campo para esse cliente, já preenchido com esse valor.
+ */
+export function periodicidadePadraoDoCliente(metadados: unknown): number | null {
+  if (!metadados || typeof metadados !== 'object') return null
+  const v = Number((metadados as Record<string, unknown>).checkin_periodico_min)
+  return Number.isFinite(v) && v > 0 ? Math.round(v) : null
 }
