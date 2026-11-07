@@ -181,6 +181,13 @@ export async function registrarCampo(ctx: ContextoRegistro, e: EntradaRegistroCa
 
   // Sem IndexedDB (navegador sem armazenamento): só dá para mandar direto, com sinal.
   if (!filaDisponivel()) {
+    // Onda M (revisão adversarial da onda L, achado 4): as fotos sobem ANTES do envelope, como
+    // no caminho da fila. Se uma foto falhar, nada é aplicado no banco (o objeto já enviado fica
+    // no bucket com caminho determinístico e é reaproveitado se o operador tentar de novo).
+    for (const f of e.fotos ?? []) {
+      const up = await ctx.supabase.storage.from('fotos').upload(f.caminho, f.blob, { upsert: false, contentType: f.tipoMime })
+      if (up.error && !/already exists|duplicate/i.test(up.error.message)) throw new Error(`Falha ao enviar a foto: ${up.error.message}`)
+    }
     const r = await ctx.supabase.rpc('registrar_campo', {
       p_client_id: clientId, p_tipo: e.tipo, p_payload: payload, p_versao_gestao: e.versaoGestao,
       p_data_hora_acao: e.dataHoraAcao ?? agora, p_relogio: relogio,
@@ -188,10 +195,6 @@ export async function registrarCampo(ctx: ContextoRegistro, e: EntradaRegistroCa
     if (r.error) {
       if (classificarErro(r.error, r.status) === 'recusado') return { modo: 'recusado', clientId, erro: r.error.message }
       throw new Error(`Não foi possível registrar: ${r.error.message}`)
-    }
-    for (const f of e.fotos ?? []) {
-      const up = await ctx.supabase.storage.from('fotos').upload(f.caminho, f.blob, { upsert: false, contentType: f.tipoMime })
-      if (up.error && !/already exists|duplicate/i.test(up.error.message)) throw new Error(`Falha ao enviar a foto: ${up.error.message}`)
     }
     const d = (r.data ?? {}) as Record<string, unknown>
     return { modo: 'enviado', clientId, resultado: d.resultado === 'aplicado' ? 'aplicado' : 'conflito',

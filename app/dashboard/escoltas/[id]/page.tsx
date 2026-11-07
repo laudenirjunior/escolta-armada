@@ -430,6 +430,10 @@ function CameraInput({
   }
 
   useEffect(() => () => { stream?.getTracks().forEach(t => t.stop()) }, [stream])
+  // Onda M (revisão da onda L, achado 6): miniaturas liberadas quando o componente sai da tela.
+  const fotosRef = useRef(fotos)
+  fotosRef.current = fotos
+  useEffect(() => () => { fotosRef.current.forEach(f => URL.revokeObjectURL(f.url)) }, [])
 
   const cols = Math.min(fotos.length + (fotos.length < max ? 1 : 0), 4)
 
@@ -889,6 +893,7 @@ export default function EscoltaDetalhePage() {
   const carregouSemDonoRef = useRef(false)
   const semDadosRef = useRef(false)
   const urlsLocaisRef = useRef<string[]>([])
+  useEffect(() => () => { for (const u of urlsLocaisRef.current) URL.revokeObjectURL(u); urlsLocaisRef.current = [] }, [])
 
   const carregar = useCallback(async () => {
     setLoading(true)
@@ -1104,8 +1109,11 @@ export default function EscoltaDetalhePage() {
     } else {
       Object.assign(urlsFotos, await urlsAssinadas(sb, caminhosDaTela))
     }
+    // Onda M (revisão da onda L, achado 6): as URLs locais antigas são liberadas em toda carga,
+    // inclusive quando a fila esvaziou (antes ficavam presas na memória da aba).
+    for (const u of urlsLocaisRef.current) URL.revokeObjectURL(u)
+    urlsLocaisRef.current = []
     if (pendentes.length > 0) {
-      for (const u of urlsLocaisRef.current) URL.revokeObjectURL(u)
       const locais = await urlsDosPendentes(pendentes)
       urlsLocaisRef.current = Object.values(locais)
       Object.assign(urlsFotos, locais)
