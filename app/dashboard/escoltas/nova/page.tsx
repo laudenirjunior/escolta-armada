@@ -42,7 +42,11 @@ interface ClienteOpt    { id: string; nome_cliente: string; cor_destaque: string
 interface VeiculoOpt    { id: string; placa: string; modelo: string | null; tipo: { nome: string } | null }
 interface VigilanteOpt  { id: string; nome_completo: string; funcao: { nome: string } | null; valor_padrao_pago: number | null; usuario_id: string | null; usuario: { status: string } | null }
 
-interface MembroForm    { uid: string; vigilante_id: string; papel_na_escolta: 'comandante' | 'operador'; valor_pago: string }
+interface MembroForm    {
+  uid: string; vigilante_id: string; papel_na_escolta: 'comandante' | 'operador'; valor_pago: string
+  /** Onda O (M6): membro acrescentado nesta tela (criação ou edição), que recebe a diária do cadastro. */
+  novo?: boolean
+}
 
 const PERFIS_FINANCEIRO = ['administrador', 'gestor', 'supervisor']
 // Onda I: escolta_veiculo_id da linha gravada; a edição grava por diferença (editar_escolta).
@@ -76,7 +80,7 @@ interface DadosBasicos  {
 const sb = createClient() as any
 const uid = () => Math.random().toString(36).slice(2)
 const novaViatura = (): ViaturaForm => ({ uid: uid(), veiculo_id: '', membros: [] })
-const novoMembro  = (): MembroForm  => ({ uid: uid(), vigilante_id: '', papel_na_escolta: 'operador', valor_pago: '' })
+const novoMembro  = (): MembroForm  => ({ uid: uid(), vigilante_id: '', papel_na_escolta: 'operador', valor_pago: '', novo: true })
 const HORAS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'))
 const MINS  = ['00','05','10','15','20','25','30','35','40','45','50','55']
 const STEPS = ['Dados da Escolta', 'Efetivo e Veículos', 'Revisar e Confirmar']
@@ -929,6 +933,26 @@ function FormularioEscolta() {
       v.uid === vid ? { ...v, membros: comComandante(v.membros.filter(m => m.uid !== mid)) } : v
     ))
 
+  // Onda O (M6): a diária do cadastro entra no membro novo também na edição, mesmo quando a
+  // lista de vigilantes ou o perfil chegam depois da escolha (na edição vinha 0). Membro que
+  // já estava gravado fica com o valor que tinha.
+  useEffect(() => {
+    if (!verFinanceiro || vigilantes.length === 0) return
+    setViaturas(vs => {
+      let mudou = false
+      const novas = vs.map(v => ({
+        ...v,
+        membros: v.membros.map(m => {
+          if (!m.novo || !m.vigilante_id || m.valor_pago !== '') return m
+          const vig = vigilantes.find(x => x.id === m.vigilante_id)
+          if (vig?.valor_padrao_pago == null) return m
+          mudou = true
+          return { ...m, valor_pago: vig.valor_padrao_pago.toString() }
+        }),
+      }))
+      return mudou ? novas : vs
+    })
+  }, [verFinanceiro, vigilantes, viaturas])
 
   const cliente = clientes.find(c => c.id === dados.cliente_id)
   const dtLabel = dados.data_prevista
