@@ -19,7 +19,8 @@ import { STATUS } from './fluxo-escolta'
 /** O check-in grava no tipo de ponto PARADA, marcado como reporte periodico. */
 export const TIPO_PONTO_PARADA_ID = 'e1601f15-5ef9-44e8-abd0-17f65b3aa760'
 export const TIPO_CHECKIN = 'reporte_periodico'
-export const ROTULO_CHECKIN = 'Reporte Periódico'
+// Onda O (M2): o nome que o operador vê é Check-in (antes "Reporte Periódico").
+export const ROTULO_CHECKIN = 'Check-in'
 
 /** Etapas em que a escolta esta na rua e o check-in periodico vale. */
 export const STATUS_COM_CHECKIN: string[] = [

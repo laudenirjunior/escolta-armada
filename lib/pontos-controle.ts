@@ -91,7 +91,11 @@ export function lerObservacao(bruto: string | null | undefined): ObservacaoPonto
     if (!obj || typeof obj !== 'object') return { ...vazio, observacao: texto }
     return {
       tipo: obj.tipo ?? null,
-      tipoLabel: obj.tipoLabel ?? null,
+      // Onda O (M2): o check-in gravado antes com o rótulo "Reporte Periódico" aparece como
+      // "Check-in" em todas as telas e no relatório (o JSON gravado não muda).
+      tipoLabel: obj.tipo === 'reporte_periodico' && typeof obj.tipoLabel === 'string'
+        ? obj.tipoLabel.replace(/^Reporte Peri[oó]dico/i, 'Check-in')
+        : obj.tipoLabel ?? null,
       // `justificativa` e a chave legada que a pagina de impressao procurava.
       observacao: obj.observacao ?? obj.justificativa ?? null,
       foto_ids: Array.isArray(obj.foto_ids) ? obj.foto_ids.filter(Boolean) : [],

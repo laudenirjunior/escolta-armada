@@ -762,7 +762,7 @@ const STATUS_INFO: Record<string, { label: string; cls: string }> = Object.fromE
 )
 
 const TIPOS_PARADA = [
-  { value: 'reporte_periodico', label: 'Reporte Periódico',    cor: '#1E7C52' },
+  { value: 'reporte_periodico', label: 'Check-in',             cor: '#1E7C52' },
   { value: 'registro_parada',   label: 'Registro de Parada',   cor: '#8B6914' },
   { value: 'em_transito',       label: 'Em Trânsito',          cor: '#53648A' },
   { value: 'parada_curta',      label: 'Parada Curta',         cor: '#8B6914' },
@@ -5393,7 +5393,7 @@ export default function EscoltaDetalhePage() {
         <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
           <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden rounded-t-2xl sm:rounded-2xl" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
-              <h2 className="font-bold text-base text-[#0E1A33]">Registrar Reporte Periódico</h2>
+              <h2 className="font-bold text-base text-[#0E1A33]">Registrar parada</h2>
             </div>
             <div className="px-6 py-5 space-y-4">
               {erro && (

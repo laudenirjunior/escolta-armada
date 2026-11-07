@@ -35,7 +35,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
       // registra por ela, seja qual for o perfil (lib/acesso-escolta.ts).
       { label: 'Campo',         href: '/dashboard/campo',          icon: <Radio size={16} />,           perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
       { label: 'Mapa',          href: '/dashboard/mapa',           icon: <Map size={16} />,             perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
-      { label: 'Notificações',  href: '/dashboard/notificacoes',   icon: <Bell size={16} />,            perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
+      { label: 'Avisos',        href: '/dashboard/notificacoes',   icon: <Bell size={16} />,            perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
     ],
   },
   {

@@ -71,7 +71,7 @@ export const TEXTO_PADRAO_PONTO = {
  * fiscalizacao sao eventos de desvio, com valor probatorio, e exigem relato real.
  */
 export const SUGESTAO_PARADA: Record<string, string> = {
-  reporte_periodico: 'Reporte periódico de posição. Equipe em rota, sem alterações.',
+  reporte_periodico: 'Check-in de posição. Equipe em rota, sem alterações.',
   registro_parada: 'Parada de rotina, sem alterações.',
   em_transito: 'Deslocamento normal, sem alterações.',
   parada_curta: 'Parada curta de rotina, sem alterações. Equipe permanece na viatura.',
