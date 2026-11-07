@@ -385,6 +385,24 @@ function QuadroLocalizacao({ ponto, carregando, onTentar, exigeGps = false }: {
   )
 }
 
+/** Onda O (A2): endereço do ponto buscado depois da leitura, sem segurar o Confirmar. */
+function useEnderecoDoPonto(
+  ponto: PontoGps | null,
+  definir: React.Dispatch<React.SetStateAction<PontoGps | null>>,
+  reverseGeocode: (lat: number, lng: number) => Promise<string>,
+) {
+  useEffect(() => {
+    if (!ponto || ponto.enderecoPronto) return
+    let vivo = true
+    const { lat, lng } = ponto
+    reverseGeocode(lat, lng).then((endereco) => {
+      if (vivo) definir(g => (g && g.lat === lat && g.lng === lng ? { ...g, endereco, enderecoPronto: true } : g))
+    }).catch(() => {})
+    return () => { vivo = false }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ponto?.lat, ponto?.lng, ponto?.enderecoPronto])
+}
+
 function CameraInput({
   onChange,
   max = 1,
@@ -1900,7 +1918,7 @@ export default function EscoltaDetalhePage() {
    * vez, depois de aplicado, com as duas horas se foi feito sem conexão). Guardado,
    * conflito e recusado ficam no aviso da tela.
    */
-  const fecharGravacao = async (params: Parameters<typeof notificarTelegram>[0]): Promise<'aplicado' | 'guardado' | 'conflito' | 'recusado'> => {
+  const fecharGravacao = async (params: Parameters<typeof notificarTelegram>[0], semEspera = false): Promise<'aplicado' | 'guardado' | 'conflito' | 'recusado'> => {
     const g = gravacaoRef.current
     gravacaoRef.current = null
     if (!g) { notificarTelegram(params); setAndamento('Atualizando a tela'); return 'aplicado' }
@@ -1935,7 +1953,7 @@ export default function EscoltaDetalhePage() {
         fotoCaminho: params.fotoId ? g.fotos.find(f => f.id === params.fotoId)?.caminho ?? null : null,
         soSeAvancou: !!g.etapa,
       },
-    }, setAndamento)
+    }, setAndamento, semEspera)
     setAndamento('Atualizando a tela')
     if (r.modo === 'guardado') { setAvisoOffline({ tipo: 'guardado', texto: MENSAGEM_GUARDADO }); return 'guardado' }
     if (r.modo === 'recusado') { setAvisoOffline({ tipo: 'erro', texto: textoRecusado(r.erro) }); return 'recusado' }
@@ -2478,21 +2496,9 @@ export default function EscoltaDetalhePage() {
     })
   }, [janelaAcaoAberta, dialogCheckin, dialogParada])
   // Endereço do ponto, buscado depois da leitura (não segura o Confirmar).
-  const useEnderecoDoPonto = (ponto: PontoGps | null, definir: React.Dispatch<React.SetStateAction<PontoGps | null>>) => {
-    useEffect(() => {
-      if (!ponto || ponto.enderecoPronto) return
-      let vivo = true
-      const { lat, lng } = ponto
-      reverseGeocode(lat, lng).then((endereco) => {
-        if (vivo) definir(g => (g && g.lat === lat && g.lng === lng ? { ...g, endereco, enderecoPronto: true } : g))
-      }).catch(() => {})
-      return () => { vivo = false }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [ponto?.lat, ponto?.lng, ponto?.enderecoPronto])
-  }
-  useEnderecoDoPonto(gpsAcao, setGpsAcao)
-  useEnderecoDoPonto(gpsCheckin, setGpsCheckin)
-  useEnderecoDoPonto(gpsParada, setGpsParada)
+  useEnderecoDoPonto(gpsAcao, setGpsAcao, reverseGeocode)
+  useEnderecoDoPonto(gpsCheckin, setGpsCheckin, reverseGeocode)
+  useEnderecoDoPonto(gpsParada, setGpsParada, reverseGeocode)
 
   // Cartão de status do GPS exibido nos diálogos de jornada
   const renderGpsAcao = () => (
@@ -2824,7 +2830,7 @@ export default function EscoltaDetalhePage() {
         status_atual: 'Em Retorno',
         descricao: descricaoTelegram(obs, TEXTO_PADRAO_PONTO.retorno),
         fotoId: foto2,
-      })
+      }, r1 === 'guardado') // revisão cruzada 1: com a parte 1 no aparelho, a parte 2 não espera de novo
 
       setDialogTransitoRetorno(false)
       setObsTransitoRetorno(TEXTO_PADRAO_PONTO.transitoRetorno)
@@ -3106,7 +3112,6 @@ export default function EscoltaDetalhePage() {
       defsComFoto.forEach((def, i) => { fotosViatFinalIds[def.key] = idsFinal[i] })
       setAndamento('Gravando a finalização')
 
-      let avisoChecklistEntrega: string | null = null
       // 1. Criar registro de checklist de entrega de viatura
       // LACUNA DECLARADA: com duas viaturas, o checklist de entrega e as 5 fotos de
       // angulo continuam cobrindo apenas a PRIMEIRA viatura. A segunda e entregue sem
@@ -3151,9 +3156,10 @@ export default function EscoltaDetalhePage() {
             foto_id: fotosViatFinalIds[def.key],
           })),
         ]
-        // Como antes, a falha das respostas não impede a finalização; agora ela é avisada.
+        // Revisão cruzada 3: o insert único é atômico; se falhar, nenhuma resposta entrou, e a
+        // escolta NÃO é finalizada (antes, com dez inserts soltos, finalizava com o checklist pela metade).
         const { error: respErr } = await sb.from('checklist_respostas').insert(respostas)
-        if (respErr) avisoChecklistEntrega = `Escolta finalizada, mas o checklist de entrega não foi gravado por completo (${respErr.message}). Avise a central.`
+        if (respErr) throw new Error(`O checklist de entrega não foi gravado (${respErr.message}). A escolta não foi finalizada; tente de novo.`)
       }
 
       // 2. Atualizar status da escolta para finalizada
@@ -3183,8 +3189,7 @@ export default function EscoltaDetalhePage() {
       setFotosViaturaFinal(Object.fromEntries(FOTOS_VIATURA_DEF.map(f => [f.key, null])))
       setChecklistFinal(Object.fromEntries(ITENS_CHECKLIST_ENTREGA.map(i => [i.key, { resposta: null, obs: '' }])))
       setAvisoSemGps(pos.sem_sinal_gps)
-      await carregar()
-      if (avisoChecklistEntrega) setAvisoOffline({ tipo: 'erro', texto: avisoChecklistEntrega })
+      carregar()
     } catch (err) {
       setErro(err instanceof Error ? err.message : 'Erro ao finalizar escolta.')
       setLoading(false)
@@ -5117,7 +5122,7 @@ export default function EscoltaDetalhePage() {
       {dialogOcorrenciaGestao && (
         <RegistrarOcorrenciaGestao
           escoltaId={escolta.id}
-          escoltaVeiculoId={viaturas[0]?.id ?? null}
+          escoltaVeiculoId={viaturas.length === 1 ? viaturas[0].id : null /* revisão cruzada 2: em comboio, ocorrência geral */}
           usuarioId={user?.id ?? null}
           onFechar={() => setDialogOcorrenciaGestao(false)}
           onRegistrada={(tipo, descricao) => {

@@ -37,6 +37,8 @@ export async function gravarPeloEnvelope(
   ids: { authUserId: string | null; usuarioId: string | null },
   entrada: EntradaRegistroCampo,
   aoAndamento?: (texto: string) => void,
+  /** Onda O (revisão cruzada 1): sem esperar a confirmação (a etapa anterior ficou no aparelho). */
+  semEspera = false,
 ): Promise<ResultadoRegistroCampo> {
   if (!ids.authUserId) throw new Error('Sessão sem usuário. Entre de novo antes de registrar.')
   const ctx: ContextoRegistro = {
@@ -45,7 +47,7 @@ export async function gravarPeloEnvelope(
     usuarioId: ids.usuarioId,
     // Onda O (A1): com sinal, a tela espera a confirmação por até 15 s; passou disso, o registro
     // já está guardado no aparelho e a tela é liberada enquanto o envio continua.
-    esperarMs: ESPERA_CONFIRMACAO_MS,
+    esperarMs: semEspera ? 0 : ESPERA_CONFIRMACAO_MS,
     aoProgredir: aoAndamento ? (p) => aoAndamento(textoAndamento(p)) : undefined,
   }
   aoAndamento?.('Guardando no aparelho')
