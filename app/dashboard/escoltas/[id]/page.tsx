@@ -7,7 +7,7 @@ import {
   MapPin, ArrowRight, CheckCircle2, XCircle,
   UserCheck, Camera, ClipboardList, Navigation,
   ChevronRight, Shield, AlertCircle, Play, Octagon,
-  RotateCcw, Home, CalendarClock, Radio, Locate, FileDown
+  RotateCcw, Home, CalendarClock, Radio, FileDown
 } from 'lucide-react'
 import { printEscolta } from '@/utils/print'
 import { createClient } from '@/lib/supabase/client'
@@ -331,6 +331,54 @@ function distanciaM(a: { lat: number; lng: number }, b: { lat: number; lng: numb
 function pontoDaLeitura(l: LeituraGps, anterior: PontoGps | null): PontoGps {
   if (anterior && distanciaM(anterior, l) <= 50) return { ...anterior, lat: l.lat, lng: l.lng, precisao: l.precisao }
   return { lat: l.lat, lng: l.lng, precisao: l.precisao, endereco: `${l.lat.toFixed(5)}, ${l.lng.toFixed(5)}`, enderecoPronto: false }
+}
+
+// Onda O (A3): quadro de localização com ALTURA FIXA desde a abertura. No teste de 07/11 o
+// quadro crescia quando o GPS chegava, o botão Confirmar descia e o clique caía no item errado.
+// Endereço em uma linha (completo no title); lendo, pronto ou sem sinal ocupam o mesmo espaço.
+const ALTURA_QUADRO_GPS = 72
+
+function QuadroLocalizacao({ ponto, carregando, onTentar, exigeGps = false }: {
+  ponto: PontoGps | null
+  carregando: boolean
+  onTentar: () => void
+  /** Check-in e parada só gravam com coordenada; as etapas seguem sem sinal. */
+  exigeGps?: boolean
+}) {
+  const ok = !!ponto
+  const linha: React.CSSProperties = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
+  return (
+    <div
+      data-quadro-gps
+      className="flex items-start gap-2 p-3"
+      style={{ height: ALTURA_QUADRO_GPS, boxSizing: 'border-box', overflow: 'hidden', backgroundColor: ok ? '#EBF5F1' : '#F5F7FA', border: `1px solid ${ok ? '#BFE3D0' : '#E2E8EC'}` }}
+    >
+      <MapPin size={13} style={{ color: ok ? '#1E7C52' : '#53648A', flexShrink: 0, marginTop: 2 }} />
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#A8B8C2' }}>Localização GPS</p>
+        {carregando && !ok ? (
+          <>
+            <p style={{ fontSize: '12px', fontWeight: 700, color: '#53648A', ...linha }}>Lendo o GPS (até 3 s)...</p>
+            <p style={{ fontSize: '10px', color: '#A8B8C2', ...linha }}>O Confirmar fica livre em seguida.</p>
+          </>
+        ) : ok ? (
+          <>
+            <p title={ponto.endereco} style={{ fontSize: '12px', fontWeight: 700, color: '#0E1A33', ...linha }}>{ponto.endereco}</p>
+            <p data-precisao-gps style={{ fontSize: '10px', color: ponto.precisao > 100 ? '#B83832' : '#6B7E8A', ...linha }}>
+              {textoPrecisao(ponto.precisao)}{ponto.precisao > 100 ? ', o ponto melhora sozinho se o sinal melhorar' : ''}
+            </p>
+          </>
+        ) : (
+          <>
+            <button type="button" onClick={onTentar} style={{ fontSize: '11px', fontWeight: 700, color: '#B83832', textAlign: 'left', ...linha, display: 'block', maxWidth: '100%' }}>
+              GPS indisponível, toque para tentar de novo
+            </button>
+            <p style={{ fontSize: '10px', color: '#A8B8C2', ...linha }}>{exigeGps ? 'Este registro precisa da localização.' : 'Sem sinal o registro segue, marcado sem localização.'}</p>
+          </>
+        )}
+      </div>
+    </div>
+  )
 }
 
 function CameraInput({
@@ -2435,25 +2483,9 @@ export default function EscoltaDetalhePage() {
 
   // Cartão de status do GPS exibido nos diálogos de jornada
   const renderGpsAcao = () => (
-    <div className="flex items-start gap-2 p-3" style={{ backgroundColor: gpsAcao ? '#EBF5F1' : '#F5F7FA', border: `1px solid ${gpsAcao ? '#BFE3D0' : '#E2E8EC'}` }}>
-      <MapPin size={13} style={{ color: gpsAcao ? '#1E7C52' : '#53648A', flexShrink: 0, marginTop: 2 }} />
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#A8B8C2' }}>Localização GPS</p>
-        {gpsAcaoLoading ? (
-          <p style={{ fontSize: '12px', fontWeight: 700, color: '#53648A' }}>Obtendo localização...</p>
-        ) : gpsAcao ? (
-          <>
-            <p style={{ fontSize: '12px', fontWeight: 700, color: '#0E1A33', wordBreak: 'break-word' }}>{gpsAcao.endereco}</p>
-            <p data-precisao-gps style={{ fontSize: '10px', color: gpsAcao.precisao > 100 ? '#B83832' : '#6B7E8A' }}>{textoPrecisao(gpsAcao.precisao)}</p>
-          </>
-        ) : (
-          <button type="button" onClick={capturarGpsAcao} style={{ fontSize: '11px', fontWeight: 700, color: '#B83832', textAlign: 'left' }}>
-            GPS indisponível — tocar para tentar novamente
-          </button>
-        )}
-      </div>
-    </div>
+    <QuadroLocalizacao ponto={gpsAcao} carregando={gpsAcaoLoading} onTentar={capturarGpsAcao} />
   )
+
 
   const salvarPeriodicidade = async () => {
     if (!escolta) return
@@ -5276,39 +5308,10 @@ export default function EscoltaDetalhePage() {
               )}
 
               {/* GPS Status */}
-              <div className="p-3 rounded" style={{ backgroundColor: gpsCheckin ? '#F0FAF5' : '#F5F7FA', border: `1.5px solid ${gpsCheckin ? '#1E7C5240' : '#E2E8EC'}` }}>
-                <div className="flex items-start gap-2">
-                  <Locate size={13} style={{ color: gpsCheckin ? '#1E7C52' : '#A8B8C2', flexShrink: 0, marginTop: '2px' }} />
-                  <div className="flex-1 min-w-0">
-                    <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: gpsCheckin ? '#1E7C52' : '#A8B8C2' }}>
-                      {gpsCheckinLoading ? 'Obtendo localização...' : gpsCheckin ? 'Localização capturada' : 'Localização não disponível'}
-                    </p>
-                    {gpsCheckin && (
-                      <>
-                        <p style={{ fontSize: '11px', fontWeight: 600, color: '#0E1A33', marginTop: '2px', lineHeight: 1.4 }}>{gpsCheckin.endereco}</p>
-                        <p style={{ fontSize: '9px', color: '#A8B8C2', marginTop: '2px' }}>
-                          {gpsCheckin.lat.toFixed(6)}, {gpsCheckin.lng.toFixed(6)} · {textoPrecisao(gpsCheckin.precisao)}
-                        </p>
-                      </>
-                    )}
-                    {gpsCheckinLoading && (
-                      <div className="flex items-center gap-1.5 mt-1">
-                        <div className="animate-spin" style={{ width: '10px', height: '10px', border: '1.5px solid #D6DAE5', borderTopColor: '#1E7C52', borderRadius: '50%' }} />
-                        <span style={{ fontSize: '10px', color: '#A8B8C2' }}>Aguardando GPS e endereço...</span>
-                      </div>
-                    )}
-                    {!gpsCheckinLoading && !gpsCheckin && (
-                      <button
-                        type="button"
-                        onClick={abrirDialogCheckin}
-                        style={{ fontSize: '10px', color: '#1E7C52', marginTop: '4px', textDecoration: 'underline' }}
-                      >
-                        Tentar novamente
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
+              <QuadroLocalizacao ponto={gpsCheckin} carregando={gpsCheckinLoading} exigeGps onTentar={() => {
+                setGpsCheckinLoading(true)
+                obterGPS().then(l => setGpsCheckin(g => pontoDaLeitura(l, g))).catch(() => {}).finally(() => setGpsCheckinLoading(false))
+              }} />
 
               {/* Viatura do check-in: so aparece com mais de uma */}
               {viaturas.length > 1 && (
@@ -5383,27 +5386,10 @@ export default function EscoltaDetalhePage() {
                   <p style={{ fontSize: '12px', fontWeight: 900, color: '#0E1A33' }}>{nowLocalStr()}</p>
                 </div>
               </div>
-              <div className="p-3 rounded" style={{ backgroundColor: gpsParada ? '#F0FAF5' : '#F5F7FA', border: `1.5px solid ${gpsParada ? '#1E7C5240' : '#E2E8EC'}` }}>
-                <div className="flex items-start gap-2">
-                  <Locate size={13} style={{ color: gpsParada ? '#1E7C52' : '#A8B8C2', flexShrink: 0, marginTop: '2px' }} />
-                  <div className="flex-1">
-                    <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: gpsParada ? '#1E7C52' : '#A8B8C2' }}>
-                      {gpsParadaLoading ? 'Obtendo localização...' : gpsParada ? 'Localização capturada' : 'Localização não disponível'}
-                    </p>
-                    {gpsParada && (
-                      <div>
-                        <p style={{ fontSize: '11px', fontWeight: 600, color: '#0E1A33', marginTop: '2px', lineHeight: 1.4 }}>{gpsParada.endereco}</p>
-                        <p style={{ fontSize: '10px', color: '#A8B8C2', fontFamily: 'monospace', marginTop: '2px' }}>
-                          {gpsParada.lat.toFixed(6)}, {gpsParada.lng.toFixed(6)} · {textoPrecisao(gpsParada.precisao)}
-                        </p>
-                      </div>
-                    )}
-                    {gpsParadaLoading && (
-                      <p style={{ fontSize: '10px', color: '#A8B8C2', marginTop: '2px' }}>Aguardando GPS do dispositivo...</p>
-                    )}
-                  </div>
-                </div>
-              </div>
+              <QuadroLocalizacao ponto={gpsParada} carregando={gpsParadaLoading} exigeGps onTentar={() => {
+                setGpsParadaLoading(true)
+                obterGPS().then(l => setGpsParada(g => pontoDaLeitura(l, g))).catch(() => {}).finally(() => setGpsParadaLoading(false))
+              }} />
               <div>
                 <label className="block text-xs font-semibold mb-1.5 text-[#5A6A80]">Tipo de Parada *</label>
                 <select
