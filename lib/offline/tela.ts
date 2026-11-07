@@ -7,7 +7,7 @@
  * fotos pendentes vistas a partir do blob local.
  */
 import { createClient } from '@/lib/supabase/client'
-import { dispararEnvio, lerConfigOffline, type ClienteOffline, type ConfigOffline } from './envio.ts'
+import { assinarEstadoEnvio, dispararEnvio, lerConfigOffline, type ClienteOffline, type ConfigOffline, type ProgressoEnvio } from './envio.ts'
 import { ErroEspacoAparelho, filaDisponivel, fotosDoRegistro, type RegistroFila } from './fila.ts'
 import { MENSAGEM_GUARDADO, registrarCampo, type ContextoRegistro, type EntradaRegistroCampo, type ResultadoRegistroCampo } from './registro-campo.ts'
 
@@ -36,16 +36,40 @@ export async function envelopeLigado(): Promise<ConfigOffline & { usar: boolean 
 export async function gravarPeloEnvelope(
   ids: { authUserId: string | null; usuarioId: string | null },
   entrada: EntradaRegistroCampo,
+  aoAndamento?: (texto: string) => void,
+  /** Onda O (revisão cruzada 1): sem esperar a confirmação (a etapa anterior ficou no aparelho). */
+  semEspera = false,
 ): Promise<ResultadoRegistroCampo> {
   if (!ids.authUserId) throw new Error('Sessão sem usuário. Entre de novo antes de registrar.')
   const ctx: ContextoRegistro = {
     supabase: createClient() as unknown as ClienteOffline,
     authUserId: ids.authUserId,
     usuarioId: ids.usuarioId,
+    // Onda O (A1): com sinal, a tela espera a confirmação por até 15 s; passou disso, o registro
+    // já está guardado no aparelho e a tela é liberada enquanto o envio continua.
+    esperarMs: semEspera ? 0 : ESPERA_CONFIRMACAO_MS,
+    aoProgredir: aoAndamento ? (p) => aoAndamento(textoAndamento(p)) : undefined,
   }
-  const r = await registrarCampo(ctx, entrada)
-  void dispararEnvio()
-  return r
+  aoAndamento?.('Guardando no aparelho')
+  const sair = aoAndamento ? assinarEstadoEnvio((e) => { if (e.progresso) aoAndamento(textoAndamento(e.progresso)) }) : null
+  try {
+    const r = await registrarCampo(ctx, entrada)
+    void dispararEnvio()
+    return r
+  } finally {
+    sair?.()
+  }
+}
+
+/** Onda O (A1): quanto a tela espera a confirmação do servidor antes de liberar como "guardado". */
+export const ESPERA_CONFIRMACAO_MS = 15_000
+
+/** Onda O (A1): texto de andamento ("Enviando foto 3 de 7", "Gravando no sistema"). */
+export function textoAndamento(p: Pick<ProgressoEnvio, 'fase' | 'fotosFeitas' | 'fotosTotal'>): string {
+  if (p.fase === 'fotos' && p.fotosTotal > 0 && p.fotosFeitas < p.fotosTotal) {
+    return `Enviando foto ${Math.min(p.fotosFeitas + 1, p.fotosTotal)} de ${p.fotosTotal}`
+  }
+  return 'Gravando no sistema'
 }
 
 const MOTIVOS: Record<string, string> = {

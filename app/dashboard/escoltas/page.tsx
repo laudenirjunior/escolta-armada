@@ -14,7 +14,7 @@ import { MapaInfoMural, lerInfoMural, confirmarPresencaBase, horaBrasilia } from
 import { CartaoEscolta } from '@/components/escolta/cartao-escolta'
 import { FiltrosEscoltas } from '@/components/escolta/filtros-escoltas'
 import { SELECT_CARTAO, type CartaoEscolta as CartaoDados, temEquipeGestao, lerCoresClientes, aplicarCoresClientes } from '@/lib/cartao-escolta'
-import { STATUS_ATIVOS } from '@/lib/fluxo-escolta'
+import { STATUS_ATIVOS, mostrarChecklistPendente, preInicioConcluido } from '@/lib/fluxo-escolta'
 import { useFiltrosEscoltas, aplicarFiltrosServidor, type Filtros } from '@/hooks/useFiltrosEscoltas'
 
 // Onda K: o cartão padrão (lib/cartao-escolta.ts) traz cliente, UF, etiquetas, criador e
@@ -50,6 +50,8 @@ export default function EscoltasPage() {
   const [modoLista, setModoLista] = useState<'minhas' | 'disponiveis' | 'todas'>('minhas')
   const [minhasEscoltaIds, setMinhasEscoltaIds] = useState<string[]>([])
   const [semEquipeIds, setSemEquipeIds] = useState<string[]>([])
+  // Onda O (A4): escoltas iniciadas com o checklist do pré-início feito.
+  const [preInicio, setPreInicio] = useState<{ feitos: Set<string>; conferido: boolean }>({ feitos: new Set(), conferido: false })
   const [souComandanteIds, setSouComandanteIds] = useState<string[]>([])
   const [puxando, setPuxando] = useState<string | null>(null)
   const [avisoMural, setAvisoMural] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null)
@@ -203,6 +205,31 @@ export default function EscoltasPage() {
       auxCores.current = { chave: chaveCores, cores }
     }
     rows = aplicarCoresClientes(rows, auxCores.current.cores)
+    // Onda O (A4): depois do início, a etiqueta "Checklist" só sai se o pré-início não tiver
+    // checklist de materiais e de viatura. Uma consulta, só das escoltas que precisam.
+    const conferir = rows.filter(e => e.checklist_pendente_no_inicio && GRUPO_ATIVAS.includes(e.status)).map(e => e.id)
+    const feitos = new Set<string>()
+    let conferido = conferir.length === 0
+    if (conferir.length > 0) {
+      const { data: chks, error: chkErr } = await sb
+        .from('checklists')
+        .select('tipo, concluido, anulado_em, viatura:escolta_veiculos!inner(escolta_id)')
+        .in('viatura.escolta_id', conferir)
+        .in('tipo', ['material', 'viatura'])
+      if (seq !== seqCarga.current) return
+      if (!chkErr) {
+        conferido = true
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const porEscolta = new Map<string, any[]>()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const c of (chks ?? []) as any[]) {
+          const idEsc = Array.isArray(c.viatura) ? c.viatura[0]?.escolta_id : c.viatura?.escolta_id
+          if (idEsc) porEscolta.set(idEsc, [...(porEscolta.get(idEsc) ?? []), c])
+        }
+        for (const [idEsc, lista] of porEscolta) if (preInicioConcluido(lista)) feitos.add(idEsc)
+      }
+    }
+    setPreInicio({ feitos, conferido })
     setEscoltas(rows)
     jaCarregou.current = true
     setLoading(false)
@@ -380,7 +407,7 @@ export default function EscoltasPage() {
   // Selos de cada tela ao lado do código (as etiquetas da onda K vêm do cartão).
   const selos = (e: EscoltaRow) => (
     <>
-      {e.checklist_pendente_no_inicio && <span className="badge-warning ml-2 text-[10px]">Checklist</span>}
+      {mostrarChecklistPendente(e, preInicio.conferido ? preInicio.feitos.has(e.id) : undefined) && <span className="badge-warning ml-2 text-[10px]">Checklist pendente</span>}
       {/* Aviso antes do clique: assumir esta pede confirmacao e motivo. */}
       {ehOperador && e.status === 'agendada' && !semEquipeIds.includes(e.id) && (
         <span className="ml-2 text-[9px] font-black uppercase tracking-wider px-1 py-0.5"

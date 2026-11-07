@@ -35,7 +35,7 @@ const NAV: { section: string; items: NavItem[] }[] = [
       // registra por ela, seja qual for o perfil (lib/acesso-escolta.ts).
       { label: 'Campo',         href: '/dashboard/campo',          icon: <Radio size={16} />,           perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
       { label: 'Mapa',          href: '/dashboard/mapa',           icon: <Map size={16} />,             perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
-      { label: 'Notificações',  href: '/dashboard/notificacoes',   icon: <Bell size={16} />,            perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
+      { label: 'Avisos',        href: '/dashboard/notificacoes',   icon: <Bell size={16} />,            perfis: ['administrador','gestor','supervisor','central','operador'] as Perfil[] },
     ],
   },
   {
@@ -144,7 +144,10 @@ function DashboardLayoutInterno({ children, auth }: { children: React.ReactNode;
         const visible = group.items.filter(i => perfil && i.perfis.includes(perfil))
         if (!visible.length) return null
         return (
-          <SidebarSection key={group.section} label={group.section}>
+          <SidebarSection key={group.section} label={group.section}
+            recolhivel={visible.length > 0 && group.section !== 'Operações'}
+            abertaPorPadrao={group.section === 'Operações'}
+            contemAtivo={visible.some(i => isActive(i.href))}>
             {visible.map(item => (
               <SidebarItem key={item.href} href={item.href} icon={item.icon} isActive={isActive(item.href)}>
                 {item.label}

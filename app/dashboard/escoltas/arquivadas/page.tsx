@@ -12,8 +12,9 @@ import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
 import { PODE_VER_ARQUIVADAS, temPermissao } from '@/lib/permissions'
 import { rotuloStatus } from '@/lib/fluxo-escolta'
-import { MSG_ATUALIZACAO, ehFuncaoAusente, horaBR } from '@/lib/gestao'
+import { horaBR } from '@/lib/gestao'
 import { CartaoEscolta } from '@/components/escolta/cartao-escolta'
+import { DialogoAcao } from '@/components/escolta/acoes-gestao'
 import { SELECT_CARTAO, type CartaoEscolta as CartaoDados } from '@/lib/cartao-escolta'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -33,8 +34,6 @@ export default function ArquivadasPage() {
   const [carregando, setCarregando] = useState(true)
   const [msg, setMsg] = useState<{ ok: boolean; texto: string } | null>(null)
   const [recuperando, setRecuperando] = useState<Arquivada | null>(null)
-  const [motivo, setMotivo] = useState('')
-  const [enviando, setEnviando] = useState(false)
 
   const carregar = useCallback(async () => {
     setCarregando(true)
@@ -48,17 +47,6 @@ export default function ArquivadasPage() {
   }, [])
 
   useEffect(() => { if (podeVer) carregar() }, [podeVer, carregar])
-
-  const recuperar = async () => {
-    if (!recuperando) return
-    setEnviando(true); setMsg(null)
-    const { error } = await sb.rpc('recuperar_escolta', { p_escolta_id: recuperando.id, p_motivo: motivo.trim() })
-    setEnviando(false)
-    if (error) { setMsg({ ok: false, texto: ehFuncaoAusente(error) ? MSG_ATUALIZACAO : error.message }); return }
-    setMsg({ ok: true, texto: `Escolta ${recuperando.codigo_escolta ?? ''} recuperada; voltou em ${rotuloStatus(recuperando.status)}.` })
-    setRecuperando(null); setMotivo('')
-    carregar()
-  }
 
   if (!user) return null
   if (!podeVer) return <div className="p-6 text-sm">Acesso restrito ao administrador.</div>
@@ -84,21 +72,21 @@ export default function ArquivadasPage() {
                 <p className="text-sm mt-1"><strong>Motivo:</strong> {e.motivo_arquivamento ?? '-'}</p>
                 <div className="mt-3 flex gap-2">
                   <button type="button" onClick={() => router.push(`/dashboard/escoltas/${e.id}`)} className="flex-1 flex items-center justify-center gap-1 text-xs font-bold" style={{ minHeight: '44px', border: '1px solid #C8D5DC', color: '#5A6A80' }}><Eye size={14} /> Abrir</button>
-                  <button type="button" onClick={() => { setRecuperando(e); setMotivo('') }} className="flex-1 flex items-center justify-center gap-1 text-xs font-black uppercase text-white" style={{ minHeight: '44px', backgroundColor: '#1A294A' }} data-teste="recuperar"><Undo2 size={14} /> Recuperar</button>
+                  <button type="button" onClick={() => { setRecuperando(e); setMsg(null) }} className="flex-1 flex items-center justify-center gap-1 text-xs font-black uppercase text-white" style={{ minHeight: '44px', backgroundColor: '#1A294A' }} data-teste="recuperar"><Undo2 size={14} /> Recuperar</button>
                 </div>
-                {recuperando?.id === e.id && (
-                  <div className="mt-3 space-y-2">
-                    <textarea value={motivo} onChange={ev => setMotivo(ev.target.value)} rows={2} className="input-light w-full text-sm" placeholder="Motivo da recuperação (mínimo de 10 caracteres)" data-teste="motivo-recuperar" />
-                    <div className="flex gap-2">
-                      <button type="button" onClick={recuperar} disabled={enviando || motivo.trim().length < 10} className="flex-1 text-xs font-black uppercase text-white disabled:opacity-50" style={{ minHeight: '44px', backgroundColor: '#1E7C52' }} data-teste="confirmar-recuperar">{enviando ? 'Recuperando…' : 'Confirmar recuperação'}</button>
-                      <button type="button" onClick={() => setRecuperando(null)} className="flex-1 text-xs font-bold" style={{ minHeight: '44px', border: '1px solid #C8D5DC', color: '#5A6A80' }}>Cancelar</button>
-                    </div>
-                  </div>
-                )}
               </div>
             ))}
           </div>
         )}
+      {recuperando && (
+        <DialogoAcao acao="recuperar" escolta={recuperando}
+          onFechar={() => setRecuperando(null)}
+          onFeito={() => {
+            setMsg({ ok: true, texto: `Escolta ${recuperando.codigo_escolta ?? ''} recuperada; voltou em ${rotuloStatus(recuperando.status)}.` })
+            setRecuperando(null)
+            carregar()
+          }} />
+      )}
     </div>
   )
 }

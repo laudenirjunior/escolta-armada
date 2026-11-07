@@ -19,7 +19,18 @@
 const SINAL_PRONTO = 'escolta-print-pronto'
 const TETO_MS = 25000
 
+/**
+ * Onda O (A6): o PDF abre numa ABA NOVA, que imprime sozinha quando as fotos carregam
+ * (?imprimir=1). No teste de 07/11 a impressão pelo iframe prendia a aba da escolta até
+ * fechar a janela de impressão. Se o navegador bloquear a aba nova, volta ao iframe.
+ */
 export function printEscolta(escoltaId: string) {
+  const aba = window.open(`/dashboard/escoltas/${escoltaId}/print?imprimir=1`, '_blank')
+  if (aba) return
+  imprimirNoIframe(escoltaId)
+}
+
+function imprimirNoIframe(escoltaId: string) {
   const url = `/dashboard/escoltas/${escoltaId}/print`
 
   const existing = document.getElementById('__escolta_print_frame')

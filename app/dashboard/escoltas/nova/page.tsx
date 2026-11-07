@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import {
   ArrowLeft, ArrowRight, Plus, Trash2, CheckCircle,
   MapPin, Flag, FileText, Briefcase, Radio, Building2,
-  Car, Shield, UserCheck, AlertTriangle, DollarSign
+  Car, Shield, UserCheck, AlertTriangle, DollarSign, Star
 } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { periodicidadePadraoDoCliente } from '@/lib/checkin'
@@ -14,7 +14,7 @@ import { AiTextButton } from '@/components/ui/ai-text-button'
 import { AtalhosLocais } from '@/components/endereco/atalhos-locais'
 import { ConferenciaCoordenada } from '@/components/endereco/conferencia-coordenada'
 import { SalvarEnderecoLocal } from '@/components/endereco/salvar-endereco-local'
-import { LocalSalvo, carregarLocaisAtivos, mensagemErroLocal, PERFIS_CADASTRAM_LOCAL } from '@/lib/locais'
+import { LocalSalvo, carregarLocaisAtivos, carregarLocaisParaBusca, locaisQueCombinam, mensagemErroLocal, PERFIS_CADASTRAM_LOCAL } from '@/lib/locais'
 import { PODE_PODER_TOTAL, temPermissao } from '@/lib/permissions'
 import { MSG_ATUALIZACAO, ehFuncaoAusente } from '@/lib/gestao'
 import { rotuloStatus } from '@/lib/fluxo-escolta'
@@ -42,7 +42,11 @@ interface ClienteOpt    { id: string; nome_cliente: string; cor_destaque: string
 interface VeiculoOpt    { id: string; placa: string; modelo: string | null; tipo: { nome: string } | null }
 interface VigilanteOpt  { id: string; nome_completo: string; funcao: { nome: string } | null; valor_padrao_pago: number | null; usuario_id: string | null; usuario: { status: string } | null }
 
-interface MembroForm    { uid: string; vigilante_id: string; papel_na_escolta: 'comandante' | 'operador'; valor_pago: string }
+interface MembroForm    {
+  uid: string; vigilante_id: string; papel_na_escolta: 'comandante' | 'operador'; valor_pago: string
+  /** Onda O (M6): membro acrescentado nesta tela (criação ou edição), que recebe a diária do cadastro. */
+  novo?: boolean
+}
 
 const PERFIS_FINANCEIRO = ['administrador', 'gestor', 'supervisor']
 // Onda I: escolta_veiculo_id da linha gravada; a edição grava por diferença (editar_escolta).
@@ -76,7 +80,7 @@ interface DadosBasicos  {
 const sb = createClient() as any
 const uid = () => Math.random().toString(36).slice(2)
 const novaViatura = (): ViaturaForm => ({ uid: uid(), veiculo_id: '', membros: [] })
-const novoMembro  = (): MembroForm  => ({ uid: uid(), vigilante_id: '', papel_na_escolta: 'operador', valor_pago: '' })
+const novoMembro  = (): MembroForm  => ({ uid: uid(), vigilante_id: '', papel_na_escolta: 'operador', valor_pago: '', novo: true })
 const HORAS = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'))
 const MINS  = ['00','05','10','15','20','25','30','35','40','45','50','55']
 const STEPS = ['Dados da Escolta', 'Efetivo e Veículos', 'Revisar e Confirmar']
@@ -170,17 +174,24 @@ function AddressAutocomplete({
   onChange,
   placeholder,
   icon,
+  locais = [],
+  onEscolherLocal,
 }: {
   value: string
   onChange: (address: string, lat?: number, lon?: number, meta?: { semNumero: boolean; uf: string | null }) => void
   placeholder: string
   icon?: React.ReactNode
+  /** Onda O (A5): locais salvos (ativos e aguardando conferência) mostrados antes da Mapbox. */
+  locais?: LocalSalvo[]
+  onEscolherLocal?: (l: LocalSalvo) => void
 }) {
   const [query, setQuery]             = useState(value)
   const [suggestions, setSuggestions] = useState<MapboxFeature[]>([])
   const [carregando, setCarregando]   = useState(false)
   const [erroApi, setErroApi]         = useState<string | null>(null)
   const [aberto, setAberto]           = useState(false)
+  // Onda O (A5): locais salvos que combinam com o texto, na hora (sem esperar a Mapbox).
+  const [locaisAchados, setLocaisAchados] = useState<LocalSalvo[]>([])
   const debounceRef  = useRef<ReturnType<typeof setTimeout> | null>(null)
   const wrapRef      = useRef<HTMLDivElement>(null)
   const proximidade  = useRef('-43.1729,-22.9068') // lon,lat — RJ default, atualiza via GPS
@@ -257,7 +268,7 @@ function AddressAutocomplete({
         if (data.message) { setErroApi(data.message); return }
         const features: MapboxFeature[] = data.features ?? []
         setSuggestions(features)
-        setAberto(features.length > 0)
+        setAberto(a => features.length > 0 || a)
       } catch (e) {
         // Aborto é encerramento normal do ciclo, não falha de rede: não vira mensagem.
         if ((e as { name?: string } | null)?.name === 'AbortError') return
@@ -301,6 +312,16 @@ function AddressAutocomplete({
     setErroApi(null)
   }
 
+  const selecionarLocal = (l: LocalSalvo) => {
+    invalidarBusca()
+    puloRef.current = true
+    setQuery(l.endereco)
+    onEscolherLocal?.(l)
+    setSuggestions([])
+    setLocaisAchados([])
+    setAberto(false)
+  }
+
   return (
     <div ref={wrapRef} style={{ position: 'relative' }}>
       <div
@@ -317,8 +338,11 @@ function AddressAutocomplete({
             puloRef.current = false
             setQuery(e.target.value)
             onChange(e.target.value)
+            const achados = e.target.value.trim().length >= 3 ? locaisQueCombinam(locais, e.target.value) : []
+            setLocaisAchados(achados)
+            if (achados.length > 0) setAberto(true)
           }}
-          onFocus={() => suggestions.length > 0 && setAberto(true)}
+          onFocus={() => (suggestions.length > 0 || locaisAchados.length > 0) && setAberto(true)}
           placeholder={placeholder}
           className={inputCls}
           style={inputStyle}
@@ -333,12 +357,33 @@ function AddressAutocomplete({
         <p style={{ fontSize: '10px', color: '#B83832', marginTop: '3px' }}>Mapbox: {erroApi}</p>
       )}
 
-      {aberto && suggestions.length > 0 && (
+      {aberto && (suggestions.length > 0 || locaisAchados.length > 0) && (
         <div style={{
           position: 'absolute', top: 'calc(100% + 2px)', left: 0, right: 0, zIndex: 200,
           backgroundColor: P.surface, border: `1.5px solid ${P.steel}`,
-          boxShadow: '0 8px 24px rgba(26,41,74,0.18)', maxHeight: '280px', overflowY: 'auto',
+          boxShadow: '0 8px 24px rgba(26,41,74,0.18)', maxHeight: '320px', overflowY: 'auto',
         }}>
+          {locaisAchados.map((l) => (
+            <button
+              key={`local-${l.id}`}
+              type="button"
+              data-sugestao-local={l.situacao}
+              onMouseDown={e => e.preventDefault()}
+              onClick={() => selecionarLocal(l)}
+              className="w-full text-left"
+              style={{ display: 'block', padding: '9px 12px', borderBottom: `1px solid ${P.border}`, cursor: 'pointer', backgroundColor: '#F4F8F6' }}
+              onMouseEnter={e => (e.currentTarget as HTMLElement).style.backgroundColor = P.bg}
+              onMouseLeave={e => (e.currentTarget as HTMLElement).style.backgroundColor = '#F4F8F6'}
+            >
+              <p style={{ fontSize: '12px', fontWeight: 700, color: P.text }}>
+                <Star size={11} style={{ display: 'inline', marginRight: 4, color: '#1E7C52', verticalAlign: '-1px' }} />{l.nome}
+              </p>
+              <p style={{ fontSize: '10px', color: P.light, marginTop: '2px' }}>{l.endereco}</p>
+              <p style={{ fontSize: '10px', fontWeight: 700, marginTop: '2px', color: l.situacao === 'ativo' ? '#1E7C52' : '#8A5A10' }}>
+                {l.situacao === 'ativo' ? 'Local salvo, pino conferido' : 'Local salvo aguardando conferência: confira o pino no mapa'}
+              </p>
+            </button>
+          ))}
           {suggestions.map((f, i) => {
             const partes = f.place_name.split(',')
             const principal   = partes.slice(0, 2).join(',').trim()
@@ -458,6 +503,9 @@ function FormularioEscolta() {
   const [confDestino, setConfDestino] = useState(confVazia)
   const podeSalvarLocal = PERFIS_CADASTRAM_LOCAL.includes((user?.perfil?.codigo ?? '') as string)
   useEffect(() => { carregarLocaisAtivos(sb).then(setLocais) }, [])
+  // Onda O (A5): para a busca, também os aguardando conferência (marcados como tal).
+  const [locaisBusca, setLocaisBusca] = useState<LocalSalvo[]>([])
+  useEffect(() => { carregarLocaisParaBusca(sb).then(setLocaisBusca) }, [])
   // Onda D2: endereço escolhido por último em cada lado (atalho, sugestão da busca ou o da
   // escolta em edição). O complemento é desse endereço: escolher outro (atalho ou busca)
   // troca ou limpa o complemento; o digitado antes da primeira escolha fica.
@@ -492,6 +540,27 @@ function FormularioEscolta() {
     if (seq !== ufSeq.current[lado]) return
     setDados(d => ({ ...d, [`${lado}_uf`]: uf ?? '', [`${lado}_uf_estimada`]: calculada }))
   }, [])
+  // Escolha de local salvo, pelo atalho ou pela busca (onda O, A5). Complemento do local; local
+  // sem complemento limpa o do endereço anterior, mas mantém o digitado antes de qualquer
+  // escolha. Local aguardando conferência entra com o pino a conferir.
+  const escolherLocal = (lado: 'origem' | 'destino', l: LocalSalvo) => {
+    const havia = enderecoEscolhido.current[lado]
+    enderecoEscolhido.current[lado] = l.endereco
+    setDados(d => ({
+      ...d,
+      [`${lado}_endereco`]: l.endereco,
+      [`${lado}_complemento`]: l.complemento ?? (havia ? '' : d[`${lado}_complemento` as const]),
+      [`${lado}_lat`]: l.latitude ?? 0,
+      [`${lado}_lng`]: l.longitude ?? 0,
+    }))
+    // Onda K: UF do local (conferida); local sem UF e com coordenada: pela coordenada.
+    if (l.uf) definirUf(lado, l.uf, false)
+    else ufPelaCoordenada(lado, l.latitude ?? 0, l.longitude ?? 0)
+    const ativo = l.situacao === 'ativo'
+    // Aguardando conferência: sem o selo "coordenada conferida"; o pino fica para conferir.
+    const conf = { conferida: ativo, semNumero: false, viaLocal: ativo ? l.nome : null, localId: ativo ? l.id : null }
+    if (lado === 'origem') setConfOrigem(conf); else setConfDestino(conf)
+  }
   // "Salvar este endereço" ao lado do campo (onda D2): endereço, complemento, coordenada e UF
   // do campo; nasce aguardando conferência (a trigger da 205 garante, mesmo pedindo ativo).
   const salvarComoLocal = async (nome: string, endereco: string, complemento: string, lat: number, lng: number, uf: string): Promise<{ ok: boolean; texto: string }> => {
@@ -847,16 +916,43 @@ function FormularioEscolta() {
   // ── Helpers de viatura ────────────────────────────────────────────────────
   const updV = (id: string, p: Partial<ViaturaForm>) =>
     setViaturas(vs => vs.map(v => v.uid === id ? { ...v, ...p } : v))
+  // Onda O (M5): com um único vigilante na viatura, ele já é o comandante (a validação
+  // exige comandante em viatura com gente; no teste de 07/11 era preciso marcar à mão).
+  const comComandante = (membros: MembroForm[]): MembroForm[] =>
+    membros.length === 1 && membros[0].papel_na_escolta !== 'comandante'
+      ? [{ ...membros[0], papel_na_escolta: 'comandante' }]
+      : membros
   const addM  = (vid: string) =>
-    setViaturas(vs => vs.map(v => v.uid === vid ? { ...v, membros: [...v.membros, novoMembro()] } : v))
+    setViaturas(vs => vs.map(v => v.uid === vid ? { ...v, membros: comComandante([...v.membros, novoMembro()]) } : v))
   const updM  = (vid: string, mid: string, p: Partial<MembroForm>) =>
     setViaturas(vs => vs.map(v =>
-      v.uid === vid ? { ...v, membros: v.membros.map(m => m.uid === mid ? { ...m, ...p } : m) } : v
+      v.uid === vid ? { ...v, membros: comComandante(v.membros.map(m => m.uid === mid ? { ...m, ...p } : m)) } : v
     ))
   const rmM   = (vid: string, mid: string) =>
     setViaturas(vs => vs.map(v =>
-      v.uid === vid ? { ...v, membros: v.membros.filter(m => m.uid !== mid) } : v
+      v.uid === vid ? { ...v, membros: comComandante(v.membros.filter(m => m.uid !== mid)) } : v
     ))
+
+  // Onda O (M6): a diária do cadastro entra no membro novo também na edição, mesmo quando a
+  // lista de vigilantes ou o perfil chegam depois da escolha (na edição vinha 0). Membro que
+  // já estava gravado fica com o valor que tinha.
+  useEffect(() => {
+    if (!verFinanceiro || vigilantes.length === 0) return
+    setViaturas(vs => {
+      let mudou = false
+      const novas = vs.map(v => ({
+        ...v,
+        membros: v.membros.map(m => {
+          if (!m.novo || !m.vigilante_id || m.valor_pago !== '') return m
+          const vig = vigilantes.find(x => x.id === m.vigilante_id)
+          if (vig?.valor_padrao_pago == null) return m
+          mudou = true
+          return { ...m, valor_pago: vig.valor_padrao_pago.toString() }
+        }),
+      }))
+      return mudou ? novas : vs
+    })
+  }, [verFinanceiro, vigilantes, viaturas])
 
   const cliente = clientes.find(c => c.id === dados.cliente_id)
   const dtLabel = dados.data_prevista
@@ -1077,17 +1173,7 @@ function FormularioEscolta() {
                     onSalvar={(nome, uf) => salvarComoLocal(nome, dados.origem_endereco, dados.origem_complemento, dados.origem_lat, dados.origem_lng, uf)} />
                 )}
               </div>
-              <AtalhosLocais campo="origem" locais={locais} selecionadoId={confOrigem.localId} onEscolher={(l) => {
-                // Complemento do local; local sem complemento limpa o do endereço anterior,
-                // mas mantém o digitado antes de qualquer escolha.
-                const havia = enderecoEscolhido.current.origem
-                enderecoEscolhido.current.origem = l.endereco
-                setDados(d => ({ ...d, origem_endereco: l.endereco, origem_complemento: l.complemento ?? (havia ? '' : d.origem_complemento), origem_lat: l.latitude ?? 0, origem_lng: l.longitude ?? 0 }))
-                // Onda K: UF do local (conferida); local sem UF e com coordenada: pela coordenada.
-                if (l.uf) definirUf('origem', l.uf, false)
-                else ufPelaCoordenada('origem', l.latitude ?? 0, l.longitude ?? 0)
-                setConfOrigem({ conferida: true, semNumero: false, viaLocal: l.nome, localId: l.id })
-              }} />
+              <AtalhosLocais campo="origem" locais={locais} selecionadoId={confOrigem.localId} onEscolher={(l) => escolherLocal('origem', l)} />
               <AddressAutocomplete
                 value={dados.origem_endereco}
                 onChange={(addr, lat, lon, meta) => {
@@ -1112,6 +1198,8 @@ function FormularioEscolta() {
                 }}
                 placeholder="Rua, número, bairro, cidade..."
                 icon={<MapPin size={15} />}
+                locais={locaisBusca}
+                onEscolherLocal={(l) => escolherLocal('origem', l)}
               />
               <ConferenciaCoordenada lat={dados.origem_lat || null} lng={dados.origem_lng || null}
                 conferida={confOrigem.conferida} semNumero={confOrigem.semNumero} viaLocal={confOrigem.viaLocal} uf={dados.origem_uf_estimada ? '' : dados.origem_uf}
@@ -1154,17 +1242,7 @@ function FormularioEscolta() {
                     onSalvar={(nome, uf) => salvarComoLocal(nome, dados.destino_endereco, dados.destino_complemento, dados.destino_lat, dados.destino_lng, uf)} />
                 )}
               </div>
-              <AtalhosLocais campo="destino" locais={locais} selecionadoId={confDestino.localId} onEscolher={(l) => {
-                // Complemento do local; local sem complemento limpa o do endereço anterior,
-                // mas mantém o digitado antes de qualquer escolha.
-                const havia = enderecoEscolhido.current.destino
-                enderecoEscolhido.current.destino = l.endereco
-                setDados(d => ({ ...d, destino_endereco: l.endereco, destino_complemento: l.complemento ?? (havia ? '' : d.destino_complemento), destino_lat: l.latitude ?? 0, destino_lng: l.longitude ?? 0 }))
-                // Onda K: UF do local (conferida); local sem UF e com coordenada: pela coordenada.
-                if (l.uf) definirUf('destino', l.uf, false)
-                else ufPelaCoordenada('destino', l.latitude ?? 0, l.longitude ?? 0)
-                setConfDestino({ conferida: true, semNumero: false, viaLocal: l.nome, localId: l.id })
-              }} />
+              <AtalhosLocais campo="destino" locais={locais} selecionadoId={confDestino.localId} onEscolher={(l) => escolherLocal('destino', l)} />
               <AddressAutocomplete
                 value={dados.destino_endereco}
                 onChange={(addr, lat, lon, meta) => {
@@ -1186,6 +1264,8 @@ function FormularioEscolta() {
                 }}
                 placeholder="Rua, número, bairro, cidade..."
                 icon={<Flag size={15} />}
+                locais={locaisBusca}
+                onEscolherLocal={(l) => escolherLocal('destino', l)}
               />
               <ConferenciaCoordenada lat={dados.destino_lat || null} lng={dados.destino_lng || null}
                 conferida={confDestino.conferida} semNumero={confDestino.semNumero} viaLocal={confDestino.viaLocal} uf={dados.destino_uf_estimada ? '' : dados.destino_uf}

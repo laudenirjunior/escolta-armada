@@ -7,7 +7,7 @@ import {
   MapPin, ArrowRight, CheckCircle2, XCircle,
   UserCheck, Camera, ClipboardList, Navigation,
   ChevronRight, Shield, AlertCircle, Play, Octagon,
-  RotateCcw, Home, CalendarClock, Radio, Locate, FileDown
+  RotateCcw, Home, CalendarClock, Radio, FileDown
 } from 'lucide-react'
 import { printEscolta } from '@/utils/print'
 import { createClient } from '@/lib/supabase/client'
@@ -22,8 +22,6 @@ import {
   PODE_CANCELAR_ESCOLTA,
   PODE_VER_FINANCEIRO,
   PODE_ALTERAR_PERIODICIDADE,
-  PODE_PODER_TOTAL,
-  temPermissao,
 } from '@/lib/permissions'
 import { podeOperarEscolta } from '@/lib/acesso-escolta'
 import { minutosAteCheckin as calcularMinutosAteCheckin, inicioOperacaoEm, linhaCheckin, registrarCheckin, TIPO_CHECKIN, periodicidadePadraoDoCliente } from '@/lib/checkin'
@@ -35,11 +33,14 @@ import {
   JORNADA_ETAPAS as ETAPAS_JORNADA,
   FOTOS_POR_PONTO,
   exigeDialogoDedicado,
+  mostrarChecklistPendente,
+  preInicioConcluido,
 } from '@/lib/fluxo-escolta'
 import {
   TEXTO_PADRAO_ETAPA,
   TEXTO_PADRAO_PONTO,
   TEXTO_PADRAO_MATERIAIS,
+  TEXTO_PADRAO_VIATURA,
   SUGESTAO_PARADA,
   SUGESTOES_WIZARD,
   SUGESTOES_PARADA,
@@ -65,13 +66,18 @@ import { COLUNAS_ANULACAO, textoAnulado, type Anulacao } from '@/lib/gestao'
 import { novoId, lerSnapshot } from '@/lib/offline/fila'
 import { prepararFoto, MENSAGEM_GUARDADO, type FotoPreparada, type LinhasEnvelope, type EtapaEnvelope } from '@/lib/offline/registro-campo'
 import { aplicarPendentes, lerPendentes } from '@/lib/offline/pendentes'
-import { gpsRapido, obterGpsPreciso, textoPrecisao } from '@/lib/gps'
+import { assinarGps, gpsRapido, iniciarRastreioGps, leituraParaConfirmar, textoPrecisao, type LeituraGps } from '@/lib/gps'
 import { foiCarimbada, marcarCarimbada } from '@/lib/foto-captura'
 import { aplicarCarimbo, reduzirECarimbarImagem } from '@/lib/carimbo-foto'
 import {
   FOTO_SEM_CONEXAO, aparelhoSemRede, conferirEspacoParaFoto, envelopeLigado, erroDeRede, fotosDosPendentes,
   gravarPeloEnvelope, horaDaCaptura, textoConflito, textoErroGravacao, textoRecusado, urlsDosPendentes,
 } from '@/lib/offline/tela'
+import { emParalelo, FOTOS_EM_PARALELO } from '@/lib/offline/envio'
+import { FaixaAndamento } from '@/components/ui/faixa-andamento'
+import { RegistrarOcorrenciaGestao } from '@/components/escolta/registrar-ocorrencia-gestao'
+import { ErroJuntoAoBotao, levarAoCampo } from '@/components/ui/erro-junto'
+import { ALTURA_MAX_MINIATURA, MiniaturaAmpliavel } from '@/components/ui/miniatura-ampliavel'
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
 
@@ -315,6 +321,88 @@ const TIPO_ICON_MAP: Record<string, { color: string; bg: string; label: string }
 
 // ─── CameraInput ─────────────────────────────────────────────────────────────
 
+// ── Onda O (A2): ponto de GPS mostrado nas janelas ─────────────────────────────
+type PontoGps = { lat: number; lng: number; precisao: number; endereco: string; enderecoPronto?: boolean }
+
+/** Distância aproximada em metros (bastante para decidir se o endereço ainda vale). */
+function distanciaM(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
+  const dy = (a.lat - b.lat) * 111_320
+  const dx = (a.lng - b.lng) * 111_320 * Math.cos((a.lat * Math.PI) / 180)
+  return Math.sqrt(dx * dx + dy * dy)
+}
+
+/** Leitura nova vira ponto; perto da anterior (até 50 m), mantém o endereço já achado. */
+function pontoDaLeitura(l: LeituraGps, anterior: PontoGps | null): PontoGps {
+  if (anterior && distanciaM(anterior, l) <= 50) return { ...anterior, lat: l.lat, lng: l.lng, precisao: l.precisao }
+  return { lat: l.lat, lng: l.lng, precisao: l.precisao, endereco: `${l.lat.toFixed(5)}, ${l.lng.toFixed(5)}`, enderecoPronto: false }
+}
+
+// Onda O (A3): quadro de localização com ALTURA FIXA desde a abertura. No teste de 07/11 o
+// quadro crescia quando o GPS chegava, o botão Confirmar descia e o clique caía no item errado.
+// Endereço em uma linha (completo no title); lendo, pronto ou sem sinal ocupam o mesmo espaço.
+const ALTURA_QUADRO_GPS = 72
+
+function QuadroLocalizacao({ ponto, carregando, onTentar, exigeGps = false }: {
+  ponto: PontoGps | null
+  carregando: boolean
+  onTentar: () => void
+  /** Check-in e parada só gravam com coordenada; as etapas seguem sem sinal. */
+  exigeGps?: boolean
+}) {
+  const ok = !!ponto
+  const linha: React.CSSProperties = { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }
+  return (
+    <div
+      data-quadro-gps
+      className="flex items-start gap-2 p-3"
+      style={{ height: ALTURA_QUADRO_GPS, boxSizing: 'border-box', overflow: 'hidden', backgroundColor: ok ? '#EBF5F1' : '#F5F7FA', border: `1px solid ${ok ? '#BFE3D0' : '#E2E8EC'}` }}
+    >
+      <MapPin size={13} style={{ color: ok ? '#1E7C52' : '#53648A', flexShrink: 0, marginTop: 2 }} />
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#A8B8C2' }}>Localização GPS</p>
+        {carregando && !ok ? (
+          <>
+            <p style={{ fontSize: '12px', fontWeight: 700, color: '#53648A', ...linha }}>Lendo o GPS (até 3 s)...</p>
+            <p style={{ fontSize: '10px', color: '#A8B8C2', ...linha }}>O Confirmar fica livre em seguida.</p>
+          </>
+        ) : ok ? (
+          <>
+            <p title={ponto.endereco} style={{ fontSize: '12px', fontWeight: 700, color: '#0E1A33', ...linha }}>{ponto.endereco}</p>
+            <p data-precisao-gps style={{ fontSize: '10px', color: ponto.precisao > 100 ? '#B83832' : '#6B7E8A', ...linha }}>
+              {textoPrecisao(ponto.precisao)}{ponto.precisao > 100 ? ', o ponto melhora sozinho se o sinal melhorar' : ''}
+            </p>
+          </>
+        ) : (
+          <>
+            <button type="button" onClick={onTentar} style={{ fontSize: '11px', fontWeight: 700, color: '#B83832', textAlign: 'left', ...linha, display: 'block', maxWidth: '100%' }}>
+              GPS indisponível, toque para tentar de novo
+            </button>
+            <p style={{ fontSize: '10px', color: '#A8B8C2', ...linha }}>{exigeGps ? 'Este registro precisa da localização.' : 'Sem sinal o registro segue, marcado sem localização.'}</p>
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** Onda O (A2): endereço do ponto buscado depois da leitura, sem segurar o Confirmar. */
+function useEnderecoDoPonto(
+  ponto: PontoGps | null,
+  definir: React.Dispatch<React.SetStateAction<PontoGps | null>>,
+  reverseGeocode: (lat: number, lng: number) => Promise<string>,
+) {
+  useEffect(() => {
+    if (!ponto || ponto.enderecoPronto) return
+    let vivo = true
+    const { lat, lng } = ponto
+    reverseGeocode(lat, lng).then((endereco) => {
+      if (vivo) definir(g => (g && g.lat === lat && g.lng === lng ? { ...g, endereco, enderecoPronto: true } : g))
+    }).catch(() => {})
+    return () => { vivo = false }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ponto?.lat, ponto?.lng, ponto?.enderecoPronto])
+}
+
 function CameraInput({
   onChange,
   max = 1,
@@ -458,10 +546,12 @@ function CameraInput({
         onChange={handleFileInput}
       />
       {fotos.length > 0 && (
-        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: '6px', marginBottom: '6px' }}>
+        // Onda O (M7): miniaturas de até 160 px (antes a prévia ocupava a largura toda e, no
+        // computador, a tela inteira); toque amplia.
+        <div data-previa-fotos style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, minmax(0, ${ALTURA_MAX_MINIATURA}px))`, gap: '6px', marginBottom: '6px' }}>
           {fotos.map((f, idx) => (
-            <div key={idx} style={{ position: 'relative', aspectRatio: '1' }}>
-              <img src={f.url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            <div key={idx} style={{ position: 'relative', aspectRatio: '1', maxHeight: ALTURA_MAX_MINIATURA }}>
+              <MiniaturaAmpliavel src={f.url} alt={`Foto ${idx + 1}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               <button type="button" onClick={() => remover(idx)}
                 style={{ position: 'absolute', top: 2, right: 2, backgroundColor: '#B83832', color: '#fff', width: '16px', height: '16px', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: 'none', cursor: 'pointer', lineHeight: 1 }}>
                 ×
@@ -481,7 +571,7 @@ function CameraInput({
         </div>
       )}
       {fotos.length === 0 && (
-        <button type="button" onClick={abrirCamera}
+        <button type="button" onClick={abrirCamera} data-campo-fotos data-vazio="true"
           className="flex items-center justify-center gap-2 w-full font-black uppercase tracking-widest text-white transition-all active:scale-[0.98]"
           style={{ height: '42px', backgroundColor: '#1A294A', fontSize: '10px', letterSpacing: '0.12em' }}
           onMouseEnter={e => { (e.currentTarget as HTMLElement).style.backgroundColor = '#253562' }}
@@ -695,7 +785,7 @@ const STATUS_INFO: Record<string, { label: string; cls: string }> = Object.fromE
 )
 
 const TIPOS_PARADA = [
-  { value: 'reporte_periodico', label: 'Reporte Periódico',    cor: '#1E7C52' },
+  { value: 'reporte_periodico', label: 'Check-in',             cor: '#1E7C52' },
   { value: 'registro_parada',   label: 'Registro de Parada',   cor: '#8B6914' },
   { value: 'em_transito',       label: 'Em Trânsito',          cor: '#53648A' },
   { value: 'parada_curta',      label: 'Parada Curta',         cor: '#8B6914' },
@@ -739,6 +829,10 @@ export default function EscoltaDetalhePage() {
   const [ocorrencias, setOcorrencias] = useState<OcorrenciaItem[]>([])
   const [timeline, setTimeline] = useState<TimelineItem[]>([])
   const [loading, setLoading] = useState(true)
+  // Onda O (A1): o que a gravação está fazendo agora ("Enviando foto 3 de 7"), para a tela
+  // nunca ficar parada só com "Iniciando...". Zera quando a tela é liberada.
+  const [andamento, setAndamento] = useState<string | null>(null)
+  useEffect(() => { if (!loading) setAndamento(null) }, [loading])
   const [tab, setTab] = useState<Tab>('geral')
   const [selectedPhoto, setSelectedPhoto] = useState<{ url: string; titulo: string } | null>(null)
   const [selectedTimelineItem, setSelectedTimelineItem] = useState<TimelineItem | null>(null)
@@ -766,7 +860,10 @@ export default function EscoltaDetalhePage() {
   const [novaDataReagendamento, setNovaDataReagendamento] = useState('')
   const [novaHoraReagendamento, setNovaHoraReagendamento] = useState('08:00')
   const [cancelando, setCancelando] = useState(false)
+  const [dialogOcorrenciaGestao, setDialogOcorrenciaGestao] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
+  // Onda O (M9): com erro de validação, a janela rola até o campo com problema.
+  useEffect(() => { if (erro) requestAnimationFrame(() => levarAoCampo(erro)) }, [erro])
   // Aviso proprio, e nao `erro`: carregar() zera `erro` no recarregamento seguinte, e a
   // ausencia de posicao precisa continuar visivel depois que o dialogo fecha.
   const [avisoSemGps, setAvisoSemGps] = useState(false)
@@ -813,15 +910,15 @@ export default function EscoltaDetalhePage() {
   // fotos: lista de ate FOTOS_POR_PONTO.max, e nao uma foto unica.
   const [fotosCheckin, setFotosCheckin] = useState<File[]>([])
   const [obsCheckin, setObsCheckin] = useState<string>(TEXTO_PADRAO_PONTO.checkin)
-  const [gpsCheckin, setGpsCheckin] = useState<{ lat: number; lng: number; precisao: number; endereco: string } | null>(null)
+  const [gpsCheckin, setGpsCheckin] = useState<PontoGps | null>(null)
   const [gpsCheckinLoading, setGpsCheckinLoading] = useState(false)
 
   // GPS da Parada
-  const [gpsParada, setGpsParada] = useState<{ lat: number; lng: number; precisao: number; endereco: string } | null>(null)
+  const [gpsParada, setGpsParada] = useState<PontoGps | null>(null)
   const [gpsParadaLoading, setGpsParadaLoading] = useState(false)
 
   // GPS das ações de jornada (Origem / Destino / Retorno) — capturado ao abrir o diálogo
-  const [gpsAcao, setGpsAcao] = useState<{ lat: number; lng: number; precisao: number; endereco: string } | null>(null)
+  const [gpsAcao, setGpsAcao] = useState<PontoGps | null>(null)
   const [gpsAcaoLoading, setGpsAcaoLoading] = useState(false)
 
   // Checklist tracking
@@ -886,7 +983,8 @@ export default function EscoltaDetalhePage() {
   const [fotosViatura, setFotosViatura] = useState<Record<string, File | null>>(
     Object.fromEntries(FOTOS_VIATURA_DEF.map(f => [f.key, null]))
   )
-  const [obsViatura, setObsViatura] = useState('')
+  // Onda O (M4): abre preenchida como a do Passo 1.
+  const [obsViatura, setObsViatura] = useState<string>(TEXTO_PADRAO_VIATURA)
 
   const [kmPartida, setKmPartida] = useState<KmPorViatura>({})
   const [fotosPartida, setFotosPartida] = useState<FotosPorViatura>({})
@@ -1461,17 +1559,17 @@ export default function EscoltaDetalhePage() {
       // iniciar a escolta assim mesmo.
       const pos = await obterPosicaoPonto()
 
-      // 1. Upload Fotos
-      const fotoMatId = await uploadFoto(fotoMateriais, 'wizard_materiais', pos.latitude, pos.longitude, pos.precisao_metros, TIPO_FOTO_IDS.CHECKLIST_MATERIAL)
-
-      // Upload das 5 fotos obrigatórias da viatura
+      // 1. Upload Fotos (onda O, A1: a dos materiais e as 5 da viatura juntas, até 3 por vez)
+      const envios: Array<{ chave: string; file: File; prefixo: string; tipoId: string }> = [
+        { chave: 'materiais', file: fotoMateriais, prefixo: 'wizard_materiais', tipoId: TIPO_FOTO_IDS.CHECKLIST_MATERIAL },
+        ...FOTOS_VIATURA_DEF.flatMap(def => fotosViatura[def.key]
+          ? [{ chave: def.key, file: fotosViatura[def.key] as File, prefixo: `wizard_viatura_${def.key}`, tipoId: def.tipoId }]
+          : []),
+      ]
+      const idsEnviados = await enviarFotosComAndamento(envios, (e) => uploadFoto(e.file, e.prefixo, pos.latitude, pos.longitude, pos.precisao_metros, e.tipoId))
+      const fotoMatId = idsEnviados[0]
       const fotosViaturaIds: Record<string, string | null> = {}
-      for (const def of FOTOS_VIATURA_DEF) {
-        const file = fotosViatura[def.key]
-        if (file) {
-          fotosViaturaIds[def.key] = await uploadFoto(file, `wizard_viatura_${def.key}`, pos.latitude, pos.longitude, pos.precisao_metros, def.tipoId)
-        }
-      }
+      envios.forEach((e, i) => { if (i > 0) fotosViaturaIds[e.chave] = idsEnviados[i] })
 
       // 2. Salvar Checklist Materiais
       // LACUNA DECLARADA: os dois checklists de partida (materiais e viatura, com as 5
@@ -1659,10 +1757,26 @@ export default function EscoltaDetalhePage() {
     }
   }
 
+  // ── Onda O (A2): GPS contínuo ──────────────────────────────────────────────────
+  // Liga na primeira janela de campo (ou no assistente de partida) e fica ligado até sair
+  // da tela: as próximas janelas já abrem com a leitura pronta. Quem só consulta a escolta
+  // não liga o GPS (sem pedido de permissão para a gestão).
+  const pararGpsRef = useRef<(() => void) | null>(null)
+  const ligarGps = () => { if (!pararGpsRef.current) pararGpsRef.current = iniciarRastreioGps() }
+  useEffect(() => () => { pararGpsRef.current?.(); pararGpsRef.current = null }, [])
+  // No assistente de partida o GPS liga logo: até as 7 fotos ficarem prontas, a leitura chegou.
+  useEffect(() => { if (escolta?.status === 'em_pre_inicio') ligarGps() }, [escolta?.status])
+
   // ── Obter GPS local com fallback ─────────────────────────────────────────────
   // Onda M (B3): alta precisão (15 s), depois rede (10 s, cache de 30 s); se a leitura vier
   // pior que 100 m, nova tentativa de até 10 s, gravando a melhor (lib/gps.ts).
-  const obterGPS = (): Promise<{ lat: number; lng: number; precisao: number }> => obterGpsPreciso()
+  // Onda O (A2): no máximo 3 s com a melhor leitura disponível (lib/gps.ts, GPS contínuo).
+  const obterGPS = async (): Promise<{ lat: number; lng: number; precisao: number }> => {
+    ligarGps()
+    const l = await leituraParaConfirmar()
+    if (!l) throw new Error('GPS sem leitura')
+    return l
+  }
 
   /**
    * Guardas de entrada dos handlers da jornada, verificadas antes de qualquer chamada
@@ -1705,7 +1819,7 @@ export default function EscoltaDetalhePage() {
 
   const conferirEtapa = async (escoltaId: string, statusEsperado: string) => {
     // Onda L (16.3.10): sem rede, pula; a conferência fica no servidor (conflito, nunca descarte).
-    if (gravacaoRef.current?.semRede) return
+    if (gravacaoRef.current?.semRede || gravacaoRef.current?.pularConferencia) return
     const { data, error } = await sb.from('escoltas').select('status').eq('id', escoltaId).maybeSingle()
     if (error && gravacaoRef.current && erroDeRede(error)) return
     if (error) throw new Error(error.message)
@@ -1734,6 +1848,7 @@ export default function EscoltaDetalhePage() {
     if (gpsAcao) {
       return { latitude: gpsAcao.lat, longitude: gpsAcao.lng, precisao_metros: gpsAcao.precisao, sem_sinal_gps: false }
     }
+    setAndamento('Lendo o GPS')
     try {
       const { lat, lng, precisao } = await obterGPS()
       return { latitude: lat, longitude: lng, precisao_metros: precisao, sem_sinal_gps: false }
@@ -1757,13 +1872,15 @@ export default function EscoltaDetalhePage() {
     statusEsperado: string | null
     quando: string
     semRede: boolean
+    /** Onda O (M3): a etapa anterior ficou guardada no aparelho; a conferência fica no servidor. */
+    pularConferencia?: boolean
   } | null>(null)
 
-  const iniciarGravacao = async () => {
+  const iniciarGravacao = async (opcoes: { pularConferencia?: boolean } = {}) => {
     gravacaoRef.current = null
     const env = await envelopeLigado()
     if (env.usar) {
-      gravacaoRef.current = { fotos: [], linhas: {}, etapa: null, statusEsperado: null, quando: new Date().toISOString(), semRede: aparelhoSemRede() }
+      gravacaoRef.current = { fotos: [], linhas: {}, etapa: null, statusEsperado: null, quando: new Date().toISOString(), semRede: aparelhoSemRede(), pularConferencia: opcoes.pularConferencia }
     }
   }
 
@@ -1801,10 +1918,10 @@ export default function EscoltaDetalhePage() {
    * vez, depois de aplicado, com as duas horas se foi feito sem conexão). Guardado,
    * conflito e recusado ficam no aviso da tela.
    */
-  const fecharGravacao = async (params: Parameters<typeof notificarTelegram>[0]) => {
+  const fecharGravacao = async (params: Parameters<typeof notificarTelegram>[0], semEspera = false): Promise<'aplicado' | 'guardado' | 'conflito' | 'recusado'> => {
     const g = gravacaoRef.current
     gravacaoRef.current = null
-    if (!g) { notificarTelegram(params); return }
+    if (!g) { notificarTelegram(params); setAndamento('Atualizando a tela'); return 'aplicado' }
     const efetivos = viaturas.flatMap(v => v.efetivo)
       .map(e => `${e.vigilante?.nome_completo ?? '—'}${e.papel_na_escolta ? ` (${e.papel_na_escolta})` : ''}`)
     const placas = viaturas.map((v) => v.veiculo?.placa).filter((p): p is string => Boolean(p))
@@ -1836,11 +1953,13 @@ export default function EscoltaDetalhePage() {
         fotoCaminho: params.fotoId ? g.fotos.find(f => f.id === params.fotoId)?.caminho ?? null : null,
         soSeAvancou: !!g.etapa,
       },
-    })
-    if (r.modo === 'guardado') setAvisoOffline({ tipo: 'guardado', texto: MENSAGEM_GUARDADO })
-    else if (r.modo === 'recusado') setAvisoOffline({ tipo: 'erro', texto: textoRecusado(r.erro) })
-    else if (r.resultado === 'conflito') setAvisoOffline({ tipo: 'erro', texto: textoConflito(r.motivo) })
-    else setAvisoOffline(null)
+    }, setAndamento, semEspera)
+    setAndamento('Atualizando a tela')
+    if (r.modo === 'guardado') { setAvisoOffline({ tipo: 'guardado', texto: MENSAGEM_GUARDADO }); return 'guardado' }
+    if (r.modo === 'recusado') { setAvisoOffline({ tipo: 'erro', texto: textoRecusado(r.erro) }); return 'recusado' }
+    if (r.resultado === 'conflito') { setAvisoOffline({ tipo: 'erro', texto: textoConflito(r.motivo) }); return 'conflito' }
+    setAvisoOffline(null)
+    return 'aplicado'
   }
 
   // ── Upload de Foto ───────────────────────────────────────────────────────────
@@ -1857,7 +1976,8 @@ export default function EscoltaDetalhePage() {
       return f.id
     }
     const ext = file.name.split('.').pop() ?? 'jpg'
-    const path = `${prefix}/${escolta!.id}/${Date.now()}.${ext}`
+    // Onda O (A1): fotos sobem em paralelo; o sufixo evita dois nomes iguais no mesmo milissegundo.
+    const path = `${prefix}/${escolta!.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`
     const { error: upErr } = await sb.storage.from('fotos').upload(path, file)
     if (upErr) throw new Error(`Erro no upload da foto: ${upErr.message}`)
 
@@ -1881,6 +2001,23 @@ export default function EscoltaDetalhePage() {
   }
 
   /**
+   * Onda O (A1): sobe uma lista de fotos com no máximo 3 em paralelo, publicando
+   * "Enviando foto k de n" no caminho direto. Pelo envelope a "subida" é só preparar a linha
+   * (a fila sobe depois, com o próprio andamento), então não mostra nada aqui.
+   */
+  const enviarFotosComAndamento = async <T,>(itens: T[], subir: (item: T) => Promise<string | null>): Promise<(string | null)[]> => {
+    const direto = !gravacaoRef.current
+    let feitas = 0
+    if (direto && itens.length > 0) setAndamento(`Enviando foto 1 de ${itens.length}`)
+    return emParalelo(itens, FOTOS_EM_PARALELO, async (item) => {
+      const id = await subir(item)
+      feitas++
+      if (direto) setAndamento(feitas < itens.length ? `Enviando foto ${feitas + 1} de ${itens.length}` : 'Gravando no sistema')
+      return id
+    })
+  }
+
+  /**
    * Sobe as fotos de um ponto de controle e devolve os ids na ordem.
    * A regra e FOTOS_POR_PONTO (onda M: 1 a 3 por ponto). O bloqueio do minimo
    * fica em cada handler, porque a mensagem de erro precisa citar o ponto.
@@ -1892,11 +2029,9 @@ export default function EscoltaDetalhePage() {
     lng: number | null,
     prec: number | null,
   ): Promise<string[]> => {
-    const ids: string[] = []
-    for (const file of files.slice(0, FOTOS_POR_PONTO.max)) {
-      const id = await uploadFoto(file, prefix, lat, lng, prec)
-      if (id) ids.push(id)
-    }
+    // Onda O (A1): até 3 fotos em paralelo, mantendo a ordem dos ids.
+    const ids = (await enviarFotosComAndamento(files.slice(0, FOTOS_POR_PONTO.max), (file) => uploadFoto(file, prefix, lat, lng, prec)))
+      .filter((id): id is string => !!id)
     if (ids.length < FOTOS_POR_PONTO.min) {
       throw new Error('Nenhuma foto pôde ser enviada. Verifique a conexão e tente novamente.')
     }
@@ -2255,10 +2390,10 @@ export default function EscoltaDetalhePage() {
     setViaturaCheckinId(viaturas.length === 1 ? viaturas[0].id : minhaViaturaId ?? '')
     setDialogCheckin(true)
     setGpsCheckinLoading(true)
+    // Onda O (A2): até 3 s; o endereço vem depois, sem segurar o Confirmar.
     try {
-      const { lat, lng, precisao } = await obterGPS()
-      const endereco = await reverseGeocode(lat, lng)
-      setGpsCheckin({ lat, lng, precisao, endereco })
+      const l = await obterGPS()
+      setGpsCheckin(g => pontoDaLeitura(l, g))
     } catch {
       // GPS falhou — usuário pode tentar novamente
     } finally {
@@ -2323,10 +2458,10 @@ export default function EscoltaDetalhePage() {
   const capturarGpsAcao = useCallback(async () => {
     setGpsAcao(null)
     setGpsAcaoLoading(true)
+    // Onda O (A2): até 3 s; o endereço vem depois, sem segurar o Confirmar.
     try {
-      const { lat, lng, precisao } = await obterGPS()
-      const endereco = await reverseGeocode(lat, lng)
-      setGpsAcao({ lat, lng, precisao, endereco })
+      const l = await obterGPS()
+      setGpsAcao(g => pontoDaLeitura(l, g))
     } catch {
       // GPS falhou — operador pode tentar novamente
     } finally {
@@ -2349,27 +2484,27 @@ export default function EscoltaDetalhePage() {
     }
   }, [dialogStartBase, dialogChegadaOrigem, dialogTransitoDestino, dialogChegadaDestino, dialogTransitoRetorno, dialogIniciarRetorno, dialogChegadaBase, capturarGpsAcao])
 
+  // Onda O (A2): com a janela aberta, leitura melhor que chegar depois troca o ponto.
+  const janelaAcaoAberta = dialogStartBase || dialogChegadaOrigem || dialogTransitoDestino || dialogChegadaDestino ||
+    dialogTransitoRetorno || dialogIniciarRetorno || dialogChegadaBase
+  useEffect(() => {
+    if (!janelaAcaoAberta && !dialogCheckin && !dialogParada) return
+    return assinarGps((l) => {
+      if (janelaAcaoAberta) setGpsAcao(g => pontoDaLeitura(l, g))
+      if (dialogCheckin) setGpsCheckin(g => pontoDaLeitura(l, g))
+      if (dialogParada) setGpsParada(g => pontoDaLeitura(l, g))
+    })
+  }, [janelaAcaoAberta, dialogCheckin, dialogParada])
+  // Endereço do ponto, buscado depois da leitura (não segura o Confirmar).
+  useEnderecoDoPonto(gpsAcao, setGpsAcao, reverseGeocode)
+  useEnderecoDoPonto(gpsCheckin, setGpsCheckin, reverseGeocode)
+  useEnderecoDoPonto(gpsParada, setGpsParada, reverseGeocode)
+
   // Cartão de status do GPS exibido nos diálogos de jornada
   const renderGpsAcao = () => (
-    <div className="flex items-start gap-2 p-3" style={{ backgroundColor: gpsAcao ? '#EBF5F1' : '#F5F7FA', border: `1px solid ${gpsAcao ? '#BFE3D0' : '#E2E8EC'}` }}>
-      <MapPin size={13} style={{ color: gpsAcao ? '#1E7C52' : '#53648A', flexShrink: 0, marginTop: 2 }} />
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: '#A8B8C2' }}>Localização GPS</p>
-        {gpsAcaoLoading ? (
-          <p style={{ fontSize: '12px', fontWeight: 700, color: '#53648A' }}>Obtendo localização...</p>
-        ) : gpsAcao ? (
-          <>
-            <p style={{ fontSize: '12px', fontWeight: 700, color: '#0E1A33', wordBreak: 'break-word' }}>{gpsAcao.endereco}</p>
-            <p data-precisao-gps style={{ fontSize: '10px', color: gpsAcao.precisao > 100 ? '#B83832' : '#6B7E8A' }}>{textoPrecisao(gpsAcao.precisao)}</p>
-          </>
-        ) : (
-          <button type="button" onClick={capturarGpsAcao} style={{ fontSize: '11px', fontWeight: 700, color: '#B83832', textAlign: 'left' }}>
-            GPS indisponível — tocar para tentar novamente
-          </button>
-        )}
-      </div>
-    </div>
+    <QuadroLocalizacao ponto={gpsAcao} carregando={gpsAcaoLoading} onTentar={capturarGpsAcao} />
   )
+
 
   const salvarPeriodicidade = async () => {
     if (!escolta) return
@@ -2587,49 +2722,7 @@ export default function EscoltaDetalhePage() {
   // ── 5. Iniciar Retorno ───────────────────────────────────────────────────────
   // ── ETAPA NOVA: Trânsito para o Retorno (no_destino -> em_transito_retorno) ──
   // Sem este ponto registrado, a trigger do banco recusa a conclusão do retorno.
-  const handleIniciarTransitoRetorno = async () => {
-    if (!escolta) return
-    if (!validarPreRequisitos()) return
-    const faltamFotos = erroFotosFaltando(fotosTransitoRetorno, 'do trânsito de retorno')
-    if (faltamFotos) { setErro(faltamFotos); return }
-    setLoading(true)
-    setErro(null)
-    try {
-      await iniciarGravacao()
-      const pos = await obterPosicaoPonto()
-
-      const fotoPrincipal = await gravarPontosPorViatura({
-        escoltaId: escolta.id,
-        statusEsperado: escolta.status,
-        fotos: fotosTransitoRetorno,
-        prefixo: 'transito_retorno',
-        tipoPontoId: TIPO_PONTO_IDS.TRANSITO_RETORNO,
-        tipo: 'transito_retorno',
-        tipoLabel: 'Trânsito para o Retorno',
-        observacao: obsTransitoRetorno,
-        pos,
-        transicao: { statusNovo: 'em_transito_retorno', observacao: comporObservacao(obsTransitoRetorno) ?? 'Trânsito de retorno iniciado.' },
-      })
-
-      // Status e histórico já gravados junto dos pontos, numa transação (registrar_etapa_escolta, lote 2026-10).
-
-      await fecharGravacao({
-        titulo: 'Trânsito de Retorno Iniciado',
-        status_atual: 'Trânsito p/ Retorno',
-        descricao: descricaoTelegram(obsTransitoRetorno, TEXTO_PADRAO_PONTO.transitoRetorno),
-        fotoId: fotoPrincipal,
-      })
-
-      setDialogTransitoRetorno(false)
-      setObsTransitoRetorno(TEXTO_PADRAO_PONTO.transitoRetorno)
-      setFotosTransitoRetorno({})
-      setAvisoSemGps(pos.sem_sinal_gps)
-      carregar()
-    } catch (err) {
-      setErro(err instanceof Error ? err.message : 'Erro ao iniciar o trânsito de retorno.')
-      setLoading(false)
-    }
-  }
+  // Onda O (M3): o trânsito de retorno sozinho saiu; a janela grava as duas etapas (handleRetornoUmToque).
 
   const handleIniciarRetorno = async () => {
     if (!escolta) return
@@ -2673,6 +2766,82 @@ export default function EscoltaDetalhePage() {
     } catch (err) {
       setErro(err instanceof Error ? err.message : 'Erro ao iniciar retorno.')
       setLoading(false)
+    }
+  }
+
+  // ── Onda O (M3): retorno em um toque ─────────────────────────────────────────
+  // "Trânsito de retorno" e "Retorno" eram duas etapas quase iguais. Sem mexer na máquina de
+  // estados nem no banco: um botão grava as duas transições em sequência (no_destino ->
+  // em_transito_retorno -> retornando), pela mesma gravação de sempre, com a mesma foto e a
+  // mesma observação. Se a primeira não for aplicada (conflito ou recusa), a segunda não sai;
+  // se só ficou guardada no aparelho, a segunda entra na fila logo atrás dela.
+  const handleRetornoUmToque = async () => {
+    if (!escolta) return
+    if (!validarPreRequisitos()) return
+    const faltamFotos = erroFotosFaltando(fotosTransitoRetorno, 'do retorno')
+    if (faltamFotos) { setErro(faltamFotos); return }
+    setLoading(true)
+    setErro(null)
+    try {
+      await iniciarGravacao()
+      const pos = await obterPosicaoPonto()
+      const obs = obsTransitoRetorno
+      setAndamento('Retorno, parte 1 de 2')
+      const foto1 = await gravarPontosPorViatura({
+        escoltaId: escolta.id,
+        statusEsperado: escolta.status,
+        fotos: fotosTransitoRetorno,
+        prefixo: 'transito_retorno',
+        tipoPontoId: TIPO_PONTO_IDS.TRANSITO_RETORNO,
+        tipo: 'transito_retorno',
+        tipoLabel: 'Trânsito para o Retorno',
+        observacao: obs,
+        pos,
+        transicao: { statusNovo: 'em_transito_retorno', observacao: comporObservacao(obs) ?? 'Trânsito de retorno iniciado.' },
+      })
+      const r1 = await fecharGravacao({
+        titulo: 'Trânsito de Retorno Iniciado',
+        status_atual: 'Trânsito p/ Retorno',
+        descricao: descricaoTelegram(obs, TEXTO_PADRAO_PONTO.transitoRetorno),
+        fotoId: foto1,
+      })
+      if (r1 === 'conflito' || r1 === 'recusado') {
+        setDialogTransitoRetorno(false)
+        carregar()
+        return
+      }
+
+      await iniciarGravacao({ pularConferencia: r1 === 'guardado' })
+      setAndamento('Retorno, parte 2 de 2')
+      const foto2 = await gravarPontosPorViatura({
+        escoltaId: escolta.id,
+        statusEsperado: 'em_transito_retorno',
+        fotos: fotosTransitoRetorno,
+        prefixo: 'retorno',
+        tipoPontoId: TIPO_PONTO_IDS.RETORNO,
+        tipo: 'retorno',
+        tipoLabel: 'Retorno',
+        observacao: obs,
+        pos,
+        transicao: { statusNovo: 'retornando', observacao: comporObservacao(obs) ?? 'Retorno iniciado.' },
+      })
+      await fecharGravacao({
+        titulo: 'Retorno Iniciado',
+        status_atual: 'Em Retorno',
+        descricao: descricaoTelegram(obs, TEXTO_PADRAO_PONTO.retorno),
+        fotoId: foto2,
+      }, r1 === 'guardado') // revisão cruzada 1: com a parte 1 no aparelho, a parte 2 não espera de novo
+
+      setDialogTransitoRetorno(false)
+      setObsTransitoRetorno(TEXTO_PADRAO_PONTO.transitoRetorno)
+      setFotosTransitoRetorno({})
+      setAvisoSemGps(pos.sem_sinal_gps)
+      carregar()
+    } catch (err) {
+      setErro(err instanceof Error ? err.message : 'Erro ao iniciar o retorno.')
+      setLoading(false)
+      // A primeira parte pode ter sido gravada: a tela relê e mostra a etapa certa.
+      carregar()
     }
   }
 
@@ -2935,14 +3104,13 @@ export default function EscoltaDetalhePage() {
       const pos = await obterPosicaoPonto()
       const { latitude: lat, longitude: lng, precisao_metros: precisao } = pos
 
-      // Upload das 5 fotos obrigatórias da viatura (entrega)
+      // Upload das 5 fotos obrigatórias da viatura (entrega). Onda O (A1): até 3 por vez.
       const fotosViatFinalIds: Record<string, string | null> = {}
-      for (const def of FOTOS_VIATURA_DEF) {
-        const file = fotosViaturaFinal[def.key]
-        if (file) {
-          fotosViatFinalIds[def.key] = await uploadFoto(file, `final_viatura_${def.key}`, lat, lng, precisao, def.tipoId)
-        }
-      }
+      const defsComFoto = FOTOS_VIATURA_DEF.filter(def => fotosViaturaFinal[def.key])
+      const idsFinal = await enviarFotosComAndamento(defsComFoto, (def) =>
+        uploadFoto(fotosViaturaFinal[def.key] as File, `final_viatura_${def.key}`, lat, lng, precisao, def.tipoId))
+      defsComFoto.forEach((def, i) => { fotosViatFinalIds[def.key] = idsFinal[i] })
+      setAndamento('Gravando a finalização')
 
       // 1. Criar registro de checklist de entrega de viatura
       // LACUNA DECLARADA: com duas viaturas, o checklist de entrega e as 5 fotos de
@@ -2966,30 +3134,32 @@ export default function EscoltaDetalhePage() {
           pneus: 'lat_esq', oleo_agua: 'painel', farois: 'frente',
           armamentos: 'painel', limpeza: 'traseira',
         }
-        for (const item of ITENS_CHECKLIST_ENTREGA) {
-          const resp = checklistFinal[item.key]
-          const fotoKey = fotoKeyPorItemFinal[item.key] ?? 'frente'
-          await sb.from('checklist_respostas').insert({
-            checklist_id: cl.id,
-            descricao_item: item.label,
-            conforme: resp.resposta === true,
-            observacao: resp.obs.trim() || null,
-            foto_id: fotosViatFinalIds[fotoKey] ?? null,
-          })
-        }
-
-        // Registro fotográfico dos 5 ângulos
-        for (const def of FOTOS_VIATURA_DEF) {
-          if (fotosViatFinalIds[def.key]) {
-            await sb.from('checklist_respostas').insert({
+        // Onda O (A1): as respostas e o registro fotográfico dos 5 ângulos num insert só (as
+        // mesmas linhas de antes, na mesma ordem), em vez de dez idas ao banco.
+        const respostas = [
+          ...ITENS_CHECKLIST_ENTREGA.map((item) => {
+            const resp = checklistFinal[item.key]
+            const fotoKey = fotoKeyPorItemFinal[item.key] ?? 'frente'
+            return {
               checklist_id: cl.id,
-              descricao_item: `Foto entrega — ${def.label}`,
-              conforme: true,
-              observacao: null,
-              foto_id: fotosViatFinalIds[def.key],
-            })
-          }
-        }
+              descricao_item: item.label,
+              conforme: resp.resposta === true,
+              observacao: resp.obs.trim() || null,
+              foto_id: fotosViatFinalIds[fotoKey] ?? null,
+            }
+          }),
+          ...FOTOS_VIATURA_DEF.filter(def => fotosViatFinalIds[def.key]).map((def) => ({
+            checklist_id: cl.id,
+            descricao_item: `Foto entrega — ${def.label}`,
+            conforme: true,
+            observacao: null,
+            foto_id: fotosViatFinalIds[def.key],
+          })),
+        ]
+        // Revisão cruzada 3: o insert único é atômico; se falhar, nenhuma resposta entrou, e a
+        // escolta NÃO é finalizada (antes, com dez inserts soltos, finalizava com o checklist pela metade).
+        const { error: respErr } = await sb.from('checklist_respostas').insert(respostas)
+        if (respErr) throw new Error(`O checklist de entrega não foi gravado (${respErr.message}). A escolta não foi finalizada; tente de novo.`)
       }
 
       // 2. Atualizar status da escolta para finalizada
@@ -3012,6 +3182,7 @@ export default function EscoltaDetalhePage() {
 
       // 4. Enviar relatório executivo completo ao Telegram
       enviarRelatorioFinalTelegram()
+      setAndamento('Atualizando a tela')
 
       setDialogFinalizacao(false)
       setRelatorioFinal('')
@@ -3038,12 +3209,9 @@ export default function EscoltaDetalhePage() {
     setObsParada('')
     setFotosParada([])
     setDialogParada(true)
+    // Onda O (A2): até 3 s; o endereço vem depois.
     obterGPS()
-      .then(async ({ lat, lng, precisao }) => {
-        const endereco = await reverseGeocode(lat, lng)
-        setGpsParada({ lat, lng, precisao, endereco })
-        setGpsParadaLoading(false)
-      })
+      .then((l) => { setGpsParada(g => pontoDaLeitura(l, g)); setGpsParadaLoading(false) })
       .catch(() => setGpsParadaLoading(false))
   }
 
@@ -3167,12 +3335,21 @@ export default function EscoltaDetalhePage() {
   }
 
   const perfil = (user?.perfil?.codigo ?? '') as any
+  // Onda O (M1): textos que dependem de a operação ter começado e de haver comandante.
+  const operacaoIniciada = !['rascunho', 'agendada', 'em_pre_inicio', 'cancelada'].includes(escolta.status)
+  const temComandante = viaturas.some(v => v.efetivo.some(e => e.papel_na_escolta === 'comandante'))
+  const textoAgendadaPara = escolta.data_hora_prevista
+    ? `Agendada para ${new Date(escolta.data_hora_prevista).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }).replace(',', '')}`
+    : 'Agendada, sem data prevista'
   // Acoes operacionais: quem esta no efetivo desta escolta, qualquer perfil, ou a
   // gestao. Antes o Painel de Acoes aparecia para qualquer um que abrisse a escolta,
   // com botoes que a RLS recusaria.
   // Onda I: escolta arquivada não tem ação de campo nem de status (o banco recusa): só Recuperar.
   const arquivada = !!escolta.arquivada_em
   const podeOperar = podeOperarEscolta(perfil, vinculadoAEscolta) && !arquivada
+  // Onda O (B3): mesmos perfis da RLS de ocorrencias (gestão) ou quem opera a escolta.
+  const podeRegistrarOcorrencia = !arquivada && escolta.status !== 'cancelada' &&
+    (['administrador', 'gestor', 'supervisor', 'central'].includes(perfil) || podeOperar)
   const isSupervisorOrOperador = ['supervisor', 'operador'].includes(perfil)
   const isUnstarted = ['rascunho', 'agendada', 'em_pre_inicio'].includes(escolta.status)
 
@@ -3202,7 +3379,7 @@ export default function EscoltaDetalhePage() {
     { key: 'efetivo',     label: 'Efetivo',     count: totalEfetivo },
     { key: 'veiculos',    label: 'Veículos',    count: viaturas.length },
     { key: 'ocorrencias', label: 'Ocorrências', count: ocorrencias.length },
-    ...(verFinanceiroDet ? [{ key: 'financeiro' as Tab, label: '💰 Financeiro' }] : []),
+    ...(verFinanceiroDet ? [{ key: 'financeiro' as Tab, label: 'Financeiro' }] : []),
   ]
 
   // ── Renderização do Wizard Guiado de Partida (Checklist) ─────────────────────
@@ -3249,9 +3426,6 @@ export default function EscoltaDetalhePage() {
 
         {/* Wizard content */}
         <div className="card-light p-6 space-y-5">
-          {erro && (
-            <p className="text-xs p-3 rounded" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-          )}
 
           {/* STEP 1: MATERIAIS */}
           {wizardStep === 1 && (
@@ -3296,6 +3470,7 @@ export default function EscoltaDetalhePage() {
                 <SugestoesTexto className="mt-2" titulo="Sugestões (toque para inserir e edite)" sugestoes={SUGESTOES_WIZARD.materiais} onInserir={(f) => setObsMateriais(v => juntarSugestao(v, f))} />
               </div>
 
+              <ErroJuntoAoBotao texto={erro} />
               <div className="flex justify-end pt-3 border-t">
                 <button
                   type="button"
@@ -3478,6 +3653,7 @@ export default function EscoltaDetalhePage() {
                 </div>
               </div>
 
+              <ErroJuntoAoBotao texto={erro} />
               <div className="flex flex-col-reverse sm:flex-row justify-between gap-2 pt-3 border-t">
                 <button type="button" onClick={() => { setErro(null); setWizardStep(1) }} className="btn-outline px-5 w-full sm:w-auto">
                   Voltar
@@ -3536,6 +3712,7 @@ export default function EscoltaDetalhePage() {
                 <SugestoesTexto className="mt-2" titulo="Sugestões (toque para inserir e edite)" sugestoes={SUGESTOES_WIZARD.partida} onInserir={(f) => setObsPartida(v => juntarSugestao(v, f))} />
               </div>
 
+              <ErroJuntoAoBotao texto={erro} />
               <div className="flex flex-col-reverse sm:flex-row justify-between gap-2 pt-3 border-t">
                 <button type="button" onClick={() => { setErro(null); setWizardStep(2) }} className="btn-outline px-5 w-full sm:w-auto">
                   Voltar
@@ -3546,7 +3723,7 @@ export default function EscoltaDetalhePage() {
                   disabled={loading}
                   className="btn-gradient px-6 w-full sm:w-auto"
                 >
-                  {loading ? 'Iniciando...' : 'Confirmar e Iniciar Escolta'}
+                  {loading ? (andamento ? `${andamento}...` : 'Iniciando...') : 'Confirmar e Iniciar Escolta'}
                 </button>
               </div>
             </div>
@@ -3577,7 +3754,8 @@ export default function EscoltaDetalhePage() {
       )}
 
       {/* ── Retorno ao Painel Operacional Guiado ── */}
-      {(voltaCampo || (modoGuiado && (vinculadoAEscolta || temPermissao(perfil, PODE_PODER_TOTAL)))) && (
+      {/* Onda O (M1): só para o operador no modo guiado ou quando a tela veio do Painel. */}
+      {(voltaCampo || (modoGuiado && perfil === 'operador')) && (
         <button
           type="button"
           onClick={() => router.push('/dashboard/campo')}
@@ -3589,7 +3767,8 @@ export default function EscoltaDetalhePage() {
       )}
 
       {/* ── Painel de Designação de Responsabilidade ── */}
-      {['rascunho', 'agendada'].includes(escolta.status) && !arquivada && (
+      {/* Onda O (M1): só quando ainda não há comandante escalado. */}
+      {['rascunho', 'agendada'].includes(escolta.status) && !arquivada && !temComandante && (
         <div className="card-light p-5 space-y-4 border-l-4 border-amber-500">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
@@ -3632,7 +3811,7 @@ export default function EscoltaDetalhePage() {
                         {escolta.codigo_escolta ?? 'Sem código'}
                       </span>
                       <span className={si.cls}>{si.label}</span>
-                      {escolta.checklist_pendente_no_inicio && (
+                      {mostrarChecklistPendente(escolta, loading ? undefined : preInicioConcluido(checklists)) && (
                         <span className="badge-warning">Checklist pendente</span>
                       )}
                       <PendenciasConclusao escoltaId={escolta.id} modo="faixa" chave={escolta.status} />
@@ -3751,12 +3930,21 @@ export default function EscoltaDetalhePage() {
             {/* Duração da operação */}
             <div className="flex items-center gap-2 mt-3">
               <Clock size={11} style={{ color: '#A8B8C2' }} />
-              <span style={{ fontSize: '10px', color: '#A8B8C2', fontWeight: 700, letterSpacing: '0.05em' }}>
-                {isFinalizado ? 'Duração total:' : 'Em operação há:'}
-              </span>
-              <span style={{ fontSize: '10px', color: '#0E1A33', fontWeight: 900, letterSpacing: '0.05em' }}>
-                {calcDuracao(escolta.criado_em, escolta.data_finalizacao ?? undefined)}
-              </span>
+              {/* Onda O (M1): "Em operação há" só depois do início; antes, a data prevista. */}
+              {operacaoIniciada || isFinalizado ? (
+                <>
+                  <span style={{ fontSize: '10px', color: '#A8B8C2', fontWeight: 700, letterSpacing: '0.05em' }}>
+                    {isFinalizado ? 'Duração total:' : 'Em operação há:'}
+                  </span>
+                  <span style={{ fontSize: '10px', color: '#0E1A33', fontWeight: 900, letterSpacing: '0.05em' }}>
+                    {calcDuracao(inicioOperacao ?? escolta.criado_em, escolta.data_finalizacao ?? undefined)}
+                  </span>
+                </>
+              ) : (
+                <span data-teste="agendada-para" style={{ fontSize: '10px', color: '#0E1A33', fontWeight: 900, letterSpacing: '0.05em' }}>
+                  {textoAgendadaPara}
+                </span>
+              )}
             </div>
 
             {/* Paradas registradas */}
@@ -3799,7 +3987,9 @@ export default function EscoltaDetalhePage() {
             <h3 className="text-xs font-bold uppercase tracking-wider" style={{ color: '#6B7E8A' }}>
               Painel de Ações do Operador
             </h3>
-            <span className="badge-info">Operação em Andamento</span>
+            {operacaoIniciada
+              ? <span className="badge-info">Operação em Andamento</span>
+              : <span className="badge-neutral" data-teste="agendada-para-badge">{textoAgendadaPara}</span>}
           </div>
 
           {avisoKm && (
@@ -3968,7 +4158,7 @@ export default function EscoltaDetalhePage() {
                 style={{ backgroundColor: '#53648A', boxShadow: '0 2px 8px rgba(83,100,138,0.25)' }}
                 onMouseEnter={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#3F4E6D'}
                 onMouseLeave={e=>(e.currentTarget as HTMLElement).style.backgroundColor='#53648A'}>
-                <RotateCcw size={13} /> Iniciar Trânsito de Retorno
+                <RotateCcw size={13} /> Iniciar retorno
               </button>
             )}
 
@@ -4502,6 +4692,16 @@ export default function EscoltaDetalhePage() {
       {/* ── TAB: Ocorrências ── */}
       {tab === 'ocorrencias' && (
         <div className="space-y-3">
+          {/* Onda O (B3): a gestão registra ocorrência por aqui (antes só pelo Campo). */}
+          {podeRegistrarOcorrencia && (
+            <div className="flex justify-end">
+              <button type="button" onClick={() => setDialogOcorrenciaGestao(true)} data-teste="abrir-ocorrencia-gestao"
+                className="h-10 px-4 font-black text-[10px] uppercase tracking-widest flex items-center gap-2 text-white"
+                style={{ backgroundColor: '#A07212' }}>
+                <AlertTriangle size={13} /> Registrar ocorrência
+              </button>
+            </div>
+          )}
           {ocorrencias.length === 0 ? (
             <div className="card-light p-12 text-center">
               <AlertCircle size={24} className="mx-auto mb-2" style={{ color: '#C8D5DC' }} />
@@ -4919,6 +5119,22 @@ export default function EscoltaDetalhePage() {
         )
       })()}
 
+      {dialogOcorrenciaGestao && (
+        <RegistrarOcorrenciaGestao
+          escoltaId={escolta.id}
+          escoltaVeiculoId={viaturas.length === 1 ? viaturas[0].id : null /* revisão cruzada 2: em comboio, ocorrência geral */}
+          usuarioId={user?.id ?? null}
+          onFechar={() => setDialogOcorrenciaGestao(false)}
+          onRegistrada={(tipo, descricao) => {
+            setDialogOcorrenciaGestao(false)
+            notificarTelegram({ tipo: 'ocorrencia', titulo: `Ocorrência: ${tipo}`, descricao })
+            carregar()
+          }} />
+      )}
+
+      {/* Onda O (A1): andamento da gravação por cima de tudo, perto do polegar. */}
+      <FaixaAndamento texto={loading ? andamento : null} />
+
       {/* ── Dialog: Avançar Status ── */}
       {dialogAvanco && (
         <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
@@ -4995,9 +5211,6 @@ export default function EscoltaDetalhePage() {
             </div>
 
             <div className="px-6 py-5 space-y-4">
-              {erro && (
-                <p className="text-xs p-3" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
 
               {/* ABA: Cancelar */}
               {abaDialogCancelar === 'cancelar' && (
@@ -5069,6 +5282,7 @@ export default function EscoltaDetalhePage() {
               )}
             </div>
 
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row sm:justify-between items-stretch sm:items-center gap-2" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button
                 onClick={() => { setDialogCancelar(false); setErro(null); setAbaDialogCancelar('cancelar') }}
@@ -5105,9 +5319,6 @@ export default function EscoltaDetalhePage() {
               <h2 className="font-bold text-base text-[#0E1A33]">Iniciar Operação (Saída da Base)</h2>
             </div>
             <div className="px-6 py-5 space-y-4">
-              {erro && (
-                <p className="text-xs p-3" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
               <div className="flex items-center gap-2 p-3" style={{ backgroundColor: '#F5F7FA' }}>
                 <Clock size={13} style={{ color: '#53648A', flexShrink: 0 }} />
                 <div>
@@ -5153,14 +5364,15 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => setDialogStartBase(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleStartBase}
-                disabled={loading || !fotosCompletas(fotosStartBase)}
+                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosStartBase)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? 'Confirmando...' : 'Confirmar Saída'}
+                {loading ? (andamento ? `${andamento}...` : 'Confirmando...') : 'Confirmar Saída'}
               </button>
             </div>
           </div>
@@ -5184,44 +5396,12 @@ export default function EscoltaDetalhePage() {
             </div>
 
             <div className="px-6 py-5 space-y-4 overflow-y-auto" style={{ maxHeight: '75vh' }}>
-              {erro && (
-                <p className="text-xs p-3" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
 
               {/* GPS Status */}
-              <div className="p-3 rounded" style={{ backgroundColor: gpsCheckin ? '#F0FAF5' : '#F5F7FA', border: `1.5px solid ${gpsCheckin ? '#1E7C5240' : '#E2E8EC'}` }}>
-                <div className="flex items-start gap-2">
-                  <Locate size={13} style={{ color: gpsCheckin ? '#1E7C52' : '#A8B8C2', flexShrink: 0, marginTop: '2px' }} />
-                  <div className="flex-1 min-w-0">
-                    <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: gpsCheckin ? '#1E7C52' : '#A8B8C2' }}>
-                      {gpsCheckinLoading ? 'Obtendo localização...' : gpsCheckin ? 'Localização capturada' : 'Localização não disponível'}
-                    </p>
-                    {gpsCheckin && (
-                      <>
-                        <p style={{ fontSize: '11px', fontWeight: 600, color: '#0E1A33', marginTop: '2px', lineHeight: 1.4 }}>{gpsCheckin.endereco}</p>
-                        <p style={{ fontSize: '9px', color: '#A8B8C2', marginTop: '2px' }}>
-                          {gpsCheckin.lat.toFixed(6)}, {gpsCheckin.lng.toFixed(6)} · {textoPrecisao(gpsCheckin.precisao)}
-                        </p>
-                      </>
-                    )}
-                    {gpsCheckinLoading && (
-                      <div className="flex items-center gap-1.5 mt-1">
-                        <div className="animate-spin" style={{ width: '10px', height: '10px', border: '1.5px solid #D6DAE5', borderTopColor: '#1E7C52', borderRadius: '50%' }} />
-                        <span style={{ fontSize: '10px', color: '#A8B8C2' }}>Aguardando GPS e endereço...</span>
-                      </div>
-                    )}
-                    {!gpsCheckinLoading && !gpsCheckin && (
-                      <button
-                        type="button"
-                        onClick={abrirDialogCheckin}
-                        style={{ fontSize: '10px', color: '#1E7C52', marginTop: '4px', textDecoration: 'underline' }}
-                      >
-                        Tentar novamente
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
+              <QuadroLocalizacao ponto={gpsCheckin} carregando={gpsCheckinLoading} exigeGps onTentar={() => {
+                setGpsCheckinLoading(true)
+                obterGPS().then(l => setGpsCheckin(g => pontoDaLeitura(l, g))).catch(() => {}).finally(() => setGpsCheckinLoading(false))
+              }} />
 
               {/* Viatura do check-in: so aparece com mais de uma */}
               {viaturas.length > 1 && (
@@ -5263,6 +5443,7 @@ export default function EscoltaDetalhePage() {
               </div>
             </div>
 
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => { setDialogCheckin(false); setErro(null) }} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
@@ -5271,7 +5452,7 @@ export default function EscoltaDetalhePage() {
                 className="h-11 sm:h-9 px-5 font-black text-[10px] uppercase tracking-widest text-white active:scale-95 transition-all disabled:opacity-50 w-full sm:w-auto"
                 style={{ backgroundColor: '#1E7C52' }}
               >
-                {loading ? 'Registrando...' : 'Confirmar Check-in'}
+                {loading ? (andamento ? `${andamento}...` : 'Registrando...') : 'Confirmar Check-in'}
               </button>
             </div>
           </div>
@@ -5283,12 +5464,9 @@ export default function EscoltaDetalhePage() {
         <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
           <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden rounded-t-2xl sm:rounded-2xl" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
-              <h2 className="font-bold text-base text-[#0E1A33]">Registrar Reporte Periódico</h2>
+              <h2 className="font-bold text-base text-[#0E1A33]">Registrar parada</h2>
             </div>
             <div className="px-6 py-5 space-y-4">
-              {erro && (
-                <p className="text-xs p-3" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
               <div className="flex items-center gap-2 p-3" style={{ backgroundColor: '#F5F7FA' }}>
                 <Clock size={13} style={{ color: '#53648A', flexShrink: 0 }} />
                 <div>
@@ -5296,27 +5474,10 @@ export default function EscoltaDetalhePage() {
                   <p style={{ fontSize: '12px', fontWeight: 900, color: '#0E1A33' }}>{nowLocalStr()}</p>
                 </div>
               </div>
-              <div className="p-3 rounded" style={{ backgroundColor: gpsParada ? '#F0FAF5' : '#F5F7FA', border: `1.5px solid ${gpsParada ? '#1E7C5240' : '#E2E8EC'}` }}>
-                <div className="flex items-start gap-2">
-                  <Locate size={13} style={{ color: gpsParada ? '#1E7C52' : '#A8B8C2', flexShrink: 0, marginTop: '2px' }} />
-                  <div className="flex-1">
-                    <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.1em', color: gpsParada ? '#1E7C52' : '#A8B8C2' }}>
-                      {gpsParadaLoading ? 'Obtendo localização...' : gpsParada ? 'Localização capturada' : 'Localização não disponível'}
-                    </p>
-                    {gpsParada && (
-                      <div>
-                        <p style={{ fontSize: '11px', fontWeight: 600, color: '#0E1A33', marginTop: '2px', lineHeight: 1.4 }}>{gpsParada.endereco}</p>
-                        <p style={{ fontSize: '10px', color: '#A8B8C2', fontFamily: 'monospace', marginTop: '2px' }}>
-                          {gpsParada.lat.toFixed(6)}, {gpsParada.lng.toFixed(6)} · {textoPrecisao(gpsParada.precisao)}
-                        </p>
-                      </div>
-                    )}
-                    {gpsParadaLoading && (
-                      <p style={{ fontSize: '10px', color: '#A8B8C2', marginTop: '2px' }}>Aguardando GPS do dispositivo...</p>
-                    )}
-                  </div>
-                </div>
-              </div>
+              <QuadroLocalizacao ponto={gpsParada} carregando={gpsParadaLoading} exigeGps onTentar={() => {
+                setGpsParadaLoading(true)
+                obterGPS().then(l => setGpsParada(g => pontoDaLeitura(l, g))).catch(() => {}).finally(() => setGpsParadaLoading(false))
+              }} />
               <div>
                 <label className="block text-xs font-semibold mb-1.5 text-[#5A6A80]">Tipo de Parada *</label>
                 <select
@@ -5352,6 +5513,7 @@ export default function EscoltaDetalhePage() {
                 <SugestoesTexto className="mt-2" titulo="Sugestões (toque para inserir e edite)" sugestoes={[SUGESTAO_PARADA[tipoParada], ...SUGESTOES_PARADA].filter(Boolean)} onInserir={(f) => setObsParada(v => juntarSugestao(v, f))} />
               </div>
             </div>
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => { setDialogParada(false); setGpsParada(null); setGpsParadaLoading(false) }} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
@@ -5359,7 +5521,7 @@ export default function EscoltaDetalhePage() {
                 disabled={loading || fotosParada.length < FOTOS_POR_PONTO.min || !obsParada.trim()}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? 'Gravando...' : 'Registrar Parada'}
+                {loading ? (andamento ? `${andamento}...` : 'Gravando...') : 'Registrar Parada'}
               </button>
             </div>
           </div>
@@ -5374,9 +5536,6 @@ export default function EscoltaDetalhePage() {
               <h2 className="font-bold text-base text-[#0E1A33]">Confirmar Chegada na Origem</h2>
             </div>
             <div className="px-6 py-5 space-y-4">
-              {erro && (
-                <p className="text-xs p-3" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
               <div className="flex items-center gap-2 p-3" style={{ backgroundColor: '#F5F7FA' }}>
                 <Clock size={13} style={{ color: '#53648A', flexShrink: 0 }} />
                 <div>
@@ -5436,14 +5595,15 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => setDialogChegadaOrigem(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleChegadaOrigem}
-                disabled={loading || !fotosCompletas(fotosOrigem)}
+                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosOrigem)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? 'Confirmando...' : 'Confirmar Chegada'}
+                {loading ? (andamento ? `${andamento}...` : 'Confirmando...') : 'Confirmar Chegada'}
               </button>
             </div>
           </div>
@@ -5458,9 +5618,6 @@ export default function EscoltaDetalhePage() {
               <h2 className="font-bold text-base text-[#0E1A33]">Iniciar Trânsito ao Destino</h2>
             </div>
             <div className="px-6 py-5 space-y-4">
-              {erro && (
-                <p className="text-xs p-3" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
               <p className="text-sm text-[#5A6A80]">
                 Confirmar que a equipe deixou a origem e iniciou a rota rumo ao destino.
               </p>
@@ -5488,14 +5645,15 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => setDialogTransitoDestino(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleIniciarTransitoDestino}
-                disabled={loading || !fotosCompletas(fotosTransitoDestino)}
+                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosTransitoDestino)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? 'Iniciando...' : 'Confirmar Trânsito'}
+                {loading ? (andamento ? `${andamento}...` : 'Iniciando...') : 'Confirmar Trânsito'}
               </button>
             </div>
           </div>
@@ -5510,9 +5668,6 @@ export default function EscoltaDetalhePage() {
               <h2 className="font-bold text-base text-[#0E1A33]">Confirmar Chegada no Destino</h2>
             </div>
             <div className="px-6 py-5 space-y-4">
-              {erro && (
-                <p className="text-xs p-3" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
               <div className="flex items-center gap-2 p-3" style={{ backgroundColor: '#F5F7FA' }}>
                 <Clock size={13} style={{ color: '#53648A', flexShrink: 0 }} />
                 <div>
@@ -5545,14 +5700,15 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => setDialogChegadaDestino(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleChegadaDestino}
-                disabled={loading || !fotosCompletas(fotosDestino)}
+                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosDestino)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? 'Confirmando...' : 'Confirmar Chegada'}
+                {loading ? (andamento ? `${andamento}...` : 'Confirmando...') : 'Confirmar Chegada'}
               </button>
             </div>
           </div>
@@ -5565,15 +5721,12 @@ export default function EscoltaDetalhePage() {
         <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center" style={{ backgroundColor: 'rgba(28,43,53,0.55)', padding: '0' }}>
           <div className="w-full sm:max-w-md sm:mx-4 mx-0 bg-white overflow-hidden rounded-t-2xl sm:rounded-2xl" style={{ boxShadow: '0 16px 48px rgba(0,0,0,0.18)', maxHeight: '92vh', overflowY: 'auto' }}>
             <div className="px-6 py-4 border-b" style={{ borderColor: '#E2E8EC' }}>
-              <h2 className="font-bold text-base text-[#0E1A33]">Iniciar Trânsito de Retorno</h2>
+              <h2 className="font-bold text-base text-[#0E1A33]">Iniciar retorno</h2>
             </div>
             <div className="px-6 py-5 space-y-4">
-              {erro && (
-                <p className="text-xs p-3 rounded" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
               <p className="text-sm text-[#5A6A80]">
-                Registrar a saída do destino rumo à base. Este ponto é obrigatório: sem ele
-                não é possível concluir o retorno.
+                Registra a saída do destino e o início do retorno à base num toque só, com a
+                mesma foto e a mesma observação.
               </p>
 
               {renderGpsAcao()}
@@ -5602,14 +5755,15 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => setDialogTransitoRetorno(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
-                onClick={handleIniciarTransitoRetorno}
-                disabled={loading || !fotosCompletas(fotosTransitoRetorno)}
+                onClick={handleRetornoUmToque}
+                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosTransitoRetorno)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? 'Registrando...' : 'Confirmar Trânsito de Retorno'}
+                {loading ? (andamento ? `${andamento}...` : 'Registrando...') : 'Iniciar retorno'}
               </button>
             </div>
           </div>
@@ -5623,9 +5777,6 @@ export default function EscoltaDetalhePage() {
               <h2 className="font-bold text-base text-[#0E1A33]">Iniciar Retorno da Escolta</h2>
             </div>
             <div className="px-6 py-5 space-y-4">
-              {erro && (
-                <p className="text-xs p-3 rounded" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
               <p className="text-sm text-[#5A6A80]">
                 Confirmar que a equipe iniciou a rota de regresso à base operacional.
               </p>
@@ -5654,14 +5805,15 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => setDialogIniciarRetorno(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleIniciarRetorno}
-                disabled={loading || !fotosCompletas(fotosRetorno)}
+                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosRetorno)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? 'Iniciando...' : 'Confirmar Retorno'}
+                {loading ? (andamento ? `${andamento}...` : 'Iniciando...') : 'Confirmar Retorno'}
               </button>
             </div>
           </div>
@@ -5676,9 +5828,6 @@ export default function EscoltaDetalhePage() {
               <h2 className="font-bold text-base text-[#0E1A33]">Confirmar Chegada na Base (Retorno)</h2>
             </div>
             <div className="px-6 py-5 space-y-4">
-              {erro && (
-                <p className="text-xs p-3 rounded" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
 
               {renderGpsAcao()}
 
@@ -5714,14 +5863,15 @@ export default function EscoltaDetalhePage() {
                 />
               </div>
             </div>
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => setDialogChegadaBase(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleChegadaBase}
-                disabled={loading || !fotosCompletas(fotosChegadaBase)}
+                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosChegadaBase)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? 'Confirmando...' : 'Confirmar Chegada'}
+                {loading ? (andamento ? `${andamento}...` : 'Confirmando...') : 'Confirmar Chegada'}
               </button>
             </div>
           </div>
@@ -5736,9 +5886,6 @@ export default function EscoltaDetalhePage() {
               <h2 className="font-bold text-base text-[#0E1A33]">Finalizar Escolta e Relatório Diário</h2>
             </div>
             <div className="px-6 py-5 space-y-4 max-h-[70vh] overflow-y-auto">
-              {erro && (
-                <p className="text-xs p-3 rounded" style={{ backgroundColor: '#FEF0EE', color: '#B83832' }}>{erro}</p>
-              )}
               
               {/* Fotos obrigatórias — entrega de viatura */}
               <div>
@@ -5847,6 +5994,7 @@ export default function EscoltaDetalhePage() {
                 <SugestoesTexto className="mt-2" titulo="Trechos sugeridos (toque para inserir e complete com o que aconteceu)" sugestoes={SUGESTOES_RELATORIO_FINAL} onInserir={(f) => setRelatorioFinal(v => juntarSugestao(v, f))} />
               </div>
             </div>
+            <ErroJuntoAoBotao texto={erro} className="mx-6 mb-3" />
             <div className="px-6 py-4 border-t flex flex-col-reverse sm:flex-row justify-end gap-2 sm:gap-3" style={{ borderColor: '#E2E8EC', backgroundColor: '#F8F9FB' }}>
               <button onClick={() => setDialogFinalizacao(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
@@ -5854,7 +6002,7 @@ export default function EscoltaDetalhePage() {
                 disabled={loading}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? 'Finalizando...' : 'Finalizar Operação'}
+                {loading ? (andamento ? `${andamento}...` : 'Finalizando...') : 'Finalizar Operação'}
               </button>
             </div>
           </div>

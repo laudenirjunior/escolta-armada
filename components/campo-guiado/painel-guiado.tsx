@@ -15,6 +15,7 @@
  * tela de confirmacao que so aparece quando o registro foi de fato gravado.
  */
 
+import { MiniaturaAmpliavel } from '@/components/ui/miniatura-ampliavel'
 import { useRef, useState } from 'react'
 import {
   AlertTriangle, ArrowLeft, Camera, Check, CheckCircle2, ChevronRight, Clock,
@@ -264,8 +265,7 @@ function CapturaFotos({
         <div className="grid grid-cols-2 gap-2">
           {fotos.map((f, idx) => (
             <div key={f.preview} className="relative overflow-hidden" style={{ border: `1px solid ${COR.borda}`, borderRadius: '4px' }}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={f.preview} alt={`Foto ${idx + 1}`} className="w-full h-32 object-cover" />
+              <MiniaturaAmpliavel src={f.preview} alt={`Foto ${idx + 1}`} className="w-full h-32 object-cover" />
               <p className="absolute bottom-0 left-0 right-0 px-2 py-1 text-white font-mono" style={{ fontSize: '10px', backgroundColor: 'rgba(0,0,0,0.6)' }}>
                 {carimbo(f.timestamp, f.gps)}
               </p>

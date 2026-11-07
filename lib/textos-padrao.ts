@@ -71,7 +71,7 @@ export const TEXTO_PADRAO_PONTO = {
  * fiscalizacao sao eventos de desvio, com valor probatorio, e exigem relato real.
  */
 export const SUGESTAO_PARADA: Record<string, string> = {
-  reporte_periodico: 'Reporte periódico de posição. Equipe em rota, sem alterações.',
+  reporte_periodico: 'Check-in de posição. Equipe em rota, sem alterações.',
   registro_parada: 'Parada de rotina, sem alterações.',
   em_transito: 'Deslocamento normal, sem alterações.',
   parada_curta: 'Parada curta de rotina, sem alterações. Equipe permanece na viatura.',
@@ -168,6 +168,13 @@ export const TEXTO_PADRAO_MATERIAIS =
   'Materiais e equipamentos conferidos, sem alterações. Coletes, rádios, lanternas, armamento, munição e equipamentos de suporte em conformidade e operacionais.'
 
 /**
+ * Onda O (M4, teste de 07/11): a observação do Passo 2 (viatura) abre preenchida como a do
+ * Passo 1, com a primeira sugestão do passo. O mesmo custo assumido acima vale aqui: o que
+ * continua barrando a saída sem conferência são as 5 fotos da viatura, o KM e a foto do painel.
+ */
+export const TEXTO_PADRAO_VIATURA = SUGESTOES_WIZARD.viatura[0]
+
+/**
  * Dica de preenchimento. Entra em `placeholder`, jamais em `value`.
  * Cada um destes campos tem validacao de texto obrigatorio por tras.
  */
@@ -195,7 +202,7 @@ export const CAMPOS_SEM_TEXTO_PADRAO = [
   'app/dashboard/campo/page.tsx: observacao de item de checklist nao conforme',
   'app/dashboard/escoltas/[id]/page.tsx: observacao de item nao conforme do checklist de entrega',
   // obsMateriais saiu desta lista em 10/09/2026. Ver TEXTO_PADRAO_MATERIAIS.
-  'app/dashboard/escoltas/[id]/page.tsx: obsViatura do wizard de pre-inicio',
+  // obsViatura saiu desta lista em 07/11/2026 (onda O, M4). Ver TEXTO_PADRAO_VIATURA.
   'app/dashboard/escoltas/[id]/page.tsx: obsPartida do wizard de pre-inicio',
   'app/dashboard/escoltas/[id]/page.tsx: motivo de cancelamento',
   'app/dashboard/escoltas/[id]/page.tsx: motivo de reagendamento',

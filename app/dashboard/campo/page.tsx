@@ -38,12 +38,14 @@ import { novoId, salvarSnapshot, lerSnapshot, filaDisponivel } from '@/lib/offli
 import { prepararFoto, MENSAGEM_GUARDADO, type FotoPreparada, type ResultadoRegistroCampo } from '@/lib/offline/registro-campo'
 import { aplicarPendentes, lerPendentes } from '@/lib/offline/pendentes'
 import { salvarEscoltasOffline } from '@/lib/offline/sessao'
-import { obterGpsPreciso, textoPrecisao } from '@/lib/gps'
+import { iniciarRastreioGps, leituraParaConfirmar, textoPrecisao } from '@/lib/gps'
 import {
   aparelhoSemRede, conferirEspacoParaFoto, envelopeLigado, erroDeRede, gravarPeloEnvelope, textoConflito,
   textoErroGravacao, textoRecusado,
 } from '@/lib/offline/tela'
 import { EmergenciaSemConexao } from '@/components/offline/emergencia-sem-conexao'
+import { FaixaAndamento } from '@/components/ui/faixa-andamento'
+import { MiniaturaAmpliavel } from '@/components/ui/miniatura-ampliavel'
 
 const supabase = createClient()
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -280,8 +282,12 @@ const STATUS_LABELS: Record<string, string> = {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 // Onda M (B3): alta precisão, depois rede; precisão pior que 100 m dispara nova tentativa
 // de até 10 s e fica a melhor leitura (lib/gps.ts).
-function obterGPS(): Promise<{ lat: number; lng: number; precisao: number }> {
-  return obterGpsPreciso()
+// Onda O (A2): no máximo 3 s com a melhor leitura disponível; com a escolta em andamento o
+// GPS fica ligado (lib/gps.ts) e a leitura costuma sair na hora.
+async function obterGPS(): Promise<{ lat: number; lng: number; precisao: number }> {
+  const l = await leituraParaConfirmar()
+  if (!l) throw new Error('GPS sem leitura')
+  return l
 }
 
 /**
@@ -329,8 +335,7 @@ function FotoCapture({
 
       {captura ? (
         <div className="relative rounded overflow-hidden border border-[#E2E8EC]">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={captura.preview} alt="foto" className="w-full h-44 object-cover" />
+          <MiniaturaAmpliavel src={captura.preview} alt="foto" className="w-full h-40 object-cover" />
           {/* Carimbo data/hora/GPS */}
           <div className="absolute bottom-0 left-0 right-0 bg-black/65 px-3 py-2">
             <p className="text-white font-mono text-[11px] leading-tight">
@@ -368,8 +373,7 @@ function FotoMiniatura({
 }) {
   return (
     <div className="relative rounded overflow-hidden border border-[#E2E8EC]">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={captura.preview} alt="foto" className="w-full h-28 object-cover" />
+      <MiniaturaAmpliavel src={captura.preview} alt="foto" className="w-full h-28 object-cover" />
       <div className="absolute bottom-0 left-0 right-0 bg-black/65 px-2 py-1">
         <p className="text-white font-mono text-[9px] leading-tight break-all">
           {formatarCarimbo(captura.timestamp, captura.gps)}
@@ -396,6 +400,13 @@ export default function CampoPage() {
   const [tiposOcorrencia, setTiposOcorrencia] = useState<TipoOcorrencia[]>([])
   const [loading, setLoading] = useState(true)
   const [executando, setExecutando] = useState(false)
+  // Onda O (A1): passo atual da gravação ("Lendo o GPS", "Enviando foto 2 de 3"), na faixa de andamento.
+  const [andamento, setAndamento] = useState<string | null>(null)
+  useEffect(() => { if (!executando) setAndamento(null) }, [executando])
+  // Onda O (A2): GPS contínuo enquanto houver escolta em andamento nesta tela (o Campo é do
+  // pessoal de campo): cada registro sai com a leitura pronta, sem esperar 12 s.
+  const escoltaEmCampo = !!escoltaAtiva && !['agendada', 'rascunho', 'finalizada', 'cancelada'].includes(escoltaAtiva.status)
+  useEffect(() => { if (escoltaEmCampo) return iniciarRastreioGps() }, [escoltaEmCampo])
   const [toast, setToast] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null)
 
   // Accordions
@@ -1368,7 +1379,7 @@ export default function CampoPage() {
           },
           // Telegram de hoje, mandado uma vez depois de aplicado e só se a etapa avançou.
           aviso: { corpo: await corpoTelegram(), fotoCaminho: fotosEnvelope[0]?.caminho ?? null, soSeAvancou: true },
-        })
+        }, setAndamento)
         if (fechouSemAplicar(r, avisos)) {
           limparFotosCheckpoint()
           setObsAvanco('')
@@ -1524,7 +1535,7 @@ export default function CampoPage() {
           fotos,
           dataHoraAcao: linhaChecklist.data_conclusao,
           linhas: { checklists: [{ id: clId, ...linhaChecklist }], checklist_respostas: respostas },
-        })
+        }, setAndamento)
         setPainelAberto(null)
         setChecklistItems(its => its.map(i => ({ ...i, resposta: null, observacao: '', captura: null })))
         if (r.modo === 'guardado') showToast('ok', MENSAGEM_GUARDADO)
@@ -1626,7 +1637,7 @@ export default function CampoPage() {
           gps: gps ? { lat: gps.lat, lng: gps.lng, precisao: gps.precisao } : null,
           linhas: { ocorrencias: [{ id: novoId(), ...linhaOcorrencia, foto_id: foto?.id ?? null }] },
           aviso: { corpo: await corpoTelegram(), fotoCaminho: foto?.caminho ?? null },
-        })
+        }, setAndamento)
         if (r.modo !== 'guardado' && fechouSemAplicar(r)) {
           setTipoOcId('')
           setDescOcorrencia('')
@@ -1769,7 +1780,7 @@ export default function CampoPage() {
             }],
           },
           aviso: { corpo: corpoTelegram, fotoCaminho: fotos[0]?.caminho ?? null },
-        })
+        }, setAndamento)
         setFotosCheckin(fs => { fs.forEach(f => URL.revokeObjectURL(f.preview)); return [] })
         setObsCheckin(TEXTO_PADRAO_PONTO.checkin)
         setViaturaAlvoId(viaturaDoUsuario)
@@ -1884,7 +1895,7 @@ export default function CampoPage() {
             gps,
             linhas: { emergencias: [{ id: novoId(), ...linhaEmergencia }] },
             aviso: { corpo: corpoTelegram },
-          })
+          }, setAndamento)
         } catch (e) {
           setEmergConfirm(false)
           setEmergenciaSemConexao({ telefone: env.telefoneCentral })
@@ -2035,6 +2046,7 @@ export default function CampoPage() {
       <div className="pb-4 px-1 md:px-0">
         {/* No Modo Guiado o aviso de sucesso e a tela de confirmacao; erro continua no toast. */}
         <Toast msg={toast?.tipo === 'erro' ? toast : null} />
+        <FaixaAndamento texto={executando ? andamento : null} />
         {emergenciaSemConexao && (
           <EmergenciaSemConexao telefone={emergenciaSemConexao.telefone} onFechar={() => setEmergenciaSemConexao(null)} />
         )}
@@ -2117,6 +2129,7 @@ export default function CampoPage() {
   return (
     <div className="max-w-xl mx-auto space-y-4 pb-12 px-4 md:px-0">
       <Toast msg={toast} />
+      <FaixaAndamento texto={executando ? andamento : null} />
       {emergenciaSemConexao && (
         <EmergenciaSemConexao telefone={emergenciaSemConexao.telefone} onFechar={() => setEmergenciaSemConexao(null)} />
       )}
@@ -2589,8 +2602,7 @@ export default function CampoPage() {
                                 {/* Foto do item não conforme */}
                                 {item.captura ? (
                                   <div className="relative rounded overflow-hidden border" style={{ borderColor: '#E2E8EC' }}>
-                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img src={item.captura.preview} alt="foto item" className="w-full h-28 object-cover" />
+                                    <MiniaturaAmpliavel src={item.captura.preview} alt="foto item" className="w-full h-28 object-cover" />
                                     <div className="absolute bottom-0 left-0 right-0 px-2 py-1.5" style={{ backgroundColor: 'rgba(0,0,0,0.6)' }}>
                                       {/* Mesmo texto do carimbo desenhado na imagem. Antes era
                                           `new Date()`, o horario do render, que avancava a cada

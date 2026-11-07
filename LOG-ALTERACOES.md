@@ -8,6 +8,44 @@ Branch de trabalho: `master` (producao serve master; ver a entrada de 19/08 sobr
 
 ---
 
+## 2026-11-07 - Onda O (experiência): correções do teste de uso de 07/11
+
+Branch `melhoria/2026-11-onda-o-experiencia`, sobre a master `90d37ad` (onda M publicada). Fonte: teste de uso de 07/11 pelo navegador (nota "2026-11-07 Registro - Diagnostico de uso Escolta Armada" no cofre). Executada pelo Claude Code da VPS pelo comando de 07/11/2026, 13h, com revisão cruzada do Codex. Sem migration e sem nada no banco de produção.
+
+### O que mudou
+
+1. **A1, gravar sem parecer travado.** Faixa de andamento (`components/ui/faixa-andamento.tsx`) com o passo real: Lendo o GPS, Guardando no aparelho, Enviando foto k de n, Gravando no sistema, Atualizando a tela. Fotos em paralelo de no máximo 3 (fila do aparelho, caminho direto, pré-início e finalização; `emParalelo` em `lib/offline/envio.ts`). A tela espera só o próprio registro (`aoConcluirRegistro`), não o resto da fila nem o Telegram, por até 15 s; depois libera como guardado no aparelho. Finalização grava as respostas do checklist de entrega num insert só e não finaliza se ele falhar.
+2. **A2, GPS sem travar.** Leitor contínuo em `lib/gps.ts` (watchPosition, leitura de até 60 s, Confirmar livre em até 3 s com a melhor leitura, leitura melhor troca o ponto; endereço depois). Liga na primeira janela de campo ou no assistente de partida (detalhe) e com escolta em andamento (Campo).
+3. **A3, janela sem pulo.** `QuadroLocalizacao` com altura fixa de 72 px nas janelas de etapa, saída e chegada, check-in e parada.
+4. **A4, Checklist pendente.** Regra única `mostrarChecklistPendente` em `lib/fluxo-escolta.ts`: nunca em finalizada ou cancelada; depois do início, só sem checklist de materiais e de viatura.
+5. **A5, busca de endereço.** Locais salvos que combinam com o texto aparecem antes da Mapbox (no máximo 3, aguardando conferência marcados). A medição v5, v6 e Search Box não foi feita (docs/12, 7.1); fica a v5.
+6. **A6, PDF** em aba nova que imprime sozinha (`?imprimir=1`); iframe só se a aba for bloqueada.
+7. **M1 a M10.** Mensagens do detalhe coerentes (designação só sem comandante, "Agendada para dd/mm hh:mm", Voltar ao Painel Guiado só para o operador ou vindo do Painel); nomes Check-in, Registrar parada e Avisos (rótulo antigo lido como Check-in); Iniciar retorno em um toque no detalhe (duas transições pelas gravações de sempre); observação do Passo 2 preenchida; comandante automático com um vigilante; diária do cadastro na edição; miniaturas de até 160 px que ampliam; Indicadores com regra única escrita na tela e consultas em uma onda; erro junto do botão com rolagem até o campo; menu em seções recolhíveis.
+8. **B1 a B3.** Aba Financeiro sem emoji; Recuperar com a mesma janela do Arquivar; ocorrência pela gestão na aba Ocorrências.
+9. **Revisão cruzada (Codex):** 1 alto e 2 médios, corrigidos (segunda espera no retorno, viatura arbitrária na ocorrência da gestão, finalização com checklist de entrega falho).
+
+### Como foi verificado
+
+1. type-check 0 erros; lint 0 erros e 25 avisos (os mesmos da master); build sem erro.
+2. Homologação (Supabase local, 127.0.0.1:3100): `e2e/o_experiencia.js` com um caso por item (A1, A2, A3, A4, A5 com Mapbox falsa, A6, M1, M3, M5, M6, M9) e `o_gps.test.mjs`; suíte completa da homologação (jornadas por perfil, ondas A a M, L1 a L9). As janelas "bloco 1 com a master 2b3fff9" saíram da suíte: a produção já está na 90d37ad e a onda O não tem migration.
+3. Medição lado a lado (`e2e/o_medir.js`, master 90d37ad na 3101 e branch na 3100, GPS simulado de 12 s e rede de 1,5 Mbps de subida).
+
+### Medição antes e depois
+
+| Medida | Master 90d37ad | Onda O |
+|---|---|---|
+| Confirmar e iniciar escolta (7 fotos) | 23,4 s, parado em "Iniciando..." | 9,7 s, maior trecho sem texto novo 3,3 s |
+| Etapa (abrir, foto, confirmar) | 16,7 a 18,2 s | 5,6 a 7,0 s |
+| No destino até Retornando | 2 etapas, 33,6 s | 1 toque, 7,8 s |
+| Finalizar operação | 21,2 s | 6,7 s |
+| Deslocamento do Confirmar quando o GPS chega | 8 px | 0 px |
+| Painel (homologação) | 1,5 s, 20 consultas | 1,5 s, 20 consultas |
+| Indicadores (homologação) | 1,5 s, 26 consultas em 4 ondas | 1,3 s, 25 consultas em 2 ondas |
+
+O banco da homologação é pequeno: o ganho do Painel e dos Indicadores em produção (5 s e 9 s no teste) precisa ser medido depois da publicação (docs/12, 7.3).
+
+---
+
 ## 2026-11-06 - Onda M (leveza): fotos leves, login do operador, sugestões de texto e endereço depois do envio
 
 Branch `melhoria/2026-11-onda-m-leveza`, sobre a onda L (`2bc7724`). Não vai para a `master` sem o Peçanha (roteiro em `/opt/operacao/escolta-1106/ENTREGA/ROTEIRO-PARA-SUBIR.md` e no cofre). Executada pelo Claude Code da VPS, com o Codex em paralelo (branch `melhoria/2026-11-onda-m-codex`, mesclada depois de revisada), pelo comando de 06/11/2026 do Peçanha.

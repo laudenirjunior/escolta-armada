@@ -44,6 +44,39 @@ export async function carregarLocaisAtivos(sb: any): Promise<LocalSalvo[]> {
 }
 
 /**
+ * Onda O (A5): locais para a busca de endereço, os ativos e os aguardando conferência (a RLS
+ * decide quem vê os não ativos). Inativo nunca entra.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function carregarLocaisParaBusca(sb: any): Promise<LocalSalvo[]> {
+  const base = 'id, nome, endereco, complemento, latitude, longitude, situacao, fonte_coordenada, conferido_em'
+  let r = await sb.from('locais_salvos').select(`${base}, uf, vezes_usado`)
+    .in('situacao', ['ativo', 'aguardando_conferencia']).order('vezes_usado', { ascending: false }).order('nome')
+  if (r.error) r = await sb.from('locais_salvos').select(base).in('situacao', ['ativo', 'aguardando_conferencia']).order('nome')
+  return r.error ? [] : ((r.data ?? []) as LocalSalvo[]).map(l => ({ ...l, latitude: l.latitude != null ? Number(l.latitude) : null, longitude: l.longitude != null ? Number(l.longitude) : null }))
+}
+
+/** Texto sem acento, minúsculo e com espaços simples (para comparar o digitado). */
+export function normalizarBusca(t: string): string {
+  return t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+}
+
+/**
+ * Onda O (A5): locais salvos que combinam com o texto digitado (todas as palavras de 2 ou
+ * mais letras aparecem no nome ou no endereço), os conferidos primeiro, depois os mais usados.
+ * No teste de 07/11 "Galeão" só trazia ruas na Mapbox: o local salvo aparece antes.
+ */
+export function locaisQueCombinam(locais: LocalSalvo[], texto: string, max = 3): LocalSalvo[] {
+  const palavras = normalizarBusca(texto).split(' ').filter(p => p.length >= 2)
+  if (palavras.length === 0) return []
+  return locais
+    .filter(l => l.situacao !== 'inativo')
+    .filter(l => { const alvo = normalizarBusca(`${l.nome} ${l.endereco}`); return palavras.every(p => alvo.includes(p)) })
+    .sort((a, b) => (a.situacao === 'ativo' ? 0 : 1) - (b.situacao === 'ativo' ? 0 : 1) || (b.vezes_usado ?? 0) - (a.vezes_usado ?? 0) || a.nome.localeCompare(b.nome))
+    .slice(0, max)
+}
+
+/**
  * Mensagem em português para o erro ao gravar um local salvo (onda D2): nome repetido, sem
  * permissão, formato recusado ou regra do banco (que já vem em português).
  */

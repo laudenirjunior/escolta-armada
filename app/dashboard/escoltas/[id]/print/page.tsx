@@ -343,7 +343,11 @@ export default function EscoltaPrintPage() {
   // Agora espera as imagens decodificarem de verdade, com teto de 15 segundos para
   // uma foto travada nao impedir a impressao do resto.
   useEffect(() => {
-    if (loading || !dados || window === window.top) return
+    if (loading || !dados) return
+    // Onda O (A6): imprime sozinha no iframe (caminho antigo) ou na aba nova aberta pelo
+    // "Exportar PDF" (?imprimir=1). Aberta à mão, sem o parâmetro, só mostra o relatório.
+    const pedidoNaAba = new URLSearchParams(window.location.search).get('imprimir') === '1'
+    if (window === window.top && !pedidoNaAba) return
 
     let cancelado = false
     const TETO_MS = 15000
