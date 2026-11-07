@@ -24,3 +24,21 @@ export async function enderecoPorExtenso(lat: number, lng: number, timeoutMs = 4
     clearTimeout(t)
   }
 }
+
+/**
+ * Onda M (B2): pede ao servidor o endereço por extenso dos pontos que chegaram ao banco só
+ * com a coordenada (fila sem internet, ou check-in sem resposta da Mapbox). Uma chamada por
+ * envio, sem esperar e sem erro na tela: falhou, o ponto continua com a coordenada, que é a
+ * verdade. A rota (/api/pontos/endereco) lê com a RLS de quem chama e grava uma única vez.
+ */
+export function pedirEnderecoDepois(escoltaIds: Array<string | null | undefined>, f: typeof fetch = fetch): void {
+  const escoltas = Array.from(new Set(escoltaIds.filter((e): e is string => !!e))).slice(0, 10)
+  if (escoltas.length === 0) return
+  try {
+    void f('/api/pontos/endereco', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ escoltas }),
+    }).catch(() => {})
+  } catch { /* sem fetch: fica só a coordenada */ }
+}

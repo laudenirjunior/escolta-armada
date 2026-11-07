@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 
 import { useEffect, useState } from 'react'
 import {
@@ -55,8 +56,18 @@ export default function DashboardPage() {
   })
   const [recentes, setRecentes] = useState<EscoltaRecente[]>([])
   const [loading, setLoading] = useState(true)
+  const router = useRouter()
+  const perfil = user?.perfil?.codigo ?? null
+
+  // Onda M (D8): o operador entra direto no Campo (Painel Guiado), que já abre a escolta do
+  // dia dele (a que está na rua primeiro). Do login ao primeiro registro: até 3 toques.
+  // O painel da gestão não carrega nada para ele.
+  useEffect(() => {
+    if (perfil === 'operador') router.replace('/dashboard/campo')
+  }, [perfil, router])
 
   useEffect(() => {
+    if (!perfil || perfil === 'operador') return
     const carregar = async () => {
       const agora = new Date()
       const hoje = new Date(agora); hoje.setHours(0, 0, 0, 0)
@@ -116,7 +127,8 @@ export default function DashboardPage() {
       setLoading(false)
     }
     carregar()
-  }, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [perfil])
 
   const primeiro = user?.nome_completo?.split(' ')[0] ?? ''
   const hora = new Date().getHours()

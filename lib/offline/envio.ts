@@ -20,6 +20,7 @@
  *
  * Sem import do app em tempo de execução: o cliente Supabase entra por parâmetro (testes).
  */
+import { pedirEnderecoDepois } from '../geocodificacao.ts'
 import {
   apagarFotosSubidas, atualizarRegistro, concluirAplicado, contarFila, lerFoto, marcarFotoSubida,
   pendentesDoUsuario, recuperarEnviando, filaDisponivel, novoId,
@@ -301,6 +302,13 @@ async function rodada(deps: DependenciasEnvio, resumo: ResumoEnvio): Promise<Res
       }
     }
     if (!resumo.parouPor) { deuCerto(); mudar({ ultimoErro: null }) }
+
+    // Onda M (B2): os pontos que subiram sem endereço (gravados sem internet) recebem o
+    // endereço por extenso uma única vez, pelo servidor, depois de chegarem ao banco.
+    if (resumo.aplicados.length) {
+      const aplicados = new Set(resumo.aplicados)
+      pedirEnderecoDepois(fila.filter(r => aplicados.has(r.client_id)).map(r => r.escolta_id), deps.fetch ?? fetch)
+    }
 
     // Contagem do aparelho (reversão em duas etapas, 16.5).
     try {

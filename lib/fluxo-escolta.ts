@@ -186,11 +186,17 @@ export const TIPO_PONTO_POR_STATUS: Record<string, string> = {
 }
 
 /**
- * Regra de fotos por ponto, decidida com Pecanha: ate 5, no minimo 1.
+ * Regra de fotos por ponto. Constante única: mudar aqui muda o Campo, o Painel Guiado e a
+ * tela de detalhe juntos.
+ * - Até 05/11/2026: no mínimo 1, até 5 (decisão de Pecanha de 20/08).
+ * - Onda M (decisão D7 de 06/11/2026): no mínimo 1, até 3. As fotos já saem reduzidas no
+ *   aparelho (lib/carimbo-foto.ts: lado maior de 1600 px, JPEG 0,7).
  * Vale para todo ponto do fluxo. O wizard de pre-inicio tem regra propria,
- * porque la cada uma das 5 fotos da viatura tem significado individual.
+ * porque la cada uma das 5 fotos da viatura tem significado individual (prova de
+ * custódia, mantida pela D7), e a foto do painel do Passo 2 vale como foto do ponto de
+ * saída de cada viatura (onda H).
  */
-export const FOTOS_POR_PONTO = { min: 1, max: 5 } as const
+export const FOTOS_POR_PONTO = { min: 1, max: 3 } as const
 
 export function ehStatusAtivo(status: string): boolean {
   return STATUS_ATIVOS.includes(status)

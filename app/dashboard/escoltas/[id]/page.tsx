@@ -56,6 +56,7 @@ import { COLUNAS_ANULACAO, textoAnulado, type Anulacao } from '@/lib/gestao'
 import { novoId, lerSnapshot } from '@/lib/offline/fila'
 import { prepararFoto, MENSAGEM_GUARDADO, type FotoPreparada, type LinhasEnvelope, type EtapaEnvelope } from '@/lib/offline/registro-campo'
 import { aplicarPendentes, lerPendentes } from '@/lib/offline/pendentes'
+import { obterGpsPreciso, textoPrecisao } from '@/lib/gps'
 import {
   FOTO_SEM_CONEXAO, aparelhoSemRede, conferirEspacoParaFoto, envelopeLigado, erroDeRede, fotosDosPendentes,
   gravarPeloEnvelope, horaDaCaptura, textoConflito, textoErroGravacao, textoRecusado, urlsDosPendentes,
@@ -1630,30 +1631,9 @@ export default function EscoltaDetalhePage() {
   }
 
   // ── Obter GPS local com fallback ─────────────────────────────────────────────
-  const obterGPS = async (): Promise<{ lat: number; lng: number; precisao: number }> => {
-    if (!navigator.geolocation) throw new Error('GPS não disponível neste dispositivo')
-
-    const tentarObter = (highAccuracy: boolean, timeout: number, maximumAge: number) =>
-      new Promise<{ lat: number; lng: number; precisao: number }>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(
-          (pos) => resolve({
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude,
-            precisao: pos.coords.accuracy,
-          }),
-          reject,
-          { enableHighAccuracy: highAccuracy, timeout, maximumAge }
-        )
-      })
-
-    try {
-      // 1ª tentativa: GPS de alta precisão, sem cache, 15s
-      return await tentarObter(true, 15000, 0)
-    } catch {
-      // 2ª tentativa: rede/torre celular, aceita cache de 30s, 10s
-      return await tentarObter(false, 10000, 30000)
-    }
-  }
+  // Onda M (B3): alta precisão (15 s), depois rede (10 s, cache de 30 s); se a leitura vier
+  // pior que 100 m, nova tentativa de até 10 s, gravando a melhor (lib/gps.ts).
+  const obterGPS = (): Promise<{ lat: number; lng: number; precisao: number }> => obterGpsPreciso()
 
   /**
    * Guardas de entrada dos handlers da jornada, verificadas antes de qualquer chamada
@@ -1873,7 +1853,7 @@ export default function EscoltaDetalhePage() {
 
   /**
    * Sobe as fotos de um ponto de controle e devolve os ids na ordem.
-   * A regra acordada e ate 5 fotos por ponto, no minimo 1. O bloqueio do minimo
+   * A regra e FOTOS_POR_PONTO (onda M: 1 a 3 por ponto). O bloqueio do minimo
    * fica em cada handler, porque a mensagem de erro precisa citar o ponto.
    */
   const uploadFotosPonto = async (
@@ -2350,7 +2330,7 @@ export default function EscoltaDetalhePage() {
         ) : gpsAcao ? (
           <>
             <p style={{ fontSize: '12px', fontWeight: 700, color: '#0E1A33', wordBreak: 'break-word' }}>{gpsAcao.endereco}</p>
-            <p style={{ fontSize: '10px', color: '#6B7E8A' }}>Precisão ~{Math.round(gpsAcao.precisao)}m</p>
+            <p data-precisao-gps style={{ fontSize: '10px', color: gpsAcao.precisao > 100 ? '#B83832' : '#6B7E8A' }}>{textoPrecisao(gpsAcao.precisao)}</p>
           </>
         ) : (
           <button type="button" onClick={capturarGpsAcao} style={{ fontSize: '11px', fontWeight: 700, color: '#B83832', textAlign: 'left' }}>
@@ -5181,7 +5161,7 @@ export default function EscoltaDetalhePage() {
                       <>
                         <p style={{ fontSize: '11px', fontWeight: 600, color: '#0E1A33', marginTop: '2px', lineHeight: 1.4 }}>{gpsCheckin.endereco}</p>
                         <p style={{ fontSize: '9px', color: '#A8B8C2', marginTop: '2px' }}>
-                          {gpsCheckin.lat.toFixed(6)}, {gpsCheckin.lng.toFixed(6)} · ±{gpsCheckin.precisao.toFixed(0)}m
+                          {gpsCheckin.lat.toFixed(6)}, {gpsCheckin.lng.toFixed(6)} · {textoPrecisao(gpsCheckin.precisao)}
                         </p>
                       </>
                     )}
@@ -5288,7 +5268,7 @@ export default function EscoltaDetalhePage() {
                       <div>
                         <p style={{ fontSize: '11px', fontWeight: 600, color: '#0E1A33', marginTop: '2px', lineHeight: 1.4 }}>{gpsParada.endereco}</p>
                         <p style={{ fontSize: '10px', color: '#A8B8C2', fontFamily: 'monospace', marginTop: '2px' }}>
-                          {gpsParada.lat.toFixed(6)}, {gpsParada.lng.toFixed(6)} · ±{gpsParada.precisao.toFixed(0)}m
+                          {gpsParada.lat.toFixed(6)}, {gpsParada.lng.toFixed(6)} · {textoPrecisao(gpsParada.precisao)}
                         </p>
                       </div>
                     )}

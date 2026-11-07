@@ -31,12 +31,13 @@ import { SELECT_CARTAO, type CartaoEscolta as CartaoDados } from '@/lib/cartao-e
 import { corDoCliente } from '@/lib/paleta-clientes'
 import { PainelGuiado, type Confirmacao, type PainelAberto, type Pendencia } from '@/components/campo-guiado/painel-guiado'
 import { urlAssinada } from '@/lib/fotos-url'
-import { enderecoPorExtenso } from '@/lib/geocodificacao'
+import { enderecoPorExtenso, pedirEnderecoDepois } from '@/lib/geocodificacao'
 // Lote 2026-10 (onda L): gravação pelo envelope (guarda no aparelho e envia) e leitura sem rede.
 import { novoId, salvarSnapshot, lerSnapshot, filaDisponivel } from '@/lib/offline/fila'
 import { prepararFoto, MENSAGEM_GUARDADO, type FotoPreparada, type ResultadoRegistroCampo } from '@/lib/offline/registro-campo'
 import { aplicarPendentes, lerPendentes } from '@/lib/offline/pendentes'
 import { salvarEscoltasOffline } from '@/lib/offline/sessao'
+import { obterGpsPreciso, textoPrecisao } from '@/lib/gps'
 import {
   aparelhoSemRede, conferirEspacoParaFoto, envelopeLigado, erroDeRede, gravarPeloEnvelope, textoConflito,
   textoErroGravacao, textoRecusado,
@@ -276,23 +277,10 @@ const STATUS_LABELS: Record<string, string> = {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-async function obterGPS(): Promise<{ lat: number; lng: number; precisao: number }> {
-  if (!navigator.geolocation) throw new Error('GPS não disponível')
-
-  const tentarObter = (highAccuracy: boolean, timeout: number, maximumAge: number) =>
-    new Promise<{ lat: number; lng: number; precisao: number }>((resolve, reject) => {
-      navigator.geolocation.getCurrentPosition(
-        (p) => resolve({ lat: p.coords.latitude, lng: p.coords.longitude, precisao: p.coords.accuracy }),
-        reject,
-        { enableHighAccuracy: highAccuracy, timeout, maximumAge }
-      )
-    })
-
-  try {
-    return await tentarObter(true, 15000, 0)
-  } catch {
-    return await tentarObter(false, 10000, 30000)
-  }
+// Onda M (B3): alta precisão, depois rede; precisão pior que 100 m dispara nova tentativa
+// de até 10 s e fica a melhor leitura (lib/gps.ts).
+function obterGPS(): Promise<{ lat: number; lng: number; precisao: number }> {
+  return obterGpsPreciso()
 }
 
 /**
@@ -903,6 +891,9 @@ export default function CampoPage() {
       gps = null
       showToast('erro', 'Foto registrada sem coordenadas: sem sinal de GPS.')
     }
+    // Onda M (B3): a leitura já teve a nova tentativa de 10 s; se continuou ruim, o
+    // operador fica sabendo (a precisão também vai no carimbo e no banco).
+    if (gps && gps.precisao > 100) showToast('erro', `${textoPrecisao(gps.precisao)}. Foi gravada a melhor leitura obtida.`)
 
     // O GPS vem antes do carimbo de proposito: e a coordenada que o carimbo escreve.
     const { file: carimbada, carimbado } = await aplicarCarimbo(file, { timestamp, gps })
@@ -1791,16 +1782,19 @@ export default function CampoPage() {
       }
       if (fotoIds.length === 0) throw new Error('Não foi possível enviar as fotos do check-in. Tente novamente.')
 
+      // Lote 2026-10 (onda F): endereço por extenso, como na tela de detalhe.
+      const enderecoCheckin = await enderecoPorExtenso(gps.lat, gps.lng)
       await registrarCheckin(sb, {
         escoltaVeiculoId: escoltaVeiculoIdAlvo,
         fotoIds,
         gps,
         observacao: obsCheckin,
         userId: user.id,
-        // Lote 2026-10 (onda F): endereço por extenso, como na tela de detalhe.
-        endereco: await enderecoPorExtenso(gps.lat, gps.lng),
+        endereco: enderecoCheckin,
         dataHora: quando,
       })
+      // Onda M (B2): a Mapbox não respondeu a tempo; o servidor preenche depois, uma vez.
+      if (!enderecoCheckin) pedirEnderecoDepois([escoltaAtiva.id])
 
       // Telegram depois da gravacao, sem esperar: o check-in ja esta salvo.
       let fotoTgUrl: string | null = null

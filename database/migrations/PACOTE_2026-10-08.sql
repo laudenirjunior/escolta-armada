@@ -1,6 +1,6 @@
 -- PACOTE_2026-10-08.sql
 -- Lote 2026-10 do Escolta Armada: pacote de publicação no banco de produção
--- (projeto qthoyxujyzskydulvcfy). Gerado a partir das migrations 196 a 219 (as do lote que existem, 215, 216 e 219 incluídas) testadas na
+-- (projeto qthoyxujyzskydulvcfy). Gerado a partir das migrations 196 a 220 (as do lote que existem, 215, 216 e 219 incluídas; 220 da onda M, de 06/11/2026, no fim do bloco 1) testadas na
 -- homologação da VPS (banco recriado do zero com o esquema de produção de 08/10/2026).
 --
 -- NÃO APLICAR SEM O "publicar" DO PEÇANHA. Não há caminho de DDL para produção na VPS:
@@ -3745,6 +3745,92 @@ END;
 $$;
 REVOKE ALL ON FUNCTION public.impedir_edicao_por_operador() FROM PUBLIC, anon, authenticated;
 
+
+-- ──────── 220_endereco_pos_envio.sql ────────
+-- 220_endereco_pos_envio.sql
+-- Onda M (leveza), item B2 do comando de 06/11/2026; docs/12 item 0.7 e plano do lote 16.3 item 10.
+-- Idempotente. Bloco 1, no fim (depois da 216). Compatível com a master 2b3fff9: só cria uma
+-- função nova, que a master não chama; nenhuma tabela, coluna, policy ou trigger muda.
+--
+-- Por quê:
+-- 1. O ponto gravado sem internet (fila da onda L) ou pelo check-in do Campo sem resposta da
+--    Mapbox chega ao banco só com a coordenada: o endereço por extenso, guardado dentro de
+--    pontos_controle.observacoes (JSON de lib/pontos-controle.ts, chave "endereco"), fica nulo.
+-- 2. O aparelho, quando termina de enviar a fila, chama a rota /api/pontos/endereco (sessão
+--    obrigatória e limite por usuário). A rota lê os pontos com a RLS de quem chama, faz a
+--    geocodificação reversa no servidor uma única vez e grava o texto por esta função.
+-- 3. O operador não tem UPDATE em pontos_controle (pontos_update é só da gestão). Por isso a
+--    função é SECURITY DEFINER e se protege sozinha:
+--    - só quem é usuário ativo (get_meu_usuario_id não nulo);
+--    - só o autor do ponto (lancado_por) ou administrador, gestor e supervisor;
+--    - só ponto não anulado;
+--    - só quando o endereço está vazio: grava uma única vez, nunca troca um endereço existente;
+--    - texto aparado, de 3 a 300 caracteres.
+-- 4. A coordenada do GPS continua sendo a verdade: o texto é rótulo, mostrado como "endereço
+--    aproximado" (lib/rotulo-ponto.ts). O autor já podia mandar o endereço na criação do ponto;
+--    esta função não abre nada além disso.
+-- 5. Nenhuma coluna travada pela 214 muda (lancado_por, data_hora, anulação): só observacoes.
+
+CREATE OR REPLACE FUNCTION public.preencher_endereco_ponto(p_ponto_id uuid, p_endereco text)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public', 'pg_temp'
+AS $$
+DECLARE
+  v_eu uuid := public.get_meu_usuario_id();
+  v_perfil text := public.get_meu_perfil();
+  v_texto text := btrim(coalesce(p_endereco, ''));
+  v_autor uuid;
+  v_obs text;
+  v_json jsonb;
+BEGIN
+  IF v_eu IS NULL OR v_perfil IS NULL THEN
+    RAISE EXCEPTION 'Usuário sem cadastro ativo.' USING ERRCODE = '42501';
+  END IF;
+  IF length(v_texto) < 3 OR length(v_texto) > 300 THEN
+    RETURN false;
+  END IF;
+
+  SELECT lancado_por, observacoes INTO v_autor, v_obs
+    FROM pontos_controle
+   WHERE id = p_ponto_id AND anulado_em IS NULL
+   FOR UPDATE;
+  IF NOT FOUND THEN RETURN false; END IF;
+  IF v_autor IS DISTINCT FROM v_eu AND v_perfil NOT IN ('administrador', 'gestor', 'supervisor') THEN
+    RETURN false;
+  END IF;
+
+  IF v_obs IS NULL OR btrim(v_obs) = '' THEN
+    v_json := '{}'::jsonb;
+  ELSIF left(btrim(v_obs), 1) = '{' THEN
+    BEGIN
+      v_json := v_obs::jsonb;
+    EXCEPTION WHEN others THEN
+      RETURN false; -- JSON malformado: não mexe (a leitura da tela preserva o texto)
+    END;
+  ELSE
+    -- Texto puro legado: vira o campo observacao, como lerObservacao já mostra.
+    v_json := jsonb_build_object('observacao', v_obs, 'foto_ids', '[]'::jsonb);
+  END IF;
+
+  IF jsonb_typeof(v_json) <> 'object' THEN RETURN false; END IF;
+  IF coalesce(btrim(v_json ->> 'endereco'), '') <> '' THEN RETURN false; END IF;
+
+  UPDATE pontos_controle
+     SET observacoes = (v_json || jsonb_build_object('endereco', v_texto))::text
+   WHERE id = p_ponto_id;
+  RETURN true;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.preencher_endereco_ponto(uuid, text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.preencher_endereco_ponto(uuid, text) FROM anon;
+GRANT EXECUTE ON FUNCTION public.preencher_endereco_ponto(uuid, text) TO authenticated;
+
+COMMENT ON FUNCTION public.preencher_endereco_ponto(uuid, text) IS
+  'Onda M (220): grava uma única vez o endereço por extenso de um ponto que chegou sem ele (autor ou gestão).';
+
 COMMIT;
 
 -- Conferência do bloco 1 (somente leitura):
@@ -3824,11 +3910,12 @@ UNION ALL SELECT 'onda K: escoltas com UF, interestaduais, sem determinar, a con
 UNION ALL SELECT 'onda K: ESC-2026-0001 e 0007 sem UF (esperado 0)', count(*)::text FROM public.escoltas WHERE codigo_escolta IN ('ESC-2026-0001', 'ESC-2026-0007') AND (origem_uf IS NOT NULL OR destino_uf IS NOT NULL OR origem_uf_estimada OR destino_uf_estimada)
 UNION ALL SELECT 'onda K: triggers da UF no servidor (esperado 3) e lados fora do Brasil', (SELECT count(*) FROM pg_trigger WHERE tgname LIKE 'tr_escoltas_uf_%') || '; ' || (SELECT count(*) FROM public.escoltas WHERE (origem_uf IS NULL AND origem_uf_estimada) OR (destino_uf IS NULL AND destino_uf_estimada))
 UNION ALL SELECT 'onda K: clientes fora da paleta (esperado 0) e trocas de cor', (SELECT count(*) FROM public.clientes c WHERE NOT EXISTS (SELECT 1 FROM public.paleta_clientes p WHERE p.cor = c.cor_destaque)) || '; ' || (SELECT count(*) FROM backup_20261008.cores_clientes WHERE cor_antiga IS DISTINCT FROM cor_nova)
-UNION ALL SELECT 'onda K: RPCs para authenticated (esperado true, true)', has_function_privilege('authenticated', 'public.uf_da_coordenada(double precision, double precision)', 'EXECUTE') || ', ' || has_function_privilege('authenticated', 'public.cores_clientes_das_escoltas(uuid[])', 'EXECUTE');
+UNION ALL SELECT 'onda K: RPCs para authenticated (esperado true, true)', has_function_privilege('authenticated', 'public.uf_da_coordenada(double precision, double precision)', 'EXECUTE') || ', ' || has_function_privilege('authenticated', 'public.cores_clientes_das_escoltas(uuid[])', 'EXECUTE')
+UNION ALL SELECT 'onda M (220): preencher_endereco_ponto para authenticated, não para anon (esperado true, false)', has_function_privilege('authenticated', 'public.preencher_endereco_ponto(uuid, text)', 'EXECUTE') || ', ' || has_function_privilege('anon', 'public.preencher_endereco_ponto(uuid, text)', 'EXECUTE');
 -- Esperado: 9 funções, 8 tabelas, 0 abertas com periodicidade, 5 locais aguardando_conferencia,
 -- troca true,true, cron lote2026_avisos_telegram e lote2026_avisos_checkin; 4; notificacoes_select; 0; false; false;
 -- onda I: 9; 9, 10, 3; 3; 0; 11; true; onda D2: 2, false; 0; 5 e o uso de cada local (escoltas não canceladas);
--- onda K: 27, 12, 1, 1; os números da carga de UF; 0; 3 e os lados fora do Brasil (listar no relatório); 0 e as trocas; true, true. ESC-2026-0001 e 0007: atualizado_em igual ao da consulta prévia
+-- onda M: true, false. onda K: 27, 12, 1, 1; os números da carga de UF; 0; 3 e os lados fora do Brasil (listar no relatório); 0 e as trocas; true, true. ESC-2026-0001 e 0007: atualizado_em igual ao da consulta prévia
 -- (a 213 não reescreve a linha; a carga da 215 só lê escoltas; a carga de UF da 216 as exclui e a coluna gerada
 -- interestadual reescreve a tabela por dentro sem trigger e sem mudar valor).
 -- 'envio pelo banco ativo' falso: o Telegram do check-in sai pelo navegador (reserva no banco,
@@ -8601,6 +8688,12 @@ UNION ALL SELECT 'onda K: editar_escolta com as marcas por lado (esperado true)'
 -- DROP FUNCTION IF EXISTS public._equipe_atual(uuid);
 -- DROP FUNCTION IF EXISTS public._hora_br(timestamptz);
 -- DROP FUNCTION IF EXISTS public._travar_vigilante(uuid);
+
+-- ──────── reverter 220_endereco_pos_envio ────────
+-- -- 220_endereco_pos_envio_reverter.sql
+-- -- Reversão da 220. Idempotente. Os endereços já gravados ficam (são só rótulo dentro de
+-- -- observacoes); sem a função, o ponto sem endereço volta a ficar só com a coordenada.
+-- DROP FUNCTION IF EXISTS public.preencher_endereco_ponto(uuid, text);
 
 -- ──────── reverter 216_uf_e_paleta ────────
 -- -- 216_uf_e_paleta_reverter.sql
