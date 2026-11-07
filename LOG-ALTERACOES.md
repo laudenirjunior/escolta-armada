@@ -8,6 +8,47 @@ Branch de trabalho: `master` (producao serve master; ver a entrada de 19/08 sobr
 
 ---
 
+## 2026-11-06 - Onda M (leveza): fotos leves, login do operador, sugestões de texto e endereço depois do envio
+
+Branch `melhoria/2026-11-onda-m-leveza`, sobre a onda L (`2bc7724`). Não vai para a `master` sem o Peçanha (roteiro em `/opt/operacao/escolta-1106/ENTREGA/ROTEIRO-PARA-SUBIR.md` e no cofre). Executada pelo Claude Code da VPS, com o Codex em paralelo (branch `melhoria/2026-11-onda-m-codex`, mesclada depois de revisada), pelo comando de 06/11/2026 do Peçanha.
+
+### Decisões (06/11/2026, 21h17, em nome do Peçanha)
+
+D1 pacote único (ondas A a L mais a M); D2 check-in periódico desligado; D3 escoltas antigas sem mexer (SQL opcional à parte); D4 locais salvos por supervisor ou acima, sem carga automática de coordenada; D5 Mapbox v5 com pino até uma medição mostrar ganho; D6 combustível só real; D7 fotos reduzidas, 1 a 3 por ponto; D8 login do operador mais simples e entrada direta no Painel Guiado; D9 sugestões por toque; D10 tarefas antigas do ClickUp absorvidas.
+
+### O que mudou
+
+1. **Fotos (D7).** `lib/carimbo-foto.ts` (Codex) reduz na mesma passagem do canvas: lado maior de 1600 px, JPEG 0,7, orientação EXIF, carimbo proporcional; falha continua declarada. Ligado em todos os caminhos: Campo e Painel Guiado (já usavam o carimbo), seletor de arquivo e vídeo ao vivo da tela de detalhe (`reduzirECarimbarImagem`), e a fila sem internet (guarda o arquivo já reduzido). `FOTOS_POR_PONTO` passou de 1 a 5 para 1 a 3. As 5 fotos da viatura no pré-início e na entrega continuam, reduzidas. A foto do painel do Passo 2 já era a do ponto de saída (onda H).
+2. **`carimbo_aplicado` verdadeiro na tela de detalhe** (docs/12, 2.1): o CameraInput marca o arquivo que saiu do carimbo (`lib/foto-captura.ts`) e o upload grava o resultado real.
+3. **Endereço depois do envio.** Migration `220_endereco_pos_envio` (bloco 1, compatível com a master): `preencher_endereco_ponto` grava uma única vez o endereço de ponto que chegou sem ele, só para o autor ou a gestão, só com o campo vazio. Rota `/api/pontos/endereco` (sessão e limite por usuário) faz a geocodificação reversa no servidor; o aparelho chama ao terminar a fila e no check-in em que a Mapbox não respondeu. `MAPBOX_TOKEN` e `MAPBOX_API_BASE` (só servidor) existem para a homologação usar uma Mapbox falsa.
+4. **GPS impreciso** (`lib/gps.ts`): leitura pior que 100 m tenta de novo por até 10 s e fica a melhor; a precisão aparece ao operador.
+5. **Login (D8).** Último usuário lembrado no aparelho (nunca a senha), campo sem maiúscula e sem correção, botão de ver a senha, mensagens claras e botões maiores (Codex). `/dashboard` manda o operador direto ao Campo (Painel Guiado), sem carregar o painel da gestão.
+6. **Sugestões (D9).** `components/ui/sugestoes-texto.tsx` e as listas de `lib/textos-padrao.ts` (Codex), ligadas no wizard, parada, cancelamento, reagendamento e relatório final; categoria da ocorrência como prefixo que não conta como relato; categoria opcional da emergência, sem atrasar o CONFIRMAR.
+7. **Revisão adversarial da onda L** (Codex): achados 4 (sem IndexedDB, fotos agora sobem antes do envelope) e 6 (URLs de foto liberadas) corrigidos; 1 (baixo, não alcançável pela API), 2, 3 e 5 em docs/12, seção 6.
+8. **Redundâncias conferidas:** Telegram e avisos saem por reserva no banco (uma mensagem por evento); histórico de status só pela RPC (209); Campo do operador lê só as escoltas do próprio efetivo.
+
+### Como foi verificado
+
+1. Código: type-check 0 erros; lint 0 erros e 25 avisos (base 26); build sem erro (homologação, 127.0.0.1:3100). Preview da Vercel de `30dc790`: success.
+2. Banco: `220` em testar-migration.sh (aplicar, reaplicar, reverter com esquema idêntico, aplicar); `04_lote_2026_10_m.sql` 15/15. Banco recriado do zero na ordem dos blocos (220 no fim do bloco 1): 01 e 02 corretos, 04 de a a m com 394 PASSOU ou BLOQUEADO CORRETAMENTE e 0 FALHOU. PACOTE aplicado pelos três arquivos do roteiro (consulta prévia, bloco 1, bloco 2) num banco zerado, sem erro, conferências no valor esperado.
+3. Funcional (suíte fase4-e2e.sh completa, mais `m_fotos_endereco` e `m_login_sugestoes`): jornadas pelo Painel e pela tela de detalhe finalizadas (14 pontos, 9 históricos, 0 erros de página); L1 a L9 passaram (L5 ajustado para 3 fotos por check-in). Novos: foto de 12 MP reduzida a cerca de 200 KB, 1600 x 1200, com carimbo legível; ponto recusa a 4ª foto; fila sem rede com 40 fotos reduzidas sobe uma vez (14 registros, 40 objetos); endereço preenchido depois do envio nos 14 pontos, uma geocodificação por ponto, rota sem sessão recusada (401); campo de usuário sem maiúscula e sem correção, usuário lembrado, senha nunca guardada, operador direto no Campo, 1 toque para entrar e 3 do Painel ao primeiro registro; categoria da ocorrência não libera o registro sem relato; sugestão do cancelamento entra por toque, sozinha não cancela e o texto editado é o gravado. Três suítes repetidas isoladas depois de ajustar premissas dos testes (não do código): primeiro login frio depois do reset, h_wizard (comparava o tamanho do arquivo antes do carimbo) e seletores do m_login_sugestoes.
+4. Revisões: adversarial da onda L (Codex) e cruzada da onda M (Codex, 1 grave, 6 médios, 1 menor): corrigidos o grave e 5 médios e o menor; pendências em docs/12, seção 6.
+
+### Medição antes e depois
+
+| Medida | Onda L (antes) | Onda M (depois) |
+|---|---|---|
+| Foto de 12 MP (4000 x 3000) depois do carimbo | 4.849 KB, 4000 x 3000 | cerca de 200 KB, 1600 x 1200 |
+| Maior foto no bucket com 40 fotos na fila | 3 a 5 MB | 210 KB |
+| First Load JS /dashboard | 176 kB | 176 kB |
+| First Load JS /dashboard/campo | 207 kB | 210 kB |
+| First Load JS /dashboard/escoltas/[id] | 220 kB | 223 kB |
+| Toques do Painel Guiado ao primeiro registro | (não medido) | 3 (mais 1 para entrar, com o usuário lembrado) |
+
+O pacote de JavaScript das telas cresceu 3 kB (sugestões e GPS); a leveza da onda M está nas fotos, que eram o gargalo da fila sem internet.
+
+---
+
 ## 2026-09-29 - Modo Guiado do operador (Painel Operacional Guiado), primeira entrega
 
 Branch `modo-guiado-operador`. Não vai para `master` sem aprovação de Pecanha.
