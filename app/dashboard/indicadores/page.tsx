@@ -112,6 +112,9 @@ function formatDuracao(min: number) {
   const h = Math.floor(min / 60); const m = min % 60
   return h === 0 ? `${m}min` : `${h}h${m.toString().padStart(2, '0')}m`
 }
+/** Onda O (M8): a regra do card "Escoltas no Período" e do gráfico do mês, mostrada na tela. */
+const REGRA_ESCOLTAS_PERIODO = 'data prevista no período, sem rascunho, canceladas e arquivadas'
+
 function computeRange(tipo: TipoPeriodo, di: string, df: string): { from: string; to: string } {
   const now = new Date()
   const end = new Date(); end.setHours(23, 59, 59, 999)
@@ -119,16 +122,21 @@ function computeRange(tipo: TipoPeriodo, di: string, df: string): { from: string
     const s = new Date(); s.setHours(0, 0, 0, 0)
     return { from: s.toISOString(), to: end.toISOString() }
   }
+  // Onda O (M8): semana e mês vão até o FIM do período (domingo e último dia do mês), como o
+  // gráfico do mês, que conta pela data prevista no mês inteiro. Antes paravam hoje, e a
+  // escolta agendada para amanhã entrava no gráfico e não no card (1 contra 2 em novembro).
   if (tipo === 'semana') {
     const s = new Date()
     // segunda-feira
     const day = s.getDay(); const diff = day === 0 ? -6 : 1 - day
     s.setDate(s.getDate() + diff); s.setHours(0, 0, 0, 0)
-    return { from: s.toISOString(), to: end.toISOString() }
+    const fimSemana = new Date(s); fimSemana.setDate(s.getDate() + 6); fimSemana.setHours(23, 59, 59, 999)
+    return { from: s.toISOString(), to: fimSemana.toISOString() }
   }
   if (tipo === 'mes') {
     const s = new Date(now.getFullYear(), now.getMonth(), 1)
-    return { from: s.toISOString(), to: end.toISOString() }
+    const fimMes = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999)
+    return { from: s.toISOString(), to: fimMes.toISOString() }
   }
   // personalizado
   const from = di ? new Date(di + 'T00:00:00').toISOString() : new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
@@ -371,19 +379,40 @@ export default function IndicadoresPage() {
       const rowIds = rows.map((e: any) => e.id)
       const escoltasFinalizadasIds = rows.filter(e => e.status === 'finalizada').map(e => e.id)
 
-      const [{ data: efetivos }, { data: escVeicsAll }, { data: escVeics }] = await Promise.all([
+      // Onda O (M8): uma onda só de consultas em paralelo (antes eram três ondas em sequência,
+      // mais o histórico no fim). Pontos e checklists filtram pela escolta via a viatura
+      // (embed !inner), sem esperar os ids das viaturas; o histórico das finalizadas também
+      // sai junto; e as viaturas com KM saem da mesma leitura das viaturas (era consulta dupla).
+      const [
+        { data: efetivos }, { data: escVeicsAll },
+        { data: pontosData }, { data: emergData }, { data: presData }, { data: clkData }, { data: ocorrTipoData },
+        { data: histStatus },
+      ] = await Promise.all([
         sb.from('escolta_efetivo')
           .select('vigilante_id, vigilante:vigilantes(nome_completo), escolta_id, confirmado, papel_na_escolta, valor_pago_vigilante')
           .in('escolta_id', rowIds),
         sb.from('escolta_veiculos')
           .select('id, veiculo_id, veiculo:veiculos(placa, modelo), quilometragem_saida, quilometragem_retorno, abastecimento_litros, abastecimento_valor, escolta_id')
           .in('escolta_id', rowIds),
-        sb.from('escolta_veiculos')
-          .select('veiculo_id, veiculo:veiculos(placa, modelo), quilometragem_saida, quilometragem_retorno, escolta_id')
-          .in('escolta_id', rowIds)
-          .not('quilometragem_retorno', 'is', null)
-          .not('quilometragem_saida', 'is', null),
+        sb.from('pontos_controle').select('id, criado_offline, precisao_metros, escolta_veiculo_id, observacoes, ev:escolta_veiculos!inner(escolta_id)')
+          .in('ev.escolta_id', rowIds).is('anulado_em', null),
+        sb.from('emergencias').select('id, status, data_hora, atualizado_em').in('escolta_id', rowIds).is('anulado_em', null),
+        sb.from('presencas').select('vigilante_id, escolta_id').in('escolta_id', rowIds).is('anulado_em', null),
+        sb.from('checklists').select('id, concluido, data_inicio, data_conclusao, tipo, checklist_respostas(conforme, descricao_item), ev:escolta_veiculos!inner(escolta_id)')
+          .in('ev.escolta_id', rowIds).is('anulado_em', null),
+        sb.from('ocorrencias').select('id, tipo:dom_tipos_ocorrencia(nome), escolta:escoltas!inner(arquivada_em)').gte('data_hora', from).lte('data_hora', to)
+          .is('anulado_em', null).is('escolta.arquivada_em', null),
+        escoltasFinalizadasIds.length > 0
+          ? sb.from('escolta_status_historico')
+              .select('escolta_id, status_novo, data_hora')
+              .in('escolta_id', escoltasFinalizadasIds)
+              .in('status_novo', ['em_andamento', 'finalizada'])
+              // Onda I: histórico anulado (voltar etapa, zerar) fora do tempo médio; a escolta
+              // zerada e refeita mede da entrada válida em andamento.
+              .is('anulado_em', null)
+          : Promise.resolve({ data: [] as any[] }),
       ])
+      const escVeics = ((escVeicsAll ?? []) as any[]).filter((ev: any) => ev.quilometragem_retorno != null && ev.quilometragem_saida != null)
 
       // Ranking de vigilantes
       const vigMap: Record<string, VigRanking> = {}
@@ -425,23 +454,6 @@ export default function IndicadoresPage() {
         veicMapFrota[vid].custo += ev.abastecimento_valor ?? 0
       })
       setFrotaDetalhes(Object.values(veicMapFrota).sort((a, b) => b.kmTotal - a.kmTotal))
-
-      // IDs de escolta_veiculos para queries de pontos/checklists
-      const escoltaVeiculoIds = (escVeicsAll ?? []).map((ev: any) => ev.id as string)
-
-      // Segunda bateria de queries (operacional/qualidade/pessoas)
-      const [{ data: pontosData }, { data: emergData }, { data: presData }, { data: clkData }, { data: ocorrTipoData }] = await Promise.all([
-        escoltaVeiculoIds.length > 0
-          ? sb.from('pontos_controle').select('id, criado_offline, precisao_metros, escolta_veiculo_id, observacoes').in('escolta_veiculo_id', escoltaVeiculoIds).is('anulado_em', null)
-          : Promise.resolve({ data: [] as any[] }),
-        sb.from('emergencias').select('id, status, data_hora, atualizado_em').in('escolta_id', rowIds).is('anulado_em', null),
-        sb.from('presencas').select('vigilante_id, escolta_id').in('escolta_id', rowIds).is('anulado_em', null),
-        escoltaVeiculoIds.length > 0
-          ? sb.from('checklists').select('id, concluido, data_inicio, data_conclusao, tipo, checklist_respostas(conforme, descricao_item)').in('escolta_veiculo_id', escoltaVeiculoIds).is('anulado_em', null)
-          : Promise.resolve({ data: [] as any[] }),
-        sb.from('ocorrencias').select('id, tipo:dom_tipos_ocorrencia(nome), escolta:escoltas!inner(arquivada_em)').gte('data_hora', from).lte('data_hora', to)
-          .is('anulado_em', null).is('escolta.arquivada_em', null),
-      ])
 
       // Check-ins stats
       const pontos = (pontosData ?? []) as any[]
@@ -533,14 +545,6 @@ export default function IndicadoresPage() {
 
       // Tempo médio de escolta
       if (escoltasFinalizadasIds.length > 0) {
-        const { data: histStatus } = await sb.from('escolta_status_historico')
-          .select('escolta_id, status_novo, data_hora')
-          .in('escolta_id', escoltasFinalizadasIds)
-          .in('status_novo', ['em_andamento', 'finalizada'])
-          // Onda I: histórico anulado (voltar etapa, zerar) fora do tempo médio; a escolta
-          // zerada e refeita mede da entrada válida em andamento.
-          .is('anulado_em', null)
-
         if (histStatus && histStatus.length > 0) {
           const porEscolta: Record<string, { inicio?: number; fim?: number }> = {}
           ;(histStatus as any[]).forEach(h => {
@@ -578,7 +582,9 @@ export default function IndicadoresPage() {
   useEffect(() => { carregar() }, [carregar])
 
   // KPIs calculados
-  const totalMes      = escoltas.length
+  // Onda O (M8): regra única do card e do gráfico do mês, escrita na tela: escoltas com data
+  // prevista no período, sem rascunho, canceladas e arquivadas.
+  const totalMes      = escoltas.filter(e => e.status !== 'rascunho' && e.status !== 'cancelada').length
   const ativas        = escoltas.filter(e => STATUSES_ATIVOS.includes(e.status))
   const concluidas    = escoltas.filter(e => STATUSES_CONCLUIDOS.includes(e.status))
   const canceladas    = escoltas.filter(e => e.status === 'cancelada')
@@ -586,7 +592,7 @@ export default function IndicadoresPage() {
   // Sem escolta ativa nao existe taxa a apurar. Antes mostrava 100%, que
   // sugeria desempenho perfeito onde nao havia nada medido.
   const txSla         = ativas.length > 0 ? Math.round(((ativas.length - alertasSLA.length) / ativas.length) * 100) : null
-  const txCanc        = totalMes > 0 ? Math.round((canceladas.length / totalMes) * 100) : 0
+  const txCanc        = totalMes + canceladas.length > 0 ? Math.round((canceladas.length / (totalMes + canceladas.length)) * 100) : 0
 
   const alertasVisiveis = alertasSLA.filter(a => !alertasFechados.has(a.id))
 
@@ -655,7 +661,7 @@ export default function IndicadoresPage() {
   const maxVolumeMensal = Math.max(...volumeMensal.map(m => m.total), 1)
 
   const KPI_CARDS = [
-    { label: 'Escoltas no Período', valor: loading ? '—' : totalMes,      sub: nomeCliente ?? `filtro: ${tipoPeriodo}`,           tendencia: 'neutro',                                   icon: Shield,       cor: P.navy,      corBg: P.navyBg,  dark: false },
+    { label: 'Escoltas no Período', valor: loading ? '—' : totalMes,      sub: `${nomeCliente ? `${nomeCliente} · ` : ''}${REGRA_ESCOLTAS_PERIODO}`,           tendencia: 'neutro',                                   icon: Shield,       cor: P.navy,      corBg: P.navyBg,  dark: false },
     { label: 'Em Andamento',        valor: loading ? '—' : ativas.length, sub: `${alertasVisiveis.length} alerta(s) SLA`,         tendencia: alertasVisiveis.length > 0 ? 'alerta' : 'neutro', icon: Truck, cor: P.navy,      corBg: P.navyBg,  dark: true  },
     { label: 'Concluídas',          valor: loading ? '—' : concluidas.length, sub: `${taxaConclusao}% de conclusão`,              tendencia: 'neutro',        icon: CheckCircle2, cor: P.steel,     corBg: P.steelBg, dark: false },
     { label: 'Ocorrências',         valor: loading ? '—' : totalOcorrencias, sub: 'registradas no período',                       tendencia: 'neutro',       icon: AlertTriangle,cor: P.errorText, corBg: P.errorBg, dark: false },
@@ -977,6 +983,9 @@ export default function IndicadoresPage() {
             <span style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: P.textSub }}>
               <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '2px', backgroundColor: P.navyBg, border: `1px solid ${P.border}` }} />
               Demais status
+            </span>
+            <span data-teste="regra-volume" style={{ fontSize: '10px', color: P.light }}>
+              Mesma regra do card Escoltas no Período: {REGRA_ESCOLTAS_PERIODO}.
             </span>
           </div>
         )}
