@@ -304,3 +304,24 @@ export function comCategoria(atual: string, categoria: string): string {
 export function relatoAlemDaCategoria(texto: string): string {
   return texto.replace(PREFIXO_CATEGORIA, '').trim()
 }
+
+/**
+ * Revisão cruzada da onda M (achado grave 2.1): a sugestão não pode liberar sozinha um campo
+ * obrigatório quando ela própria pede o fato ("... registrados no campo", "... descrita no
+ * campo") ou quando é só um trecho do relatório final. Tira do texto todas as frases da lista
+ * e devolve o que sobrou, escrito por quem registra. Frases completas (por exemplo, "Viatura
+ * conferida, sem avarias aparentes...") continuam valendo sozinhas, como antes da onda M.
+ */
+export function faltaComplementoDaSugestao(texto: string, sugestoes: readonly string[], sempre = false): boolean {
+  let resto = texto
+  let pedeFato = sempre
+  for (const frase of sugestoes) {
+    if (!frase || !resto.includes(frase)) continue
+    if (/no campo\.?$/.test(frase)) pedeFato = true
+    resto = resto.split(frase).join(' ')
+  }
+  return pedeFato && resto.replace(/[\s.,;:-]+/g, '').length < 3
+}
+
+export const MENSAGEM_COMPLETAR_SUGESTAO =
+  'Complete a sugestão com o que aconteceu (motivo, horário, responsável ou o detalhe pedido). A frase sozinha não basta.'

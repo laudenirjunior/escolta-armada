@@ -47,6 +47,8 @@ import {
   SUGESTOES_REAGENDAMENTO,
   SUGESTOES_RELATORIO_FINAL,
   juntarSugestao,
+  faltaComplementoDaSugestao,
+  MENSAGEM_COMPLETAR_SUGESTAO,
   PLACEHOLDER,
   ehTextoPadrao,
   comporObservacao,
@@ -351,7 +353,10 @@ function CameraInput({
     const gps = await gpsRapido()
     const r = await aplicarCarimbo(file, { timestamp: agora.toISOString(), gps })
     const tsStr = agora.toISOString().replace(/[:.]/g, '-').slice(0, 19)
-    const namedFile = new File([r.file], `${prefixoNome}_${tsStr}.jpg`, { type: 'image/jpeg' })
+    // Revisão cruzada (2.6): sem carimbo, o arquivo é o original (HEIC, PNG...): nome e tipo
+    // reais, nunca um rótulo de JPEG sobre bytes de outro formato.
+    const ext = r.carimbado ? 'jpg' : (r.file.name.split('.').pop() || 'jpg').toLowerCase()
+    const namedFile = new File([r.file], `${prefixoNome}_${tsStr}.${ext}`, { type: r.carimbado ? 'image/jpeg' : (r.file.type || 'application/octet-stream') })
     if (r.carimbado) marcarCarimbada(namedFile)
     const novas = [...fotos, { file: namedFile, url: URL.createObjectURL(namedFile) }]
     setFotos(novas)
@@ -390,6 +395,11 @@ function CameraInput({
   const capturar = async () => {
     if (!videoRef.current) return
     const v = videoRef.current
+    // Revisão cruzada (2.8): o vídeo ainda sem dimensões daria uma foto de 1 por 1.
+    if (!v.videoWidth || !v.videoHeight) {
+      setErro('A câmera ainda está abrindo. Aguarde um instante e toque de novo.')
+      return
+    }
     const agora = new Date()
     // Onda M (D7): o vídeo ao vivo passa pela mesma redução e pelo mesmo carimbo do seletor de
     // arquivo e do Campo (lado maior de 1600 px, JPEG 0,7, data, hora e coordenada).
@@ -1422,6 +1432,7 @@ export default function EscoltaDetalhePage() {
       setErro('A observação do checklist de materiais é obrigatória no Passo 1.')
       return
     }
+    if (faltaComplementoDaSugestao(obsMateriais, SUGESTOES_WIZARD.materiais)) { setErro(MENSAGEM_COMPLETAR_SUGESTAO); return }
     const fotosFaltando = FOTOS_VIATURA_DEF.filter(f => !fotosViatura[f.key])
     if (fotosFaltando.length > 0) {
       setErro(`Fotos obrigatórias da viatura: ${fotosFaltando.map(f => f.label).join(', ')}.`)
@@ -1431,6 +1442,7 @@ export default function EscoltaDetalhePage() {
       setErro('As observações do checklist de viatura são obrigatórias no Passo 2.')
       return
     }
+    if (faltaComplementoDaSugestao(obsViatura, SUGESTOES_WIZARD.viatura)) { setErro(MENSAGEM_COMPLETAR_SUGESTAO); return }
     // Onda H: KM inicial e foto do painel saem do Passo 2, por viatura. A mesma
     // conferência do avanço do Passo 2 roda aqui de novo, como defesa.
     const faltaPorViatura = erroPorViaturaPasso2()
@@ -1439,6 +1451,7 @@ export default function EscoltaDetalhePage() {
       setErro('As observações de partida são obrigatórias no Passo 3.')
       return
     }
+    if (faltaComplementoDaSugestao(obsPartida, SUGESTOES_WIZARD.partida)) { setErro(MENSAGEM_COMPLETAR_SUGESTAO); return }
 
     setLoading(true)
     setErro(null)
@@ -1588,6 +1601,7 @@ export default function EscoltaDetalhePage() {
   // ── Cancelar escolta ─────────────────────────────────────────────────────────
   const cancelarEscolta = async () => {
     if (!motivoCancelamento.trim()) { setErro('Informe o motivo do cancelamento.'); return }
+    if (faltaComplementoDaSugestao(motivoCancelamento, SUGESTOES_CANCELAMENTO)) { setErro(MENSAGEM_COMPLETAR_SUGESTAO); return }
     setCancelando(true)
     setErro(null)
     try {
@@ -1615,6 +1629,7 @@ export default function EscoltaDetalhePage() {
   // ── Reagendar escolta ────────────────────────────────────────────────────────
   const reagendarEscolta = async () => {
     if (!motivoReagendamento.trim()) { setErro('Informe o motivo do reagendamento.'); return }
+    if (faltaComplementoDaSugestao(motivoReagendamento, SUGESTOES_REAGENDAMENTO)) { setErro(MENSAGEM_COMPLETAR_SUGESTAO); return }
     if (!novaDataReagendamento) { setErro('Informe a nova data.'); return }
     setCancelando(true)
     setErro(null)
@@ -2146,6 +2161,7 @@ export default function EscoltaDetalhePage() {
     if (!escolta) return
     if (!validarPreRequisitos()) return
     if (!obsParada.trim()) { setErro('A justificativa é obrigatória.'); return }
+    if (faltaComplementoDaSugestao(obsParada, SUGESTOES_PARADA)) { setErro(MENSAGEM_COMPLETAR_SUGESTAO); return }
     // A parada e um registro de local como qualquer outro: exige foto.
     if (fotosParada.length < FOTOS_POR_PONTO.min) {
       setErro('É obrigatório registrar ao menos ' + FOTOS_POR_PONTO.min + ' foto da parada.')
@@ -2911,6 +2927,8 @@ export default function EscoltaDetalhePage() {
       setErro('O relatório diário é obrigatório para finalizar a escolta.')
       return
     }
+    // Revisão cruzada (2.1): os trechos sugeridos sozinhos não são um relatório.
+    if (faltaComplementoDaSugestao(relatorioFinal, SUGESTOES_RELATORIO_FINAL, true)) { setErro(MENSAGEM_COMPLETAR_SUGESTAO); return }
     setLoading(true)
     try {
       // Mesma regra dos outros dez caminhos: sem sinal nao bloqueia, registra a ausencia.
@@ -3284,6 +3302,7 @@ export default function EscoltaDetalhePage() {
                   onClick={() => {
                     if (!fotoMateriais) { setErro('A foto dos materiais é obrigatória.'); return }
                     if (!obsMateriais.trim()) { setErro('As observações são obrigatórias.'); return }
+                    if (faltaComplementoDaSugestao(obsMateriais, SUGESTOES_WIZARD.materiais)) { setErro(MENSAGEM_COMPLETAR_SUGESTAO); return }
                     setErro(null)
                     setWizardStep(2)
                   }}
@@ -3469,6 +3488,7 @@ export default function EscoltaDetalhePage() {
                     const faltando = FOTOS_VIATURA_DEF.filter(f => !fotosViatura[f.key])
                     if (faltando.length > 0) { setErro(`Fotos obrigatórias: ${faltando.map(f => f.label).join(', ')}.`); return }
                     if (!obsViatura.trim()) { setErro('As observações são obrigatórias.'); return }
+                    if (faltaComplementoDaSugestao(obsViatura, SUGESTOES_WIZARD.viatura)) { setErro(MENSAGEM_COMPLETAR_SUGESTAO); return }
                     const faltaPorViatura = erroPorViaturaPasso2()
                     if (faltaPorViatura) { setErro(faltaPorViatura); return }
                     setErro(null)

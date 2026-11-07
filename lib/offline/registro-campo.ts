@@ -14,6 +14,7 @@
  * a tela mostra "Guardado no aparelho. Será enviado quando houver sinal.", nunca "a central
  * foi avisada".
  */
+import { pedirEnderecoDepois } from '../geocodificacao.ts'
 import {
   caminhoFoto, filaDisponivel, guardarRegistro, guardarFotoAvulsa, lerRecibo, lerRegistro, novoId,
   FOTO_AVULSA, VERSAO_FILA,
@@ -197,6 +198,8 @@ export async function registrarCampo(ctx: ContextoRegistro, e: EntradaRegistroCa
       throw new Error(`Não foi possível registrar: ${r.error.message}`)
     }
     const d = (r.data ?? {}) as Record<string, unknown>
+    // Revisão cruzada (2.2): o caminho sem IndexedDB também pede o endereço depois.
+    if (d.resultado === 'aplicado') pedirEnderecoDepois([e.escoltaId], ctx.fetch ?? fetch)
     return { modo: 'enviado', clientId, resultado: d.resultado === 'aplicado' ? 'aplicado' : 'conflito',
              motivo: (d.motivo as string) ?? null, duplicado: !!d.duplicado, resposta: d, textoOffline: (d.texto_offline as string) ?? null }
   }
