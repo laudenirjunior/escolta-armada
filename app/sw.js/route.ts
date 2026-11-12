@@ -14,13 +14,16 @@ export const dynamic = 'force-static'
 
 const ENTRADAS = ['/layout', '/dashboard/layout', '/dashboard/page', '/dashboard/campo/page', '/dashboard/escoltas/[id]/page']
 
-function lerJson(arquivo: string): Record<string, unknown> | null {
-  try { return JSON.parse(readFileSync(join(process.cwd(), '.next', arquivo), 'utf8')) } catch { return null }
+// Caminhos literais: com um nome de arquivo variável em join(), o rastreador de arquivos do
+// build (output file tracing) incluía a pasta .next inteira, cache do webpack junto, e a
+// função passou do limite de 250 MB da Vercel.
+function lerJson(caminho: string): Record<string, unknown> | null {
+  try { return JSON.parse(readFileSync(caminho, 'utf8')) } catch { return null }
 }
 
 function precarga(): string[] {
-  const app = lerJson('app-build-manifest.json') as { pages?: Record<string, string[]> } | null
-  const base = lerJson('build-manifest.json') as { rootMainFiles?: string[]; polyfillFiles?: string[] } | null
+  const app = lerJson(join(process.cwd(), '.next', 'app-build-manifest.json')) as { pages?: Record<string, string[]> } | null
+  const base = lerJson(join(process.cwd(), '.next', 'build-manifest.json')) as { rootMainFiles?: string[]; polyfillFiles?: string[] } | null
   const arquivos = new Set<string>()
   for (const e of ENTRADAS) for (const f of app?.pages?.[e] ?? []) arquivos.add(f)
   for (const f of [...(base?.rootMainFiles ?? []), ...(base?.polyfillFiles ?? [])]) arquivos.add(f)
