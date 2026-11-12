@@ -71,8 +71,21 @@ export const PODE_VER_RELATORIOS: CodigoPerfil[] = ['administrador', 'gestor', '
  */
 export const PODE_PODER_TOTAL: CodigoPerfil[] = ['administrador', 'gestor']
 
-/** Onda I: só o administrador vê as escoltas arquivadas e as recupera. */
-export const PODE_VER_ARQUIVADAS: CodigoPerfil[] = ['administrador']
+/**
+ * Onda I: o administrador vê as escoltas arquivadas e as recupera. Pedido de Peçanha em
+ * 2026-11-12 (controle total da gestão): o gestor também, para cancelar, excluir ou
+ * recuperar qualquer escolta. A RLS e a RPC recuperar_escolta passam a aceitar o gestor na
+ * migration 221; antes dela o gestor vê a lista vazia e o banco recusa a recuperação.
+ */
+export const PODE_VER_ARQUIVADAS: CodigoPerfil[] = ['administrador', 'gestor']
+
+/**
+ * Controle total (2026-11-12): excluir escolta (exclusão lógica, com motivo e dupla
+ * confirmação; RPC excluir_escolta da migration 221), ver e restaurar as excluídas, e
+ * cancelar escolta já finalizada (RPC cancelar_escolta_gestao). O mesmo conjunto de
+ * PODE_PODER_TOTAL, de propósito: supervisor e central não ganham nada.
+ */
+export const PODE_EXCLUIR_ESCOLTA: CodigoPerfil[] = PODE_PODER_TOTAL
 
 /** Onda I: tela "Pendências de conclusão" (supervisor ou acima). */
 export const PODE_VER_PENDENCIAS: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor']
@@ -85,6 +98,14 @@ export const PODE_ADMINISTRAR_SISTEMA: CodigoPerfil[] = ['administrador']
 
 /** Perfis considerados "gestão" — podem ver todas as escoltas no Campo */
 export const PERFIS_GESTAO: CodigoPerfil[] = ['administrador', 'gestor', 'supervisor', 'central']
+
+/**
+ * Gestor ou administrador (PODE_PODER_TOTAL). Diferente de ehGestao (lib/acesso-escolta.ts),
+ * que usa PERFIS_GESTAO e inclui supervisor e central.
+ */
+export function ehGestorOuAdmin(perfil: string | undefined | null): boolean {
+  return temPermissao(perfil, PODE_PODER_TOTAL)
+}
 
 /** Helper: verifica se um perfil tem a permissão */
 export function temPermissao(perfil: string | undefined | null, permissao: CodigoPerfil[]): boolean {

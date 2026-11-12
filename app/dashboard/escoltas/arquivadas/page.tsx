@@ -2,7 +2,8 @@
 
 /**
  * Escoltas arquivadas (lote 2026-10, onda I, decisão 1 do adendo: arquivar, nunca apagar).
- * Só o administrador: a RLS (migration 214) esconde a escolta arquivada de todos os outros.
+ * Administrador e gestor (controle total, 2026-11-12): a RLS esconde a escolta arquivada dos
+ * outros perfis (migration 214; o gestor passa a ver com a 221, e antes dela a lista vem vazia).
  * Mostra motivo, autor e data, e recupera pela RPC recuperar_escolta (218), com motivo.
  */
 import { useCallback, useEffect, useState } from 'react'
@@ -12,7 +13,8 @@ import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/hooks/useAuth'
 import { PODE_VER_ARQUIVADAS, temPermissao } from '@/lib/permissions'
 import { rotuloStatus } from '@/lib/fluxo-escolta'
-import { horaBR } from '@/lib/gestao'
+import { ehFuncaoAusente, horaBR } from '@/lib/gestao'
+import { MSG_DEPENDE_221 } from '@/lib/controle-total'
 import { CartaoEscolta } from '@/components/escolta/cartao-escolta'
 import { DialogoAcao } from '@/components/escolta/acoes-gestao'
 import { SELECT_CARTAO, type CartaoEscolta as CartaoDados } from '@/lib/cartao-escolta'
@@ -29,7 +31,8 @@ interface Arquivada extends CartaoDados {
 export default function ArquivadasPage() {
   const router = useRouter()
   const { user } = useAuth()
-  const podeVer = temPermissao(user?.perfil?.codigo, PODE_VER_ARQUIVADAS)
+  const perfil = user?.perfil?.codigo
+  const podeVer = temPermissao(perfil, PODE_VER_ARQUIVADAS)
   const [lista, setLista] = useState<Arquivada[]>([])
   const [carregando, setCarregando] = useState(true)
   const [msg, setMsg] = useState<{ ok: boolean; texto: string } | null>(null)
@@ -42,14 +45,20 @@ export default function ArquivadasPage() {
       .not('arquivada_em', 'is', null)
       .order('arquivada_em', { ascending: false })
     if (error) setMsg({ ok: false, texto: error.message })
+    // O gestor só enxerga as arquivadas com a migration 221 (RLS): sem ela a lista viria vazia
+    // sem explicação. A RPC nova da 221 diz se ela já foi aplicada.
+    else if (perfil !== 'administrador') {
+      const { error: e221 } = await sb.rpc('listar_escoltas_excluidas')
+      if (ehFuncaoAusente(e221)) setMsg({ ok: false, texto: MSG_DEPENDE_221 })
+    }
     setLista((data ?? []) as Arquivada[])
     setCarregando(false)
-  }, [])
+  }, [perfil])
 
   useEffect(() => { if (podeVer) carregar() }, [podeVer, carregar])
 
   if (!user) return null
-  if (!podeVer) return <div className="p-6 text-sm">Acesso restrito ao administrador.</div>
+  if (!podeVer) return <div className="p-6 text-sm">Acesso restrito ao gestor e ao administrador.</div>
 
   return (
     <div className="space-y-6">

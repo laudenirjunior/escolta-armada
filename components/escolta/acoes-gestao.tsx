@@ -12,17 +12,22 @@
  * status, total e hash dos ids a anular): se a escolta mudou entre a prévia e a confirmação,
  * o banco recusa e a tela pede para conferir de novo.
  *
- * Escolta arquivada (só o administrador a abre): faixa "Arquivada em ... por Nome: motivo" e
- * o menu oferece só Recuperar.
+ * Escolta arquivada (administrador e, com a migration 221, o gestor a abrem): faixa
+ * "Arquivada em ... por Nome: motivo", Recuperar e Excluir.
+ *
+ * Controle total (2026-11-12): Excluir em qualquer status (DialogoExcluir, duas etapas,
+ * RPC excluir_escolta da 221).
  *
  * Fica fora da tela de detalhe de propósito (regra 7 do plano: mudança mínima no detalhe).
  * Também daqui: a faixa "Concluída com pendências" e a seção com a lista.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Archive, ArchiveRestore, CheckCheck, ChevronDown, Pencil, RotateCcw, ShieldAlert, Undo2, X } from 'lucide-react'
+import { Archive, ArchiveRestore, CheckCheck, ChevronDown, Pencil, RotateCcw, ShieldAlert, Trash2, Undo2, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { PODE_PODER_TOTAL, temPermissao } from '@/lib/permissions'
+import { podeExcluirEscolta, podeRecuperarArquivada } from '@/lib/controle-total'
+import { DialogoExcluir } from './excluir-escolta'
 import { rotuloStatus, statusAnterior } from '@/lib/fluxo-escolta'
 import {
   MSG_ATUALIZACAO, ehFuncaoAusente, horaBR, totalItensPendentes,
@@ -64,9 +69,27 @@ export function AcoesGestao({ escolta, perfil, onAlterado }: Props) {
   const router = useRouter()
   const [menu, setMenu] = useState(false)
   const [acao, setAcao] = useState<Acao | null>(null)
+  const [excluindo, setExcluindo] = useState(false)
   if (!temPermissao(perfil, PODE_PODER_TOTAL)) return null
 
-  // Arquivada: só o administrador a vê; a única ação é recuperar (o banco recusa as outras).
+  // Excluída some para todos (RLS da 221): depois de excluir, volta para a lista.
+  const dialogoExcluir = excluindo && (
+    <DialogoExcluir escolta={escolta} onFechar={() => setExcluindo(false)}
+      onFeito={() => { setExcluindo(false); router.push('/dashboard/escoltas') }} />
+  )
+  const botaoExcluir = podeExcluirEscolta(perfil) && (
+    <button
+      type="button"
+      onClick={() => setExcluindo(true)}
+      className="flex items-center justify-center gap-1.5 font-black text-[10px] uppercase tracking-widest px-4 py-2"
+      style={{ backgroundColor: '#FFFFFF', color: C.red, border: `1px solid ${C.red}`, borderRadius: '1px', minHeight: '40px' }}
+      data-teste="acao-excluir"
+    >
+      <Trash2 size={13} /> Excluir
+    </button>
+  )
+
+  // Arquivada: administrador e gestor a veem; recuperar ou excluir (o banco recusa as outras).
   if (escolta.arquivada_em) {
     return (
       <div className="space-y-2" data-teste="acoes-gestao">
@@ -75,7 +98,8 @@ export function AcoesGestao({ escolta, perfil, onAlterado }: Props) {
             <strong>Arquivada em {horaBR(escolta.arquivada_em)} (Brasília){escolta.arquivador?.nome_completo ? ` por ${escolta.arquivador.nome_completo}` : ''}:</strong>{' '}
             {escolta.motivo_arquivamento ?? 'sem motivo'}
           </span>
-          {perfil === 'administrador' && (
+          <span className="flex gap-2">
+          {podeRecuperarArquivada(perfil) && (
             <button
               type="button"
               onClick={() => setAcao('recuperar')}
@@ -86,8 +110,11 @@ export function AcoesGestao({ escolta, perfil, onAlterado }: Props) {
               <ArchiveRestore size={13} /> Recuperar
             </button>
           )}
+          {botaoExcluir}
+          </span>
         </div>
         {acao && <DialogoAcao acao={acao} escolta={escolta} onFechar={() => setAcao(null)} onFeito={() => { setAcao(null); onAlterado() }} />}
+        {dialogoExcluir}
       </div>
     )
   }
@@ -110,7 +137,8 @@ export function AcoesGestao({ escolta, perfil, onAlterado }: Props) {
   ]
 
   return (
-    <div className="flex justify-end" data-teste="acoes-gestao">
+    <div className="flex justify-end gap-2" data-teste="acoes-gestao">
+      {botaoExcluir}
       <div className="relative">
         <button
           type="button"
@@ -156,12 +184,13 @@ export function AcoesGestao({ escolta, perfil, onAlterado }: Props) {
           onFeito={() => {
             const a = acao
             setAcao(null)
-            // Arquivada some para o gestor (só o administrador a vê): volta para a lista.
+            // Arquivada some para quem não a vê (o gestor, antes da migration 221): volta para a lista.
             if (a === 'arquivar' && perfil !== 'administrador') router.push('/dashboard/escoltas')
             else onAlterado()
           }}
         />
       )}
+      {dialogoExcluir}
     </div>
   )
 }
@@ -283,7 +312,7 @@ export function DialogoAcao({ acao, escolta, onFechar, onFeito }: {
           )}
 
           {acao === 'arquivar' && (
-            <p className="text-sm" style={{ color: C.sub }}>A escolta some das listas, do mural, do Campo, do mapa e dos indicadores. Nada é apagado; o administrador vê em Arquivadas e pode recuperar.</p>
+            <p className="text-sm" style={{ color: C.sub }}>A escolta some das listas, do mural, do Campo, do mapa e dos indicadores. Nada é apagado; a gestão vê em Arquivadas e pode recuperar.</p>
           )}
           {acao === 'recuperar' && (
             <p className="text-sm" style={{ color: C.sub }}>A escolta volta às listas no status em que estava ({rotuloStatus(escolta.status)}). A recuperação fica na auditoria, e a supervisão é avisada.</p>

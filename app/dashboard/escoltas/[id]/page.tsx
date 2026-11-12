@@ -19,11 +19,12 @@ import { TextAreaWithTools } from '@/components/ui/textarea-with-tools'
 import { SugestoesTexto } from '@/components/ui/sugestoes-texto'
 import {
   PODE_AVANCAR_ESCOLTA,
-  PODE_CANCELAR_ESCOLTA,
   PODE_VER_FINANCEIRO,
   PODE_ALTERAR_PERIODICIDADE,
+  ehGestorOuAdmin,
 } from '@/lib/permissions'
 import { podeOperarEscolta } from '@/lib/acesso-escolta'
+import { MSG_DEPENDE_221, modoCancelamento, podeReagendar } from '@/lib/controle-total'
 import { minutosAteCheckin as calcularMinutosAteCheckin, inicioOperacaoEm, linhaCheckin, registrarCheckin, TIPO_CHECKIN, periodicidadePadraoDoCliente } from '@/lib/checkin'
 import { useModoGuiado } from '@/hooks/useModoGuiado'
 import {
@@ -61,7 +62,7 @@ import { carregarLocaisAtivos } from '@/lib/locais'
 import { CombustivelViaturas } from '@/components/escolta/combustivel-viaturas'
 import { rotuloDoPonto } from '@/lib/rotulo-ponto'
 import { AcoesGestao, PendenciasConclusao } from '@/components/escolta/acoes-gestao'
-import { COLUNAS_ANULACAO, textoAnulado, type Anulacao } from '@/lib/gestao'
+import { COLUNAS_ANULACAO, ehFuncaoAusente, textoAnulado, type Anulacao } from '@/lib/gestao'
 // Lote 2026-10 (onda L, 16.3.10): os handlers de campo passam as mesmas linhas ao envelope.
 import { novoId, lerSnapshot } from '@/lib/offline/fila'
 import { prepararFoto, MENSAGEM_GUARDADO, type FotoPreparada, type LinhasEnvelope, type EtapaEnvelope } from '@/lib/offline/registro-campo'
@@ -806,7 +807,6 @@ const NEXT_STATUS = PROXIMO_STATUS
 const JORNADA_ETAPAS = ETAPAS_JORNADA
 
 const PODE_AVANCAR = PODE_AVANCAR_ESCOLTA
-const PODE_CANCELAR = PODE_CANCELAR_ESCOLTA
 
 type Tab = 'geral' | 'timeline' | 'efetivo' | 'veiculos' | 'ocorrencias' | 'financeiro'
 
@@ -1700,9 +1700,24 @@ export default function EscoltaDetalhePage() {
   const cancelarEscolta = async () => {
     if (!motivoCancelamento.trim()) { setErro('Informe o motivo do cancelamento.'); return }
     if (faltaComplementoDaSugestao(motivoCancelamento, SUGESTOES_CANCELAMENTO)) { setErro(MENSAGEM_COMPLETAR_SUGESTAO); return }
+    // Controle total (2026-11-12): finalizada só pelo gestor ou administrador, pela RPC da
+    // migration 221 (motivo de 10 caracteres, auditoria e aviso no banco). Os outros status
+    // seguem pelo caminho de sempre, que não depende da 221.
+    const modo = modoCancelamento(user?.perfil?.codigo, escolta!)
+    if (!modo) { setErro('Esta escolta não pode ser cancelada por este perfil.'); return }
+    if (modo === 'gestao' && motivoCancelamento.trim().length < 10) { setErro('Informe o motivo com pelo menos 10 caracteres.'); return }
     setCancelando(true)
     setErro(null)
     try {
+      if (modo === 'gestao') {
+        const { error } = await sb.rpc('cancelar_escolta_gestao', { p_escolta_id: escolta!.id, p_motivo: motivoCancelamento.trim() })
+        if (error) throw new Error(ehFuncaoAusente(error) ? MSG_DEPENDE_221 : error.message)
+        setDialogCancelar(false)
+        setMotivoCancelamento('')
+        setAbaDialogCancelar('cancelar')
+        carregar()
+        return
+      }
       // Lote 2026-10 (onda F): status e histórico numa transação (registrar_etapa_escolta).
       const { error } = await sb.rpc('registrar_etapa_escolta', {
         p_escolta_id: escolta!.id,
@@ -3376,6 +3391,11 @@ export default function EscoltaDetalhePage() {
   const etapaAtual = JORNADA_ETAPAS.findIndex((e) => e.statuses.includes(escolta.status))
   const totalEfetivo = viaturas.reduce((acc, v) => acc + v.efetivo.length, 0)
   const isFinalizado = ['finalizada', 'cancelada'].includes(escolta.status)
+  // Supervisor: como antes (até antes de finalizada). Gestor e administrador: também a finalizada.
+  const modoCancelar = modoCancelamento(perfil, escolta)
+  const reagendavel = podeReagendar(escolta)
+  const abrirNoCampo = ehGestorOuAdmin(perfil) && !arquivada &&
+    ['em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando', 'na_base'].includes(escolta.status)
 
   const verFinanceiroDet = PERFIS_FINANCEIRO_DET.includes((user?.perfil?.codigo ?? '') as any)
 
@@ -3845,13 +3865,25 @@ export default function EscoltaDetalhePage() {
                   >
                     <FileDown size={13} /> PDF
                   </button>
-                  {PODE_CANCELAR.includes(perfil) && !isFinalizado && !arquivada && (
+                  {/* Controle total: gestor e administrador cancelam também a finalizada (221). */}
+                  {modoCancelar && (
                     <button
                       onClick={() => { setErro(null); setDialogCancelar(true) }}
                       className="bg-[#FAEAE9] hover:bg-[#F5D5D3] text-[#B83832] border border-[#EAB5B0] font-black text-[10px] uppercase tracking-widest px-4 py-2 flex items-center justify-center gap-1.5 transition-all active:scale-95"
                       style={{ borderRadius: '1px' }}
                     >
                       <XCircle size={14} /> Cancelar
+                    </button>
+                  )}
+                  {/* Controle total: gestor e administrador entram no Campo de qualquer escolta em andamento. */}
+                  {abrirNoCampo && (
+                    <button
+                      onClick={() => router.push(`/dashboard/campo?escolta=${escolta.id}`)}
+                      className="bg-[#F0F4FA] hover:bg-[#E2EAF7] text-[#1A2F4A] border border-[#D0DAEB] font-black text-[10px] uppercase tracking-widest px-4 py-2 flex items-center justify-center gap-1.5 transition-all active:scale-95"
+                      style={{ borderRadius: '1px' }}
+                      data-teste="abrir-no-campo"
+                    >
+                      <Radio size={13} /> Abrir no Campo
                     </button>
                   )}
                   {PODE_AVANCAR.includes(perfil) && podeOperar && proximoGenerico && (
@@ -5188,8 +5220,8 @@ export default function EscoltaDetalhePage() {
               <p className="text-xs mt-0.5" style={{ color: '#8B9BAD' }}>{escolta.codigo_escolta} — {escolta.cliente?.nome_cliente}</p>
             </div>
 
-            {/* Seleção de ação */}
-            <div className="grid grid-cols-2 gap-0 border-b" style={{ borderColor: '#E2E8EC' }}>
+            {/* Seleção de ação (finalizada não reagenda: só o cancelamento da gestão) */}
+            <div className={`grid ${reagendavel ? 'grid-cols-2' : 'grid-cols-1'} gap-0 border-b`} style={{ borderColor: '#E2E8EC' }}>
               <button
                 onClick={() => { setAbaDialogCancelar('cancelar'); setErro(null) }}
                 className="py-3 text-xs font-black uppercase tracking-widest transition-colors"
@@ -5202,7 +5234,7 @@ export default function EscoltaDetalhePage() {
                 <XCircle size={13} className="inline mr-1.5" style={{ verticalAlign: '-2px' }} />
                 Cancelar Escolta
               </button>
-              <button
+              {reagendavel && <button
                 onClick={() => { setAbaDialogCancelar('reagendar'); setErro(null) }}
                 className="py-3 text-xs font-black uppercase tracking-widest transition-colors"
                 style={{
@@ -5213,7 +5245,7 @@ export default function EscoltaDetalhePage() {
               >
                 <CalendarClock size={13} className="inline mr-1.5" style={{ verticalAlign: '-2px' }} />
                 Reagendar
-              </button>
+              </button>}
             </div>
 
             <div className="px-6 py-5 space-y-4">
@@ -5225,6 +5257,7 @@ export default function EscoltaDetalhePage() {
                     <XCircle size={15} style={{ color: '#B83832', flexShrink: 0, marginTop: 1 }} />
                     <p className="text-xs font-semibold" style={{ color: '#B83832' }}>
                       Esta ação é irreversível. A escolta será marcada como cancelada e registrada no histórico.
+                      {escolta.status === 'finalizada' && ' Ela já está finalizada: o cancelamento pela gestão fica na auditoria e a supervisão é avisada (motivo com pelo menos 10 caracteres).'}
                     </p>
                   </div>
                   <div>

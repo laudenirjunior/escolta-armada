@@ -7,7 +7,7 @@ import {
   LayoutDashboard, Shield, Radio, Map, Database,
   Crosshair, ClipboardList, BarChart2, FileText,
   Users, Settings, AlertTriangle, Bell, Send,
- Repeat, MapPin, Archive, ListChecks, ShieldAlert } from 'lucide-react'
+ Repeat, MapPin, Archive, ListChecks, ShieldAlert, Trash2 } from 'lucide-react'
 import { Sidebar, MobileDrawer, SidebarContent, SidebarSection, SidebarItem, SidebarFooter } from '@/components/layout/sidebar'
 import { TopBar } from '@/components/layout/topbar'
 import { TelegramNotificacoesProvider } from '@/components/telegram-notificacoes-provider'
@@ -46,9 +46,11 @@ const NAV: { section: string; items: NavItem[] }[] = [
       { label: 'Checklists',  href: '/dashboard/checklists',  icon: <ClipboardList size={16} />, perfis: ['administrador','gestor','supervisor','central'] as Perfil[] },
       // Lote 2026-10 (M5): pedidos de substituição do mural, para supervisor ou acima.
       { label: 'Substituições', href: '/dashboard/substituicoes', icon: <Repeat size={16} />, perfis: ['administrador','gestor','supervisor'] as Perfil[] },
-      // Lote 2026-10 (onda I): pendências de conclusão (supervisor ou acima) e arquivadas (administrador).
+      // Lote 2026-10 (onda I): pendências de conclusão (supervisor ou acima) e arquivadas (administrador;
+      // gestor também desde o controle total de 2026-11-12, com a migration 221). Excluídas: gestor e administrador.
       { label: 'Pendências de conclusão', href: '/dashboard/escoltas/pendencias', icon: <ListChecks size={16} />, perfis: ['administrador','gestor','supervisor'] as Perfil[] },
-      { label: 'Arquivadas', href: '/dashboard/escoltas/arquivadas', icon: <Archive size={16} />, perfis: ['administrador'] as Perfil[] },
+      { label: 'Arquivadas', href: '/dashboard/escoltas/arquivadas', icon: <Archive size={16} />, perfis: ['administrador','gestor'] as Perfil[] },
+      { label: 'Excluídas', href: '/dashboard/escoltas/excluidas', icon: <Trash2 size={16} />, perfis: ['administrador','gestor'] as Perfil[] },
       // Lote 2026-10 (onda L): registros de campo não aplicados (conflitos), supervisor ou acima.
       { label: 'Conflitos de campo', href: '/dashboard/conflitos', icon: <ShieldAlert size={16} />, perfis: ['administrador','gestor','supervisor'] as Perfil[] },
     ],
