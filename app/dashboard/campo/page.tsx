@@ -29,6 +29,7 @@ import {
 } from '@/lib/checkin'
 import { CONFIRMACAO_POR_DESTINO, proximaAcao, type AcaoDetalhe } from '@/lib/proximo-passo-operador'
 import { SELECT_CARTAO, type CartaoEscolta as CartaoDados } from '@/lib/cartao-escolta'
+import { selecionarEscoltaCampo } from '@/lib/campo-selecao'
 import { corDoCliente } from '@/lib/paleta-clientes'
 import { PainelGuiado, type Confirmacao, type PainelAberto, type Pendencia } from '@/components/campo-guiado/painel-guiado'
 import { urlAssinada } from '@/lib/fotos-url'
@@ -468,6 +469,11 @@ export default function CampoPage() {
   // URL nao bastava: navegar para a mesma rota com outra query nao remonta a pagina,
   // e o botao do alerta nao fazia nada justamente na tela principal do operador.
   const escoltaPreferidaRef = useRef<string | null>(null)
+  // Correção da prévia do PR #10: escolta agendada pedida pelo detalhe (?escolta=), mostrada
+  // à parte, fora de escoltaAtiva (regra lib/campo-selecao.ts).
+  const [agendadaPedida, setAgendadaPedida] = useState<EscoltaAtiva | null>(null)
+  const escoltaAtivaIdRef = useRef<string | null>(null)
+  escoltaAtivaIdRef.current = escoltaAtiva?.id ?? null
   const [pedidoCheckin, setPedidoCheckin] = useState<string | null>(null)
   useEffect(() => {
     try {
@@ -731,12 +737,13 @@ export default function CampoPage() {
     // Troca o objeto pela versao nova do banco, mantendo a escolta que estava aberta.
     // Antes a escolta aberta so era trocada quando estava nula: a etapa na tela ficava
     // velha ate recarregar a pagina, e nunca voltava a nulo quando a escolta saia.
-    const preferida = escoltaPreferidaRef.current
-    escoltaPreferidaRef.current = null
-    setEscoltaAtiva(prev => {
-      const alvo = preferida ?? prev?.id
-      return lista.find(e => e.id === alvo) ?? lista[0] ?? null
+    // O id pedido (?escolta=) vale também para agendada e fica guardado até ser exibido.
+    const sel = selecionarEscoltaCampo({
+      pedida: escoltaPreferidaRef.current, atual: escoltaAtivaIdRef.current, ativas: lista, agendadas: minhasAgendadas,
     })
+    escoltaPreferidaRef.current = sel.pedidoPendente
+    setEscoltaAtiva(sel.ativa)
+    setAgendadaPedida(sel.agendadaPedida)
 
     setTiposOcorrencia(dados.tipos)
     setModelosChecklist(dados.modelos)
@@ -2080,7 +2087,7 @@ export default function CampoPage() {
             const e = todasEscoltas.find(t => t.id === id)
             if (e) { setEscoltaAtiva(e); setPainelAberto(null) }
           }}
-          agendadas={agendadas.map(a => ({ id: a.id, codigo: a.codigo_escolta, cliente: a.cliente?.nome_cliente ?? null, prevista: a.data_hora_prevista, cartao: a as unknown as CartaoDados }))}
+          agendadas={(agendadaPedida ? [agendadaPedida] : agendadas).map(a => ({ id: a.id, codigo: a.codigo_escolta, cliente: a.cliente?.nome_cliente ?? null, prevista: a.data_hora_prevista, cartao: a as unknown as CartaoDados }))}
           semVinculoCadastro={semVinculoCadastro}
           proxima={proxima}
           acaoEtapa={escoltaAtiva
@@ -2185,8 +2192,27 @@ export default function CampoPage() {
         </div>
       )}
 
-      {/* ── Sem escolta ── */}
-      {!escoltaAtiva ? (
+      {/* ── Agendada pedida pelo detalhe: sem avanço de checkpoint; o pré-início é o wizard do detalhe ── */}
+      {!escoltaAtiva && agendadaPedida ? (
+        <div className="card-light p-5 space-y-3" data-teste="campo-agendada-pedida">
+          <p className="text-[10px] font-black text-[#6B7E8A] uppercase tracking-widest">Escolta agendada</p>
+          <p className="text-sm font-bold" style={{ color: '#1E2D35' }}>
+            {agendadaPedida.codigo_escolta ?? 'Sem código'}{agendadaPedida.cliente?.nome_cliente ? ` · ${agendadaPedida.cliente.nome_cliente}` : ''}
+          </p>
+          <p className="text-xs" style={{ color: '#6B7E8A' }}>
+            Prevista para {new Date(agendadaPedida.data_hora_prevista).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' }).replace(',', '')} (Brasília)
+          </p>
+          <p className="text-xs" style={{ color: '#6B7E8A' }}>O pré-início é feito pelo wizard de partida, na tela da escolta.</p>
+          <button
+            type="button"
+            onClick={() => abrirDetalhe('pre_inicio', agendadaPedida.id)}
+            className="w-full flex items-center justify-center gap-2 font-bold text-sm rounded"
+            style={{ minHeight: '48px', backgroundColor: '#1A294A', color: '#fff' }}
+          >
+            Abrir a escolta e iniciar o pré-início <ChevronRight size={16} />
+          </button>
+        </div>
+      ) : !escoltaAtiva ? (
         <div className="card-light py-16 flex flex-col items-center gap-4 text-center">
           <div className="w-14 h-14 rounded flex items-center justify-center" style={{ backgroundColor: '#F4F4F9', border: '1px solid #E2E8EC' }}>
             <Shield size={26} style={{ color: '#C4CDD4' }} />

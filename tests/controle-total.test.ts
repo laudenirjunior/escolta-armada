@@ -92,3 +92,17 @@ test('exclusão, etapa 2: o código da escolta digitado igual (sem diferenciar m
   assert.equal(exclusaoEtapa2Ok('', null), false)
   assert.equal(exclusaoEtapa2Ok('', ''), false)
 })
+
+test('prévia do PR #10: gestor e administrador cancelam do agendado à finalizada, inclusive no pré-início', () => {
+  for (const perfil of TOTAL) {
+    for (const status of ['agendada', 'em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino',
+      'em_transito_retorno', 'retornando', 'na_base']) {
+      assert.equal(modoCancelamento(perfil, { status }), 'etapa', `${perfil} ${status}`)
+    }
+    assert.equal(modoCancelamento(perfil, { status: 'finalizada' }), 'gestao')
+    assert.equal(modoCancelamento(perfil, { status: 'cancelada' }), null)
+    assert.equal(modoCancelamento(perfil, { status: 'em_pre_inicio', arquivada_em: '2026-11-12T10:00:00Z' }), null)
+  }
+  assert.equal(modoCancelamento('supervisor', { status: 'em_pre_inicio' }), 'etapa')
+  assert.equal(modoCancelamento('supervisor', { status: 'finalizada' }), null)
+})

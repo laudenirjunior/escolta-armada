@@ -18,15 +18,19 @@
  * Controle total (2026-11-12): Excluir em qualquer status (DialogoExcluir, duas etapas,
  * RPC excluir_escolta da 221).
  *
+ * Correção da prévia (2026-11-12): "Cancelar escolta" no menu, sempre que modoCancelamento
+ * permitir (inclusive no pré-início, em que o detalhe mostra só o wizard). Abre o diálogo de
+ * cancelar ou reagendar do próprio detalhe (onCancelar): a mesma regra e a mesma RPC.
+ *
  * Fica fora da tela de detalhe de propósito (regra 7 do plano: mudança mínima no detalhe).
  * Também daqui: a faixa "Concluída com pendências" e a seção com a lista.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Archive, ArchiveRestore, CheckCheck, ChevronDown, Pencil, RotateCcw, ShieldAlert, Trash2, Undo2, X } from 'lucide-react'
+import { Archive, ArchiveRestore, CheckCheck, ChevronDown, Pencil, RotateCcw, ShieldAlert, Trash2, Undo2, X, XCircle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { PODE_PODER_TOTAL, temPermissao } from '@/lib/permissions'
-import { podeExcluirEscolta, podeRecuperarArquivada } from '@/lib/controle-total'
+import { modoCancelamento, podeExcluirEscolta, podeRecuperarArquivada } from '@/lib/controle-total'
 import { DialogoExcluir } from './excluir-escolta'
 import { rotuloStatus, statusAnterior } from '@/lib/fluxo-escolta'
 import {
@@ -63,9 +67,11 @@ interface Props {
   }
   perfil: string | null | undefined
   onAlterado: () => void
+  /** Abre o diálogo de cancelar ou reagendar do detalhe. Sem ele, o item não aparece. */
+  onCancelar?: () => void
 }
 
-export function AcoesGestao({ escolta, perfil, onAlterado }: Props) {
+export function AcoesGestao({ escolta, perfil, onAlterado, onCancelar }: Props) {
   const router = useRouter()
   const [menu, setMenu] = useState(false)
   const [acao, setAcao] = useState<Acao | null>(null)
@@ -124,7 +130,9 @@ export function AcoesGestao({ escolta, perfil, onAlterado }: Props) {
   const podeConcluir = !['rascunho', 'finalizada', 'cancelada'].includes(st)
   const podeArquivar = STATUS_INICIADOS_ARQUIVO.includes(st)
 
-  const itens: { chave: Acao | 'editar'; rotulo: string; icone: React.ReactNode; ativo: boolean; dica?: string }[] = [
+  const cancelavel = !!onCancelar && modoCancelamento(perfil, escolta) !== null
+
+  const itens: { chave: Acao | 'editar' | 'cancelar'; rotulo: string; icone: React.ReactNode; ativo: boolean; dica?: string }[] = [
     { chave: 'editar', rotulo: 'Editar escolta', icone: <Pencil size={14} />, ativo: true },
     { chave: 'voltar', rotulo: 'Voltar uma etapa', icone: <Undo2 size={14} />, ativo: podeVoltar,
       dica: podeVoltar ? `Volta para ${rotuloStatus(statusAnterior(st) ?? '')}` : 'Sem etapa de campo para desfazer' },
@@ -134,6 +142,8 @@ export function AcoesGestao({ escolta, perfil, onAlterado }: Props) {
       dica: podeConcluir ? 'Mostra o que não foi feito antes de concluir' : 'Escolta já encerrada' },
     { chave: 'arquivar', rotulo: 'Arquivar', icone: <Archive size={14} />, ativo: podeArquivar,
       dica: podeArquivar ? 'Some das listas, do mural e dos indicadores' : 'Em andamento: conclua ou cancele antes (S7)' },
+    ...(cancelavel ? [{ chave: 'cancelar' as const, rotulo: 'Cancelar escolta', icone: <XCircle size={14} />, ativo: true,
+      dica: st === 'finalizada' ? 'Cancela a finalizada, com motivo (migration 221)' : 'Com motivo; também permite reagendar' }] : []),
   ]
 
   return (
@@ -161,6 +171,7 @@ export function AcoesGestao({ escolta, perfil, onAlterado }: Props) {
                 onClick={() => {
                   setMenu(false)
                   if (it.chave === 'editar') router.push(`/dashboard/escoltas/nova?editar=${escolta.id}`)
+                  else if (it.chave === 'cancelar') onCancelar?.()
                   else setAcao(it.chave)
                 }}
                 className="w-full text-left px-4 py-2.5 flex items-start gap-2 disabled:opacity-45 hover:bg-[#F4F6FA]"

@@ -3394,8 +3394,9 @@ export default function EscoltaDetalhePage() {
   // Supervisor: como antes (até antes de finalizada). Gestor e administrador: também a finalizada.
   const modoCancelar = modoCancelamento(perfil, escolta)
   const reagendavel = podeReagendar(escolta)
+  const abrirCancelar = () => { setErro(null); setDialogCancelar(true) }
   const abrirNoCampo = ehGestorOuAdmin(perfil) && !arquivada &&
-    ['em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando', 'na_base'].includes(escolta.status)
+    ['agendada', 'em_pre_inicio', 'em_andamento', 'na_origem', 'em_transito_destino', 'no_destino', 'em_transito_retorno', 'retornando', 'na_base'].includes(escolta.status)
 
   const verFinanceiroDet = PERFIS_FINANCEIRO_DET.includes((user?.perfil?.codigo ?? '') as any)
 
@@ -3422,6 +3423,25 @@ export default function EscoltaDetalhePage() {
               Passo {wizardStep} de 3
             </span>
           </div>
+          {/* Correção da prévia: no pré-início o header some; Cancelar e Abrir no Campo ficam aqui. */}
+          {(modoCancelar || abrirNoCampo) && (
+            <div className="flex flex-wrap justify-end gap-2 -mt-3 mb-5">
+              {modoCancelar && (
+                <button type="button" onClick={abrirCancelar} data-teste="wizard-cancelar"
+                  className="bg-[#FAEAE9] hover:bg-[#F5D5D3] text-[#B83832] border border-[#EAB5B0] font-black text-[10px] uppercase tracking-widest px-4 py-2 flex items-center justify-center gap-1.5"
+                  style={{ borderRadius: '1px' }}>
+                  <XCircle size={14} /> Cancelar
+                </button>
+              )}
+              {abrirNoCampo && (
+                <button type="button" onClick={() => router.push(`/dashboard/campo?escolta=${escolta.id}`)} data-teste="wizard-abrir-no-campo"
+                  className="bg-[#F0F4FA] hover:bg-[#E2EAF7] text-[#1A2F4A] border border-[#D0DAEB] font-black text-[10px] uppercase tracking-widest px-4 py-2 flex items-center justify-center gap-1.5"
+                  style={{ borderRadius: '1px' }}>
+                  <Radio size={13} /> Abrir no Campo
+                </button>
+              )}
+            </div>
+          )}
 
           <div className="flex items-center justify-between relative px-2">
             <div className="absolute left-6 right-6 top-5 h-0.5 bg-[#D6DAE5] z-0" />
@@ -3762,7 +3782,7 @@ export default function EscoltaDetalhePage() {
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-5">
-      <AcoesGestao escolta={escolta} perfil={perfil} onAlterado={carregar} />
+      <AcoesGestao escolta={escolta} perfil={perfil} onAlterado={carregar} onCancelar={abrirCancelar} />
 
       {/* Onda L: registro guardado no aparelho, ou não aceito (conflito ou recusado). */}
       {avisoOffline && (
@@ -3868,14 +3888,14 @@ export default function EscoltaDetalhePage() {
                   {/* Controle total: gestor e administrador cancelam também a finalizada (221). */}
                   {modoCancelar && (
                     <button
-                      onClick={() => { setErro(null); setDialogCancelar(true) }}
+                      onClick={abrirCancelar}
                       className="bg-[#FAEAE9] hover:bg-[#F5D5D3] text-[#B83832] border border-[#EAB5B0] font-black text-[10px] uppercase tracking-widest px-4 py-2 flex items-center justify-center gap-1.5 transition-all active:scale-95"
                       style={{ borderRadius: '1px' }}
                     >
                       <XCircle size={14} /> Cancelar
                     </button>
                   )}
-                  {/* Controle total: gestor e administrador entram no Campo de qualquer escolta em andamento. */}
+                  {/* Controle total: gestor e administrador entram no Campo da escolta, da agendada à base. */}
                   {abrirNoCampo && (
                     <button
                       onClick={() => router.push(`/dashboard/campo?escolta=${escolta.id}`)}

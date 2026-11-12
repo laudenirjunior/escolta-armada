@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { exigirSessao, dentroDoLimite, escaparHtml } from '@/lib/api-auth'
+import { RESPOSTA_SEM_DESTINO, resolverDestinoTelegram } from '@/lib/telegram-destino'
 
 // Antes esta rota nao exigia nada. Qualquer um podia mandar mensagem em nome
 // do bot para qualquer chat, e o GET ?action=updates despejava as conversas
@@ -89,10 +90,10 @@ export async function POST(req: NextRequest) {
 
     // O chat_id vinha do cliente: qualquer um usava o bot para mandar mensagem
     // a qualquer destino. Agora e resolvido no servidor a partir da escolta.
-    let destChatId: string | undefined
     // Lote 2026-10: avisos do mural vão ao chat central, não ao grupo do cliente, mesmo
     // trazendo escolta_id (usado só no link). Decidido aqui, no servidor.
     const paraCentral = body.destino === 'central'
+    let chatDoCliente: string | null = null
     if (escolta_id && !paraCentral) {
       const sb = createClient()
       const { data } = await sb
@@ -101,15 +102,16 @@ export async function POST(req: NextRequest) {
         .eq('id', escolta_id)
         .maybeSingle()
       const cli = (data as unknown as { cliente: { telegram_chat_id: string | null } | null } | null)?.cliente
-      destChatId = cli?.telegram_chat_id ?? undefined
+      chatDoCliente = cli?.telegram_chat_id ?? null
     }
     // Um chat_id explicito so e aceito de quem administra as integracoes.
-    if (!destChatId && !paraCentral && chat_id && ['administrador', 'gestor'].includes(auth.sessao.perfil)) {
-      destChatId = chat_id
-    }
-    destChatId = destChatId ?? process.env.TELEGRAM_CHAT_ID
+    const destChatId = resolverDestinoTelegram({
+      chatDoCliente, paraCentral, chatIdExplicito: chat_id, perfil: auth.sessao.perfil,
+      chatCentral: process.env.TELEGRAM_CHAT_ID,
+    })
+    // Sem destino é configuração, não erro: envio omitido (200), e a operação da escolta segue.
     if (!destChatId) {
-      return NextResponse.json({ error: 'Destino não configurado para este cliente.' }, { status: 400 })
+      return NextResponse.json(RESPOSTA_SEM_DESTINO.corpo, { status: RESPOSTA_SEM_DESTINO.status })
     }
 
     let texto: string
