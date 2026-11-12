@@ -65,7 +65,7 @@ import { COLUNAS_ANULACAO, textoAnulado, type Anulacao } from '@/lib/gestao'
 // Lote 2026-10 (onda L, 16.3.10): os handlers de campo passam as mesmas linhas ao envelope.
 import { novoId, lerSnapshot } from '@/lib/offline/fila'
 import { prepararFoto, MENSAGEM_GUARDADO, type FotoPreparada, type LinhasEnvelope, type EtapaEnvelope } from '@/lib/offline/registro-campo'
-import { aplicarPendentes, lerPendentes } from '@/lib/offline/pendentes'
+import { MENSAGEM_ETAPA_ANTERIOR_ENVIANDO, aplicarPendentes, lerPendentes, servidorAtrasDoAparelho } from '@/lib/offline/pendentes'
 import { assinarGps, gpsRapido, iniciarRastreioGps, leituraParaConfirmar, textoPrecisao, type LeituraGps } from '@/lib/gps'
 import { foiCarimbada, marcarCarimbada } from '@/lib/foto-captura'
 import { aplicarCarimbo, reduzirECarimbarImagem } from '@/lib/carimbo-foto'
@@ -1823,7 +1823,13 @@ export default function EscoltaDetalhePage() {
     const { data, error } = await sb.from('escoltas').select('status').eq('id', escoltaId).maybeSingle()
     if (error && gravacaoRef.current && erroDeRede(error)) return
     if (error) throw new Error(error.message)
-    if (!data || data.status !== statusEsperado) throw new Error(ERRO_ETAPA_MUDOU)
+    if (!data || data.status !== statusEsperado) {
+      // O servidor pode estar atrás do aparelho (etapa anterior ainda na fila; a tela mostra a
+      // otimista). Com o envelope, segue e o servidor confere; sem ele, avisa sem culpar outra tela.
+      const atras = !!data && servidorAtrasDoAparelho(escoltaId, data.status, statusEsperado, authUserId ? await lerPendentes(authUserId) : [])
+      if (atras && gravacaoRef.current) return
+      throw new Error(atras ? MENSAGEM_ETAPA_ANTERIOR_ENVIANDO : ERRO_ETAPA_MUDOU)
+    }
   }
   // Lote 2026-10: com a gravacao atomica, transicao recusada nao deixa ponto nem historico.
   const ERRO_TRANSICAO_NADA_GRAVADO =

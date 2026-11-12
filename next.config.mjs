@@ -17,6 +17,14 @@ const nextConfig = {
   reactStrictMode: true,
   generateBuildId: async () => BUILD_ID,
   env: { ESCOLTA_BUILD_ID: BUILD_ID },
+  // O cache do webpack nunca é necessário em tempo de execução; fora dele, nenhuma função
+  // (em especial /sw.js, que lê arquivos de .next) arrasta centenas de MB para a Vercel.
+  experimental: {
+    outputFileTracingExcludes: {
+      '*': ['.next/cache/**'],
+      '/sw.js': ['.next/cache/**'],
+    },
+  },
 }
 
 export default nextConfig

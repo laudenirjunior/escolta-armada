@@ -36,7 +36,7 @@ import { enderecoPorExtenso, pedirEnderecoDepois } from '@/lib/geocodificacao'
 // Lote 2026-10 (onda L): gravação pelo envelope (guarda no aparelho e envia) e leitura sem rede.
 import { novoId, salvarSnapshot, lerSnapshot, filaDisponivel } from '@/lib/offline/fila'
 import { prepararFoto, MENSAGEM_GUARDADO, type FotoPreparada, type ResultadoRegistroCampo } from '@/lib/offline/registro-campo'
-import { aplicarPendentes, lerPendentes } from '@/lib/offline/pendentes'
+import { MENSAGEM_ETAPA_ANTERIOR_ENVIANDO, aplicarPendentes, lerPendentes, servidorAtrasDoAparelho } from '@/lib/offline/pendentes'
 import { salvarEscoltasOffline } from '@/lib/offline/sessao'
 import { iniciarRastreioGps, leituraParaConfirmar, textoPrecisao } from '@/lib/gps'
 import {
@@ -1273,9 +1273,21 @@ export default function CampoPage() {
           return
         }
         if (!confErr && (!statusConferido || statusConferido.status !== statusAtual)) {
-          showToast('erro', 'A etapa já foi avançada em outra tela. Recarregue a página antes de continuar.')
-          setExecutando(false)
-          return
+          // A etapa da tela pode ser a otimista (aplicarPendentes): a anterior ainda está na
+          // fila deste aparelho e o servidor ficou para trás. Não é outra tela. Com o envelope,
+          // segue: a fila manda na ordem e o servidor confere (conflito, nunca descarte).
+          const atras = !!statusConferido && servidorAtrasDoAparelho(
+            escoltaAtiva.id, statusConferido.status, statusAtual,
+            authUserId ? await lerPendentes(authUserId) : [],
+            { viaturasPorEscolta: { [escoltaAtiva.id]: viaturasDaEscolta.map(v => v.id) } },
+          )
+          if (!(atras && env.usar)) {
+            showToast('erro', atras
+              ? MENSAGEM_ETAPA_ANTERIOR_ENVIANDO
+              : 'A etapa já foi avançada em outra tela. Recarregue a página antes de continuar.')
+            setExecutando(false)
+            return
+          }
         }
       }
 
