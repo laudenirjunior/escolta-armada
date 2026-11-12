@@ -896,6 +896,10 @@ export type Database = {
           observacao: string | null
           status_anterior: string
           status_novo: string
+          // 222 (lançamento retroativo): gravadas pelo servidor.
+          registrado_em: string | null
+          retroativo: boolean
+          motivo_retroativo: string | null
         }
         Insert: {
           alterado_por?: string | null
@@ -1049,6 +1053,11 @@ export type Database = {
           periodicidade_checkin_min: number | null
           status: string
           valor_cobrado: number | null
+          // 222 (lançamento retroativo): só a RPC lancar_escolta_retroativa grava.
+          lancamento_retroativo: boolean
+          retroativo_por: string | null
+          retroativo_em: string | null
+          retroativo_motivo: string | null
         }
         Insert: {
           atualizado_em?: string
@@ -1141,6 +1150,12 @@ export type Database = {
           precisao_metros: number | null
           sincronizada: boolean
           tipo_foto_id: string
+          // 222 (lançamento retroativo).
+          registrado_em: string | null
+          retroativo: boolean
+          motivo_retroativo: string | null
+          origem: string | null
+          origem_localizacao: string | null
         }
         Insert: {
           atualizado_em?: string
@@ -1401,6 +1416,10 @@ export type Database = {
           sem_sinal_gps: boolean
           sincronizado: boolean
           tipo_ponto_id: string
+          // 222 (lançamento retroativo).
+          registrado_em: string | null
+          retroativo: boolean
+          motivo_retroativo: string | null
         }
         Insert: {
           atualizado_em?: string
@@ -1880,6 +1899,12 @@ export type Database = {
       incluir_vigilante_na_minha_escolta: {
         Args: { p_escolta_id: string; p_vigilante_id: string }
         Returns: { ok: boolean }
+      }
+      // Lançamento retroativo da gestão (migration 222). Prévia com p_previa = true; a
+      // confirmação manda de volta o "resumo" que a prévia devolveu.
+      lancar_escolta_retroativa: {
+        Args: { p_escolta_id: string; p_etapas: Json; p_motivo: string; p_previa?: boolean; p_resumo?: Json | null }
+        Returns: Json
       }
     }
     Enums: {

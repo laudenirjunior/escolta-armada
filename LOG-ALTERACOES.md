@@ -8,6 +8,32 @@ Branch de trabalho: `master` (producao serve master; ver a entrada de 19/08 sobr
 
 ---
 
+## 2026-11-12 - Lançamento retroativo de escolta (gestor e administrador)
+
+Branch `feat/lancamento-retroativo`, sobre a master `07aac1b`. Pedido de Peçanha em 12/11/2026: a escolta aconteceu, mas não foi registrada na hora (sem sinal, celular sem bateria, esquecimento); a gestão lança depois, com os horários reais, sem falsificar nada e com a marca de retroativo. Migration `222_lancamento_retroativo.sql` (e `_reverter`) criada e **não aplicada**. Depende da 221.
+
+### O que mudou
+
+1. **RPC própria** `lancar_escolta_retroativa(p_escolta_id, p_etapas, p_motivo, p_previa, p_resumo)`, SECURITY DEFINER, só gestor e administrador (`lote_interno.exigir_gestao(false)`), motivo de 10 a 1000 caracteres. Não chama nem altera `concluir_escolta_antecipada`. Prévia (`p_previa = true`) e confirmação com o resumo da prévia (versão, status, último registro e hash das etapas), como em `voltar_etapa_escolta`.
+2. **Validações no servidor.** Partida de Agendada até Na Base (nunca rascunho, finalizada, cancelada, arquivada ou excluída); sem emergência aberta; etapas na ordem de `lote_interno.sequencia_status()`, sem pular nem repetir, **sempre até Finalizada**; horários com fuso explícito, estritamente crescentes, no máximo 5 minutos no futuro, no máximo 30 dias atrás e depois do último registro de campo válido (o planejamento, histórico de rascunho e agendada, não conta).
+3. **Dois horários.** Coluna nova `registrado_em` (now() do servidor, forçado por trigger) em `escolta_status_historico`, `pontos_controle` e `fotos`; o horário operacional fica em `data_hora` e `data_hora_captura`. Linhas antigas ficam com `registrado_em` nulo (não se inventa horário de registro). Também `retroativo` e `motivo_retroativo` nas três tabelas e `lancamento_retroativo`, `retroativo_por`, `retroativo_em`, `retroativo_motivo` em `escoltas`. As colunas só mudam pela RPC (trava `tr_travar_colunas_retroativo`, dupla guarda da 213).
+4. **Sem GPS falso.** Ponto retroativo sem latitude e longitude (CHECK `pontos_retroativo_sem_gps`); foto da galeria (input sem `capture`, sem carimbo, sem GPS do aparelho) com `origem = 'galeria'` e `origem_localizacao = 'nenhuma'` (CHECK `fotos_galeria_sem_gps_do_aparelho`). EXIF não é lido nesta versão. Foto obrigatória ao vivo e ausente: aceita, com aviso na prévia, "sem foto" no histórico e `sem_foto` no JSON do ponto.
+5. **data_finalizacao = horário da última etapa** (Finalizada), não now(). Não existe coluna `data_inicio`: o início fica no histórico e no ponto de Saída da Base, com o horário informado.
+6. **Um único aviso.** `_enfileirar_aviso` e `lote_interno.notificar` ficam em silêncio com a variável `escolta.lancamento_retroativo` ligada (só a RPC liga); no fim, um resumo pela `lote_interno.avisar_acao_gestao` (central de avisos da supervisão e da equipe e chat central do Telegram): código, "Lançamento retroativo", etapas com horário de Brasília, fotos, quem lançou e quando, motivo. Auditoria `LANCAMENTO_RETROATIVO` com antes e depois. Pedidos de substituição pendentes são invalidados.
+7. **Tela.** Item "Lançamento retroativo" em Ações da gestão (só gestor e administrador, de Agendada até Na Base), diálogo com as etapas que faltam (data e hora de Brasília convertidas para ISO com o fuso certo, observação, fotos da galeria), motivo com contador, Conferir e Confirmar lançamento (`components/escolta/lancamento-retroativo.tsx`). Selo "Retroativo" no cabeçalho, na linha do tempo, no detalhe do evento e na impressão, com "Ocorrido em X · registrado em Y"; ponto sem GPS como "Sem localização (galeria)". A leitura das marcas é à parte e tolerante: sem a 222, a tela segue como antes.
+8. Lógica pura em `lib/lancamento-retroativo.ts`, testes em `tests/lancamento-retroativo.test.ts`, teste SQL em `database/testes/05_lancamento_retroativo.sql` e conferência de uma linha em `database/testes/05_lancamento_retroativo_conferencia.sql`. Tipos em `types/index.ts` e `types/supabase.ts`.
+
+### Como aplicar
+
+1. Deploy do código (a tela funciona sem a 222; o item do menu mostra "depende da migration 222" se for usado antes).
+2. SQL Editor: `222_lancamento_retroativo.sql`. Conferir com `database/testes/05_lancamento_retroativo_conferencia.sql` (tudo true).
+3. Homologação: `database/testes/05_lancamento_retroativo.sql` (só PASSOU e BLOQUEADO CORRETAMENTE).
+4. Reversão: git revert e deploy, depois `222_lancamento_retroativo_reverter.sql` (as colunas ficam, documentado no arquivo).
+
+### Como foi verificado
+
+node --test 72/72 (18 novos); tsc 0 erros; lint 0 erros e 25 avisos (os mesmos da master, nenhum nos arquivos novos); build: "Compiled successfully" (tipos e lint do build ok), mas a geração das páginas estáticas parou em `/auth/login` por falta de `NEXT_PUBLIC_SUPABASE_URL` e da chave neste ambiente (sem `.env.local`); não foi repetido com valores fictícios. A SQL da 222 não foi executada (sem Postgres neste ambiente e sem acesso ao banco, por regra): revisada contra os corpos da 202, 211, 213, 214, 218, 219 e 221.
+
 ## 2026-11-12 - Controle total da gestão (gestor e administrador)
 
 Branch `feat/gestao-controle-total`, sobre a master `fa3ea0b`. Pedido de Peçanha em 12/11/2026: gestor e administrador com controle total de todas as escoltas, em todos os estados; supervisor, central e operador sem mudança. Migration `221_controle_total_gestao.sql` (e `_reverter`) criada e **não aplicada**.

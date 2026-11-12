@@ -170,6 +170,43 @@ export interface Escolta {
   criado_em: string
   atualizado_em: string
   metadados?: Record<string, any>
+  /** 222: etapas lançadas depois do fato pela gestão (lancar_escolta_retroativa). */
+  lancamento_retroativo?: boolean
+  retroativo_por?: string | null
+  retroativo_em?: string | null
+  retroativo_motivo?: string | null
+}
+
+/** 222: marcas comuns dos registros gravados pelo lançamento retroativo. */
+export interface MarcaRegistroRetroativo {
+  /** Horário do servidor em que a linha foi gravada (nulo nas linhas anteriores à 222). */
+  registrado_em?: string | null
+  retroativo?: boolean
+  motivo_retroativo?: string | null
+}
+
+export interface HistoricoStatus extends MarcaRegistroRetroativo {
+  id: string
+  escolta_id: string
+  status_anterior: string
+  status_novo: string
+  alterado_por: string | null
+  /** Horário operacional (em que aconteceu). */
+  data_hora: string
+  latitude?: number | null
+  longitude?: number | null
+  observacao?: string | null
+  via_rpc?: boolean
+}
+
+/** Linha de etapa do p_etapas da RPC lancar_escolta_retroativa. */
+export interface EtapaLancamentoRetroativo {
+  status: StatusEscolta
+  /** ISO com fuso explícito (por exemplo 2026-11-10T08:00:00-03:00). */
+  data_hora: string
+  observacao?: string | null
+  foto_ids?: string[]
+  fotos_previstas?: number
 }
 
 export interface EscoltaVeiculo {
@@ -215,13 +252,13 @@ export interface EscoltaArmamento {
 // FOTOS E GEOLOCALIZAÇÃO
 // ============================================================================
 
-export interface Foto {
+export interface Foto extends MarcaRegistroRetroativo {
   id: string
   caminho_arquivo: string
   tipo_foto_id: string
-  latitude?: number
-  longitude?: number
-  precisao_metros?: number
+  latitude?: number | null
+  longitude?: number | null
+  precisao_metros?: number | null
   data_hora_captura: string
   carimbo_aplicado: boolean
   enviada_telegram: boolean
@@ -229,15 +266,19 @@ export interface Foto {
   criado_por: string
   criado_em: string
   atualizado_em: string
+  /** 222: camera ou galeria; nulo nas fotos antigas (todas da câmera). */
+  origem?: 'camera' | 'galeria' | null
+  /** 222: de onde veio a coordenada; 'nenhuma' é sem latitude e longitude. */
+  origem_localizacao?: 'gps' | 'exif' | 'nenhuma' | null
 }
 
-export interface PontoControle {
+export interface PontoControle extends MarcaRegistroRetroativo {
   id: string
   escolta_veiculo_id: string
   tipo_ponto_id: string
   data_hora: string
-  latitude: number
-  longitude: number
+  latitude: number | null
+  longitude: number | null
   precisao_metros?: number
   foto_id?: string
   lancado_por: string

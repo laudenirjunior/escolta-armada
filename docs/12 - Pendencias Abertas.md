@@ -118,3 +118,17 @@ Branch `melhoria/2026-11-onda-o-experiencia`, sobre a master `90d37ad`. Fonte: t
 | 7.3 | **Painel em cerca de 5 s** | As consultas do Painel já saem em paralelo; o tempo vem do layout (avisos, sessão) e do banco de produção. Os índices usados existem. Medir no aparelho com a produção depois da publicação antes de mexer |
 | 7.4 | **Fotos sobem em paralelo, não mais rápido na banda** | Em rede limitada pela banda, 3 envios ao mesmo tempo dividem a mesma banda: o ganho da A1 vem da leitura do GPS, do Telegram fora da espera e da tela liberada aos 15 s. A redução das fotos da onda M é o que corta bytes |
 | 7.5 | **Teste em aparelho real** | GPS contínuo (A2) e quadro fixo (A3) foram medidos com GPS simulado no Chromium; repetir no Android e no iPhone do piloto |
+
+
+## 8. Lançamento retroativo (migration 222), 12/11/2026: o que ficou em aberto
+
+Branch `feat/lancamento-retroativo`, sobre a master `07aac1b`. Detalhe no [`../LOG-ALTERACOES.md`](../LOG-ALTERACOES.md), entrada de 12/11/2026.
+
+| # | Pendência | Situação |
+|---|---|---|
+| 8.1 | **Aplicar a 222 e rodar os testes de banco** | Criada e não aplicada. Ordem: deploy do código, `222_lancamento_retroativo.sql` no SQL Editor, conferência `database/testes/05_lancamento_retroativo_conferencia.sql` (tudo true) e, na homologação, `database/testes/05_lancamento_retroativo.sql`. O teste usa `qa.nova_escolta` e supõe que ela não grava registro de campo depois do horário pedido; se gravar, os blocos 4 e 5 acusam "depois do último registro" |
+| 8.2 | **EXIF das fotos da galeria** | Não lido: toda foto retroativa entra com `origem_localizacao = nenhuma` e sem coordenada, e `data_hora_captura` recebe o horário operacional da etapa. A coluna e o CHECK já aceitam `exif` para quando a leitura existir de verdade |
+| 8.3 | **Lançamento parcial (parar numa etapa do meio)** | Recusado de propósito: a escolta ficaria em andamento com o último registro no passado e o cron do check-in acusaria atraso na hora. Se for preciso, exige tratar o check-in da escolta retroativa |
+| 8.4 | **Fotos de Pré-Início e Finalizada, checklists e KM** | O lançamento grava pontos, histórico e status; não lança checklists, KM nem as fotos da viatura da finalização (aviso na prévia). Pré-início lançado deixa a escolta com checklist pendente no início |
+| 8.5 | **Fotos enviadas e lançamento recusado** | As fotos sobem antes da confirmação; se a RPC recusar, ficam no storage e em `fotos` sem ponto (como no fluxo ao vivo quando a etapa falha). Um novo envio sobe de novo |
+| 8.6 | **Resumo do Telegram só pelo banco** | Sai pela fila do banco (chat central). Sem o envio pelo banco ativo, fica só na central de avisos, como nas demais ações da gestão |

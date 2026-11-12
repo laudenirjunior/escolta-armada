@@ -10,6 +10,8 @@ import { carregarLocaisAtivos } from '@/lib/locais'
 import { rotuloDoPonto } from '@/lib/rotulo-ponto'
 import { textoInterestadual } from '@/lib/uf-endereco'
 import { COLUNAS_ANULACAO, textoAnulado, horaBR, type ConclusaoAntecipada } from '@/lib/gestao'
+import { lerMarcasRetroativo, type MarcasRetroativo } from '@/components/escolta/lancamento-retroativo'
+import { textoHorarioRegistro } from '@/lib/lancamento-retroativo'
 
 const sb = createClient() as any
 
@@ -43,7 +45,8 @@ interface PrintData {
     quilometragem_retorno: number | null
     efetivo: Array<{ nome: string; papel: string; confirmado: boolean }>
   }>
-  historico: Array<{ status_novo: string; data_hora: string; observacao: string | null; autor: string }>
+  /** 222: "Ocorrido em X · registrado em Y" nos registros do lançamento retroativo. */
+  historico: Array<{ status_novo: string; data_hora: string; observacao: string | null; autor: string; retroativo?: string }>
   pontos: Array<{
     tipo: string
     data_hora: string
@@ -68,6 +71,9 @@ interface PrintData {
     sem_sinal_gps: boolean
     /** Lote 2026-10 (M1): local salvo próximo ou endereço aproximado. */
     rotulo: string | null
+    /** 222: lançamento retroativo (texto do horário) e foto da galeria, sem localização. */
+    retroativo?: string
+    fotoGaleria?: boolean
   }>
   ocorrencias: Array<{ tipo: string; descricao: string; data_hora: string; autor: string; fotoUrl: string | null }>
   checklists: Array<{ tipo: string; data_conclusao: string; autor: string; conformes: number; total: number }>
@@ -75,6 +81,8 @@ interface PrintData {
   anulados: Array<{ tipo: string; data_hora: string; texto: string }>
   /** Onda I: conclusão antecipada válida, com as pendências por etapa e viatura. */
   conclusao: ConclusaoAntecipada | null
+  /** 222: marca do lançamento retroativo da escolta. */
+  retroativo: MarcasRetroativo['escolta']
 }
 
 // Rotulo do cabecalho e do badge. Parte de LABELS_STATUS para que um status novo do
@@ -137,7 +145,11 @@ function fmt(iso: string) {
  * `sem_sinal_gps` diz que foi assim de proposito. Campo vazio esconderia o fato, e
  * 0,0 seria mentira: o relatorio precisa dizer que nao houve sinal.
  */
-function fmtGps(p: { latitude: number | null; longitude: number | null; sem_sinal_gps: boolean }) {
+function fmtGps(p: { latitude: number | null; longitude: number | null; sem_sinal_gps: boolean; retroativo?: string; fotoGaleria?: boolean }) {
+  // 222: lançamento retroativo não tem GPS do aparelho (e não finge ter).
+  if (p.retroativo && (p.latitude == null || p.longitude == null)) {
+    return p.fotoGaleria ? 'Sem localização (galeria)' : 'Sem localização (lançamento retroativo)'
+  }
   if (p.sem_sinal_gps || p.latitude == null || p.longitude == null) return 'Sem sinal de GPS'
   return `${p.latitude.toFixed(5)}, ${p.longitude.toFixed(5)}`
 }
@@ -207,24 +219,19 @@ export default function EscoltaPrintPage() {
         // Histórico de status
         const { data: hist } = await sb
           .from('escolta_status_historico')
-          .select(`status_anterior, status_novo, data_hora, observacao, autor:usuarios!alterado_por(nome_completo), ${COLUNAS_ANULACAO}`)
+          .select(`id, status_anterior, status_novo, data_hora, observacao, autor:usuarios!alterado_por(nome_completo), ${COLUNAS_ANULACAO}`)
           .eq('escolta_id', id)
           .order('data_hora', { ascending: true })
 
         // Onda I: anulados vão para a seção própria; daqui para baixo só os válidos.
         const anulados: PrintData['anulados'] = []
         for (const h of (hist ?? []) as any[]) if (h.anulado_em) anulados.push({ tipo: `Histórico: ${LABELS_STATUS[h.status_anterior] ?? h.status_anterior} para ${LABELS_STATUS[h.status_novo] ?? h.status_novo}`, data_hora: h.data_hora, texto: textoAnulado(h) ?? '' })
-        const historico = (hist ?? []).filter((h: any) => !h.anulado_em).map((h: any) => ({
-          status_novo: h.status_novo,
-          data_hora: h.data_hora,
-          observacao: h.observacao ?? null,
-          autor: h.autor?.nome_completo ?? 'Sistema',
-        }))
+        const histValidos = (hist ?? []).filter((h: any) => !h.anulado_em)
 
         // Pontos de controle
         const { data: ptsTodos } = viatIds.length > 0
           ? await sb.from('pontos_controle')
-              .select(`data_hora, foto_id, observacoes, latitude, longitude, precisao_metros, sem_sinal_gps, tipo:dom_tipos_ponto(codigo, nome_exibicao), autor:usuarios!lancado_por(nome_completo), ${COLUNAS_ANULACAO}`)
+              .select(`id, data_hora, foto_id, observacoes, latitude, longitude, precisao_metros, sem_sinal_gps, tipo:dom_tipos_ponto(codigo, nome_exibicao), autor:usuarios!lancado_por(nome_completo), ${COLUNAS_ANULACAO}`)
               .in('escolta_veiculo_id', viatIds)
               .order('data_hora', { ascending: true })
           : { data: [] }
@@ -249,10 +256,26 @@ export default function EscoltaPrintPage() {
           if (url) urlPorFotoId.set(f.id, url)
         }
 
+        // 222: marcas do lançamento retroativo, lidas à parte (sem a migration, nada muda).
+        const marcas = await lerMarcasRetroativo(sb, id, viatIds, idsFoto)
+        const horarioRetroativo = (rid: string, dataHora: string) => {
+          const r = marcas.registros[rid]
+          return r ? textoHorarioRegistro({ data_hora: dataHora, registrado_em: r.registrado_em, retroativo: true }) : undefined
+        }
+        const historico = histValidos.map((h: any) => ({
+          status_novo: h.status_novo,
+          data_hora: h.data_hora,
+          observacao: h.observacao ?? null,
+          autor: h.autor?.nome_completo ?? 'Sistema',
+          retroativo: horarioRetroativo(h.id, h.data_hora),
+        }))
+
         const locaisAtivos = await carregarLocaisAtivos(sb)
         const pontos = (pts ?? []).map((p: any, i: number) => {
           const lido = lerObservacao(p.observacoes)
           return {
+            retroativo: horarioRetroativo(p.id, p.data_hora),
+            fotoGaleria: idsFotoPorPonto[i].some(fid => marcas.fotosGaleria.has(fid)),
             tipo: lido.tipoLabel ?? p.tipo?.nome_exibicao ?? 'Ponto de Controle',
             // Codigo cru do tipo, usado para saber quais etapas ja estao representadas
             // por um ponto e nao precisam repetir a linha vinda do historico.
@@ -320,7 +343,7 @@ export default function EscoltaPrintPage() {
           }
         })
 
-        setDados({ escolta: esc, viaturas, historico, pontos, ocorrencias, checklists, anulados, conclusao: (conc ?? null) as ConclusaoAntecipada | null })
+        setDados({ escolta: esc, viaturas, historico, pontos, ocorrencias, checklists, anulados, conclusao: (conc ?? null) as ConclusaoAntecipada | null, retroativo: marcas.escolta })
       } catch (e: any) {
         setErro(e.message ?? 'Erro ao carregar dados.')
       } finally {
@@ -427,7 +450,7 @@ export default function EscoltaPrintPage() {
     pontos.map(p => p.codigoTipo).filter((c): c is string => Boolean(c))
   )
 
-  const tlEventos: Array<{ data_hora: string; label: string; obs?: string; tipo: string }> = [
+  const tlEventos: Array<{ data_hora: string; label: string; obs?: string; tipo: string; retroativo?: string }> = [
     ...historico
       .filter(h => {
         if (h.status_novo === STATUS.RASCUNHO || h.status_novo === STATUS.AGENDADA) return false
@@ -444,6 +467,7 @@ export default function EscoltaPrintPage() {
           ? undefined
           : h.observacao ?? undefined,
         tipo: 'status',
+        retroativo: h.retroativo,
       })),
     ...checklists.map(c => ({
       data_hora: c.data_conclusao,
@@ -458,6 +482,7 @@ export default function EscoltaPrintPage() {
       // canonico dele. Aqui fica so o ponteiro, para a linha do tempo nao repetir.
       obs: p.observacao ? 'Relato no registro fotográfico' : undefined,
       tipo: 'ponto',
+      retroativo: p.retroativo,
     })),
     ...ocorrencias.map(o => ({
       data_hora: o.data_hora,
@@ -650,6 +675,14 @@ export default function EscoltaPrintPage() {
             }}>
               {statusLabel}
             </div>
+            {dados.retroativo && (
+              <div style={{
+                display: 'block', padding: '3px 10px', borderRadius: '3px', background: '#FFF7E6', color: '#B7791F',
+                border: '1px solid #B7791F', fontWeight: 800, fontSize: '10px', letterSpacing: '0.06em', textTransform: 'uppercase',
+              }}>
+                Lançamento retroativo
+              </div>
+            )}
             <div style={{ fontSize: '10px', color: '#7A8FA0', marginTop: '4px' }}>
               Gerado em {new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}
             </div>
@@ -766,6 +799,11 @@ export default function EscoltaPrintPage() {
                     </td>
                     <td style={{ ...td, fontWeight: ev.tipo === 'status' ? 700 : 400, color: ev.tipo === 'ocorrencia' ? '#A07212' : '#1A2535' }}>
                       {ev.tipo === 'ocorrencia' ? `⚠ ${ev.label}` : ev.label}
+                      {ev.retroativo && (
+                        <span style={{ display: 'block', fontSize: '9px', fontWeight: 700, color: '#B7791F' }}>
+                          RETROATIVO · {ev.retroativo}
+                        </span>
+                      )}
                     </td>
                     <td style={{ ...td, color: '#6B7E8A', fontSize: '10px' }}>{ev.obs ?? '—'}</td>
                   </tr>
@@ -801,6 +839,11 @@ export default function EscoltaPrintPage() {
                     {fmtGps(p)}
                   </span>
                   {p.rotulo && <span style={{ display: 'block', color: '#1E2D35', marginTop: '2px' }}>{p.rotulo}</span>}
+                  {p.retroativo && (
+                    <span style={{ display: 'block', fontWeight: 700, color: '#B7791F', marginTop: '2px' }}>
+                      RETROATIVO · {p.retroativo}
+                    </span>
+                  )}
                 </div>
 
                 {p.observacao && (
