@@ -8,6 +8,22 @@ Branch de trabalho: `master` (producao serve master; ver a entrada de 19/08 sobr
 
 ---
 
+## 2026-11-12 - Controle total da gestão (gestor e administrador)
+
+Branch `feat/gestao-controle-total`, sobre a master `fa3ea0b`. Pedido de Peçanha em 12/11/2026: gestor e administrador com controle total de todas as escoltas, em todos os estados; supervisor, central e operador sem mudança. Migration `221_controle_total_gestao.sql` (e `_reverter`) criada e **não aplicada**.
+
+### O que mudou
+
+1. **Cancelar em qualquer estado.** Antes de finalizada: como sempre (supervisor, gestor e administrador; não depende da 221). Finalizada: só gestor e administrador, pela RPC `cancelar_escolta_gestao` (221). Arquivada: recuperar antes, ou excluir. Regra da tela em `lib/controle-total.ts` (`modoCancelamento`).
+2. **Excluir (exclusão lógica).** RPC `excluir_escolta` (221): motivo obrigatório, auditoria `EXCLUIR_ESCOLTA`, aviso à supervisão; escolta em andamento é cancelada na mesma transação; sempre arquivada junto (CHECK), então todos os filtros de arquivada já existentes valem; RLS esconde a excluída de todos os perfis. Nada é apagado. Tela: duas etapas (aviso + motivo + "entendi"; depois digitar o código). Lista e desfazer em `/dashboard/escoltas/excluidas` (RPCs `listar_escoltas_excluidas` e `restaurar_escolta_excluida`).
+3. **Arquivadas para o gestor.** `PODE_VER_ARQUIVADAS` com gestor; RLS `escoltas_arquivada_so_admin` e `recuperar_escolta` aceitam gestor na 221.
+4. **Abrir no Campo** no detalhe para gestor e administrador (escolta do pré-início à base).
+5. Testes `tests/controle-total.test.ts` (node --test).
+
+### Como foi verificado
+
+node --test 16/16; tsc 0 erros; lint 0 erros e 25 avisos (os mesmos da master); build sem erro. A SQL da 221 não foi executada (sem servidor Postgres neste ambiente e sem acesso ao banco, por regra): revisada contra os corpos da 214 e da 218.
+
 ## 2026-11-07 - Onda O (experiência): correções do teste de uso de 07/11
 
 Branch `melhoria/2026-11-onda-o-experiencia`, sobre a master `90d37ad` (onda M publicada). Fonte: teste de uso de 07/11 pelo navegador (nota "2026-11-07 Registro - Diagnostico de uso Escolta Armada" no cofre). Executada pelo Claude Code da VPS pelo comando de 07/11/2026, 13h, com revisão cruzada do Codex. Sem migration e sem nada no banco de produção.

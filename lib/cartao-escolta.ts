@@ -12,6 +12,7 @@
  */
 import { CLASSE_BADGE_STATUS, LABELS_STATUS } from '@/lib/fluxo-escolta'
 import { COR_NEUTRA_SIGILO, corDoCliente } from '@/lib/paleta-clientes'
+import { PODE_VER_ARQUIVADAS, temPermissao } from '@/lib/permissions'
 
 /** Colunas do cartão. UF e interestadual são da migration 216 (bloco 1, antes do deploy). */
 export const SELECT_CARTAO = `
@@ -139,7 +140,7 @@ export const comPendencias = (e: Pick<CartaoEscolta, 'status' | 'conclusao'>) =>
 /**
  * Etiquetas do cartão. Interestadual só quando a coluna gerada é verdadeira; o cartão nunca
  * mostra a UF por extenso (o detalhe mostra, quando nenhum lado é estimado: 15.1 item 5).
- * Arquivada só para o administrador (as outras pessoas nem leem a escolta arquivada).
+ * Arquivada só para quem a vê (PODE_VER_ARQUIVADAS: administrador e gestor; os outros nem leem a escolta arquivada).
  */
 export function etiquetas(e: CartaoEscolta, perfil: string | null | undefined): Etiqueta[] {
   const r: Etiqueta[] = []
@@ -147,7 +148,7 @@ export function etiquetas(e: CartaoEscolta, perfil: string | null | undefined): 
   if (e.escala_fixa) r.push({ chave: 'escala-fixa', texto: 'Escala fixa', classe: 'badge-neutral' })
   if (comPendencias(e)) r.push({ chave: 'pendencias', texto: 'Concluída com pendências', classe: 'badge-warning' })
   if (e.status === 'agendada' && e.reiniciada_em) r.push({ chave: 'reiniciada', texto: 'Reiniciada pela gestão', classe: 'badge-info' })
-  if (e.arquivada_em && perfil === 'administrador') r.push({ chave: 'arquivada', texto: 'Arquivada', classe: 'badge-danger' })
+  if (e.arquivada_em && temPermissao(perfil, PODE_VER_ARQUIVADAS)) r.push({ chave: 'arquivada', texto: 'Arquivada', classe: 'badge-danger' })
   return r
 }
 
