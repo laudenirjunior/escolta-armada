@@ -1,8 +1,10 @@
 /**
  * Envio da fila de campo ao servidor (Lote 2026-10, onda L; docs/14, seção 16.3.2).
  *
- * - Gatilhos: evento online, volta da aba (visibilitychange), relógio de 30 s com o app
- *   aberto e logo depois de cada registro (dispararEnvio).
+ * - Gatilhos: evento online, volta da aba (visibilitychange e focus), relógio de 30 s com o
+ *   app aberto e logo depois de cada registro (dispararEnvio). O navigator.onLine pode mentir
+ *   (true sem rede, com o service worker ativo; teste de 12/11/2026): aí o evento online não
+ *   vem e quem envia é o relógio, com a espera crescente limitada a 1 minuto.
  * - Uma aba por vez: navigator.locks ('fila-campo'); o servidor cobre o resto (client_id).
  * - Ordem: emergência primeiro, depois a ordem de registro (seq). Para cada registro: sobe
  *   as fotos (objeto que já existe no bucket conta como sucesso), chama registrar_campo e
@@ -21,6 +23,7 @@
  * Sem import do app em tempo de execução: o cliente Supabase entra por parâmetro (testes).
  */
 import { pedirEnderecoDepois, temEnderecoPendente } from '../geocodificacao.ts'
+import { avisarOutrasAbas } from './avisos-abas.ts'
 import {
   apagarFotosSubidas, atualizarRegistro, concluirAplicado, contarFila, lerFoto, marcarFotoSubida,
   pendentesDoUsuario, recuperarEnviando, filaDisponivel, novoId,
@@ -183,7 +186,9 @@ function objetoJaExiste(erro: ErroSupabase): boolean {
 let falhasSeguidas = 0
 let proximaTentativa = 0
 const ESPERA_BASE_MS = 5_000
-const ESPERA_MAX_MS = 5 * 60_000
+// 1 minuto (antes 5): sem o evento online (navigator.onLine que mente), é o relógio de 30 s que
+// percebe a volta da rede, e a espera não pode segurar o envio por minutos depois disso.
+export const ESPERA_MAX_MS = 60_000
 function falhou(): void {
   falhasSeguidas++
   const espera = Math.min(ESPERA_MAX_MS, ESPERA_BASE_MS * 2 ** (falhasSeguidas - 1))
@@ -414,6 +419,7 @@ async function enviarUm(deps: DependenciasEnvio, reg: RegistroFila): Promise<Res
       await atualizarRegistro(reg.client_id, { estado: 'recusado', ultimo_erro: resp.error.message, enviado_em: new Date().toISOString() })
       await apagarFotosSubidas(reg.client_id)
       mudar({ progresso: null }); avisarConclusao(reg.client_id)
+      avisarOutrasAbas({ tipo: 'enviado', escoltaId: reg.escolta_id, clientId: reg.client_id })
       return 'recusado'
     }
     await atualizarRegistro(reg.client_id, { estado: 'pendente', ultimo_erro: resp.error.message })
@@ -429,6 +435,7 @@ async function enviarUm(deps: DependenciasEnvio, reg: RegistroFila): Promise<Res
     })
     // Onda O (A1): a tela que gravou já pode seguir; o Telegram vem logo depois, na fila.
     mudar({ progresso: null }); avisarConclusao(reg.client_id)
+    avisarOutrasAbas({ tipo: 'enviado', escoltaId: reg.escolta_id, clientId: reg.client_id })
     const avancou = (d as { resposta?: { avancou?: boolean } | null }).resposta?.avancou === true
     if (reg.aviso && (!reg.aviso.soSeAvancou || avancou)) {
       await avisarTelegram(deps, reg.client_id, reg.aviso, d.texto_offline ?? null, reg.data_hora_acao)
@@ -442,6 +449,7 @@ async function enviarUm(deps: DependenciasEnvio, reg: RegistroFila): Promise<Res
   })
   await apagarFotosSubidas(reg.client_id)
   mudar({ progresso: null }); avisarConclusao(reg.client_id)
+  avisarOutrasAbas({ tipo: 'enviado', escoltaId: reg.escolta_id, clientId: reg.client_id })
   return 'conflito'
 }
 
@@ -489,29 +497,60 @@ export function dispararEnvio(ignorarEspera = true): Promise<ResumoEnvio> | null
   return enviarFila(depsAtivas, { ignorarEspera }).catch(() => ({ aplicados: [], conflitos: [], recusados: [], parouPor: 'temporario' as const }))
 }
 
+/** Onde os gatilhos escutam (padrão: window e document; os testes passam alvos falsos). */
+export interface AlvosGatilhos {
+  janela?: Pick<EventTarget, 'addEventListener' | 'removeEventListener'> | null
+  documento?: (Pick<EventTarget, 'addEventListener' | 'removeEventListener'> & { visibilityState?: string }) | null
+}
+
+export interface AcoesGatilhos {
+  /** Uma rodada de envio; `ignorarEspera` quando há sinal novo de rede ou o usuário voltou. */
+  disparar: (ignorarEspera: boolean) => void
+  /** O aparelho avisou que mudou de rede (faixa "Sem conexão"). */
+  aoMudarRede?: (online: boolean) => void
+}
+
+/**
+ * Gatilhos de envio automático, sem estado: evento online (envia já), offline (só a faixa),
+ * aba de volta à frente (visibilitychange visível ou focus: envia já) e o relógio (respeita a
+ * espera crescente). Devolve a função que desliga tudo.
+ */
+export function ligarGatilhosEnvio(acoes: AcoesGatilhos, intervaloMs = 30_000, alvos: AlvosGatilhos = {}): () => void {
+  const w = alvos.janela !== undefined ? alvos.janela : (typeof window !== 'undefined' ? window : null)
+  const d = alvos.documento !== undefined ? alvos.documento : (typeof document !== 'undefined' ? document : null)
+  const aoFicarOnline = () => { acoes.aoMudarRede?.(true); acoes.disparar(true) }
+  const aoFicarOffline = () => { acoes.aoMudarRede?.(false) }
+  const aoVoltar = () => { if (!d || d.visibilityState === undefined || d.visibilityState === 'visible') acoes.disparar(true) }
+  w?.addEventListener('online', aoFicarOnline)
+  w?.addEventListener('offline', aoFicarOffline)
+  w?.addEventListener('focus', aoVoltar)
+  d?.addEventListener('visibilitychange', aoVoltar)
+  const relogio = setInterval(() => { acoes.disparar(false) }, intervaloMs)
+  return () => {
+    w?.removeEventListener('online', aoFicarOnline)
+    w?.removeEventListener('offline', aoFicarOffline)
+    w?.removeEventListener('focus', aoVoltar)
+    d?.removeEventListener('visibilitychange', aoVoltar)
+    clearInterval(relogio)
+  }
+}
+
 /**
  * Liga os gatilhos para o usuário logado e devolve a função que desliga. Com a fila vazia,
  * nenhum pedido sai para o servidor (só a leitura local da contagem).
  */
-export function iniciarEnvioAutomatico(deps: DependenciasEnvio, intervaloMs = 30_000): () => void {
+export function iniciarEnvioAutomatico(deps: DependenciasEnvio, intervaloMs = 30_000, alvos: AlvosGatilhos = {}): () => void {
   depsAtivas = deps
   const online = deps.online ?? (() => (typeof navigator === 'undefined' ? true : navigator.onLine !== false))
   mudar({ authUserId: deps.authUserId, online: online(), precisaLogin: false })
   void atualizarContagem(deps.authUserId)
-  const aoFicarOnline = () => { mudar({ online: true }); void dispararEnvio(true) }
-  const aoFicarOffline = () => { mudar({ online: false }) }
-  const aoVoltar = () => { if (typeof document !== 'undefined' && document.visibilityState === 'visible') void dispararEnvio(false) }
-  const w = typeof window !== 'undefined' ? window : null
-  w?.addEventListener('online', aoFicarOnline)
-  w?.addEventListener('offline', aoFicarOffline)
-  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', aoVoltar)
-  const relogio = setInterval(() => { void dispararEnvio(false) }, intervaloMs)
+  const desligar = ligarGatilhosEnvio({
+    disparar: (ignorarEspera) => { void dispararEnvio(ignorarEspera) },
+    aoMudarRede: (on) => mudar({ online: on }),
+  }, intervaloMs, alvos)
   void dispararEnvio(true)
   return () => {
-    w?.removeEventListener('online', aoFicarOnline)
-    w?.removeEventListener('offline', aoFicarOffline)
-    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', aoVoltar)
-    clearInterval(relogio)
+    desligar()
     if (depsAtivas === deps) depsAtivas = null
   }
 }

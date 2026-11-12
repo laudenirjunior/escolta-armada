@@ -9,6 +9,7 @@
 import { createClient } from '@/lib/supabase/client'
 import { assinarEstadoEnvio, dispararEnvio, lerConfigOffline, type ClienteOffline, type ConfigOffline, type ProgressoEnvio } from './envio.ts'
 import { ErroEspacoAparelho, filaDisponivel, fotosDoRegistro, type RegistroFila } from './fila.ts'
+import { CABECALHO_SEM_CACHE, leituraDaResposta, type LeituraStatus } from './reconferencia.ts'
 import { MENSAGEM_GUARDADO, registrarCampo, type ContextoRegistro, type EntradaRegistroCampo, type ResultadoRegistroCampo } from './registro-campo.ts'
 
 export { ErroEspacoAparelho, MENSAGEM_GUARDADO }
@@ -39,6 +40,11 @@ export async function gravarPeloEnvelope(
   aoAndamento?: (texto: string) => void,
   /** Onda O (revisão cruzada 1): sem esperar a confirmação (a etapa anterior ficou no aparelho). */
   semEspera = false,
+  /**
+   * A tela já viu a rede faltar (reconferência sem resposta), mesmo com navigator.onLine true:
+   * guarda como registro sem conexão e não espera resposta; o envio segue pelos gatilhos.
+   */
+  semRede = false,
 ): Promise<ResultadoRegistroCampo> {
   if (!ids.authUserId) throw new Error('Sessão sem usuário. Entre de novo antes de registrar.')
   const ctx: ContextoRegistro = {
@@ -48,6 +54,7 @@ export async function gravarPeloEnvelope(
     // Onda O (A1): com sinal, a tela espera a confirmação por até 15 s; passou disso, o registro
     // já está guardado no aparelho e a tela é liberada enquanto o envio continua.
     esperarMs: semEspera ? 0 : ESPERA_CONFIRMACAO_MS,
+    ...(semRede ? { online: () => false } : {}),
     aoProgredir: aoAndamento ? (p) => aoAndamento(textoAndamento(p)) : undefined,
   }
   aoAndamento?.('Guardando no aparelho')
@@ -155,6 +162,21 @@ export function fotosDosPendentes(pendentes: RegistroFila[]): Record<string, str
     for (const f of fotos) if (f.id && f.caminho_arquivo) mapa[f.id] = f.caminho_arquivo
   }
   return mapa
+}
+
+/**
+ * Status atual da escolta lido do servidor para a reconferência antes de gravar: com o
+ * cabeçalho que faz o service worker ir só à rede (nunca a cópia guardada; sem rede, 504
+ * SEM_CONEXAO). A decisão (gravar, guardar ou bloquear) é de decidirAvanco.
+ */
+export async function lerStatusParaConferir(escoltaId: string): Promise<LeituraStatus> {
+  const sb = createClient()
+  try {
+    const r = await sb.from('escoltas').select('status').eq('id', escoltaId).setHeader(CABECALHO_SEM_CACHE, '1').maybeSingle()
+    return leituraDaResposta(r as { data: { status?: string | null } | null; error: { message?: string; code?: string } | null }, erroDeRede)
+  } catch (err) {
+    return { tipo: 'falhou', rede: true, mensagem: err instanceof Error ? err.message : null }
+  }
 }
 
 /** Erro de leitura que é falta de rede (a tela usa a cópia do aparelho, não esvazia). */

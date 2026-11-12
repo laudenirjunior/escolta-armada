@@ -20,6 +20,7 @@ import {
   FOTO_AVULSA, VERSAO_FILA,
   type AvisoPosEnvio, type FotoFila, type GpsAcao, type RegistroFila, type TipoRegistro,
 } from './fila.ts'
+import { avisarOutrasAbas } from './avisos-abas.ts'
 import { aoConcluirRegistro, classificarErro, desvioDoRelogio, emParalelo, enviarFila, FOTOS_EM_PARALELO, type ClienteOffline } from './envio.ts'
 
 export const MENSAGEM_GUARDADO = 'Guardado no aparelho. Será enviado quando houver sinal.'
@@ -220,6 +221,8 @@ export async function registrarCampo(ctx: ContextoRegistro, e: EntradaRegistroCa
     fotos: (e.fotos ?? []).map(f => f.id), criado_em: agora, aviso: e.aviso ?? null,
   }
   await guardarRegistro(reg, (e.fotos ?? []).map(f => fotoParaFila(ctx.authUserId, e.escoltaId, clientId, f)))
+  // As outras abas (detalhe, Campo) releem e mostram o registro guardado, mesmo sem rede.
+  avisarOutrasAbas({ tipo: 'guardado', escoltaId: e.escoltaId, clientId })
 
   if (!online()) return { modo: 'guardado', clientId, mensagem: MENSAGEM_GUARDADO }
 
