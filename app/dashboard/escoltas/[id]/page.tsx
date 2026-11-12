@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useSyncExternalStore } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import {
   ArrowLeft, Truck, Users, Clock, AlertTriangle,
@@ -65,13 +65,15 @@ import { COLUNAS_ANULACAO, textoAnulado, type Anulacao } from '@/lib/gestao'
 // Lote 2026-10 (onda L, 16.3.10): os handlers de campo passam as mesmas linhas ao envelope.
 import { novoId, lerSnapshot } from '@/lib/offline/fila'
 import { prepararFoto, MENSAGEM_GUARDADO, type FotoPreparada, type LinhasEnvelope, type EtapaEnvelope } from '@/lib/offline/registro-campo'
-import { MENSAGEM_ETAPA_ANTERIOR_ENVIANDO, aplicarPendentes, lerPendentes, servidorAtrasDoAparelho } from '@/lib/offline/pendentes'
+import { MENSAGEM_ETAPA_ANTERIOR_ENVIANDO, aplicarPendentes, lerPendentes } from '@/lib/offline/pendentes'
+import { decidirAvanco } from '@/lib/offline/reconferencia'
+import { ouvirOutrasAbas } from '@/lib/offline/avisos-abas'
 import { assinarGps, gpsRapido, iniciarRastreioGps, leituraParaConfirmar, textoPrecisao, type LeituraGps } from '@/lib/gps'
 import { foiCarimbada, marcarCarimbada } from '@/lib/foto-captura'
 import { aplicarCarimbo, reduzirECarimbarImagem } from '@/lib/carimbo-foto'
 import {
   FOTO_SEM_CONEXAO, aparelhoSemRede, conferirEspacoParaFoto, envelopeLigado, erroDeRede, fotosDosPendentes,
-  gravarPeloEnvelope, horaDaCaptura, textoConflito, textoErroGravacao, textoRecusado, urlsDosPendentes,
+  gravarPeloEnvelope, horaDaCaptura, lerStatusParaConferir, textoConflito, textoErroGravacao, textoRecusado, urlsDosPendentes,
 } from '@/lib/offline/tela'
 import { emParalelo, FOTOS_EM_PARALELO } from '@/lib/offline/envio'
 import { FaixaAndamento } from '@/components/ui/faixa-andamento'
@@ -403,6 +405,26 @@ function useEnderecoDoPonto(
   }, [ponto?.lat, ponto?.lng, ponto?.enderecoPronto])
 }
 
+// ── Foto em processamento (GPS rápido, carimbo e redução) ─────────────────────────────
+// Teste de 12/11/2026: tocar em "Avançar Passo" enquanto a foto dos materiais ainda era
+// carimbada dava "A foto dos materiais é obrigatória." (o pai só recebe a foto no fim). Cada
+// CameraInput conta aqui enquanto processa; os botões que dependem de foto ficam bloqueados
+// com "Processando a foto..." até zerar.
+let fotosEmProcessamento = 0
+const ouvintesProcessamento = new Set<() => void>()
+function mudarProcessamento(delta: 1 | -1) {
+  fotosEmProcessamento = Math.max(0, fotosEmProcessamento + delta)
+  for (const fn of ouvintesProcessamento) fn()
+}
+function useFotoEmProcessamento(): boolean {
+  return useSyncExternalStore(
+    (fn) => { ouvintesProcessamento.add(fn); return () => { ouvintesProcessamento.delete(fn) } },
+    () => fotosEmProcessamento > 0,
+    () => false,
+  )
+}
+const TEXTO_PROCESSANDO_FOTO = 'Processando a foto...'
+
 function CameraInput({
   onChange,
   max = 1,
@@ -423,10 +445,27 @@ function CameraInput({
   const [erro, setErro] = useState<string | null>(null)
   const videoRef = useRef<HTMLVideoElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [processando, setProcessando] = useState(false)
+  const processandoRef = useRef(false)
+  /** Marca a foto em processamento do começo ao fim de `fn` (inclusive com erro). */
+  const processar = async (fn: () => Promise<void>) => {
+    if (!processandoRef.current) { processandoRef.current = true; mudarProcessamento(1) }
+    setProcessando(true)
+    try { await fn() } finally {
+      if (processandoRef.current) { processandoRef.current = false; mudarProcessamento(-1) }
+      setProcessando(false)
+    }
+  }
+  // Componente desmontado no meio do processamento: não deixa o botão bloqueado.
+  useEffect(() => () => { if (processandoRef.current) { processandoRef.current = false; mudarProcessamento(-1) } }, [])
 
-  const handleFileInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    return processar(() => tratarArquivo(e, file))
+  }
+
+  const tratarArquivo = async (e: React.ChangeEvent<HTMLInputElement>, file: File) => {
     // Onda L (S12): sem espaço no aparelho, a captura é bloqueada com aviso.
     try { await conferirEspacoParaFoto(file.size) } catch (err) {
       setErro(textoErroGravacao(err, 'O espaço do aparelho acabou.'))
@@ -480,7 +519,12 @@ function CameraInput({
     }
   }, [stream])
 
-  const capturar = async () => {
+  const capturar = () => {
+    if (!videoRef.current || processandoRef.current) return
+    return processar(capturarQuadro)
+  }
+
+  const capturarQuadro = async () => {
     if (!videoRef.current) return
     const v = videoRef.current
     // Revisão cruzada (2.8): o vídeo ainda sem dimensões daria uma foto de 1 por 1.
@@ -536,6 +580,11 @@ function CameraInput({
 
   return (
     <>
+      {processando && (
+        <p data-teste="foto-processando" role="status" aria-live="polite" className="flex items-center gap-1.5 mb-1.5" style={{ fontSize: '12px', fontWeight: 700, color: '#9A6A00' }}>
+          <Clock size={12} /> {TEXTO_PROCESSANDO_FOTO}
+        </p>
+      )}
       {/* Input file hidden — fallback mobile para getUserMedia */}
       <input
         ref={fileInputRef}
@@ -603,9 +652,9 @@ function CameraInput({
               </p>
               <video ref={videoRef} playsInline autoPlay muted style={{ width: '100%', maxWidth: '480px', maxHeight: '60vh', objectFit: 'cover', backgroundColor: '#111' }} />
               <div style={{ display: 'flex', gap: '0.75rem', width: '100%', maxWidth: '480px' }}>
-                <button type="button" onClick={capturar} disabled={!stream}
-                  style={{ flex: 1, height: '48px', backgroundColor: stream ? '#1E7C52' : '#333', color: '#fff', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.12em', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-                  <Camera size={16} /> Capturar Foto
+                <button type="button" onClick={capturar} disabled={!stream || processando}
+                  style={{ flex: 1, height: '48px', backgroundColor: stream && !processando ? '#1E7C52' : '#333', color: '#fff', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.12em', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                  <Camera size={16} /> {processando ? TEXTO_PROCESSANDO_FOTO : 'Capturar Foto'}
                 </button>
                 <button type="button" onClick={fechar}
                   style={{ height: '48px', padding: '0 1.25rem', backgroundColor: fotos.length > 0 ? '#1A294A' : '#B83832', color: '#fff', fontSize: '11px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.12em' }}>
@@ -829,6 +878,8 @@ export default function EscoltaDetalhePage() {
   const [ocorrencias, setOcorrencias] = useState<OcorrenciaItem[]>([])
   const [timeline, setTimeline] = useState<TimelineItem[]>([])
   const [loading, setLoading] = useState(true)
+  // Foto ainda sendo carimbada ou reduzida: os botões que dependem dela esperam.
+  const fotoProcessando = useFotoEmProcessamento()
   // Onda O (A1): o que a gravação está fazendo agora ("Enviando foto 3 de 7"), para a tela
   // nunca ficar parada só com "Iniciando...". Zera quando a tela é liberada.
   const [andamento, setAndamento] = useState<string | null>(null)
@@ -1001,9 +1052,15 @@ export default function EscoltaDetalhePage() {
   const urlsLocaisRef = useRef<string[]>([])
   useEffect(() => () => { for (const u of urlsLocaisRef.current) URL.revokeObjectURL(u); urlsLocaisRef.current = [] }, [])
 
-  const carregar = useCallback(async () => {
-    setLoading(true)
-    setErro(null)
+  /**
+   * `silencioso`: releitura sem piscar a tela (volta da aba, tempo real, aviso de outra aba).
+   * Não mexe em loading nem no erro da tela e, se a leitura falhar, mantém o que está na tela.
+   */
+  const carregar = useCallback(async (silencioso = false) => {
+    if (!silencioso) {
+      setLoading(true)
+      setErro(null)
+    }
     // Onda L (16.3.4): dono da fila e da cópia do aparelho; sem rede, a leitura vem da cópia
     // do service worker e, sem ela, da escolta guardada pelo Campo.
     const dono = authUserIdRef.current
@@ -1047,6 +1104,7 @@ export default function EscoltaDetalhePage() {
       }
     }
     if (escErr) {
+      if (silencioso) return
       setErro(erroDeRede(escErr)
         ? 'Sem conexão e sem os dados desta escolta guardados neste aparelho. Volte ao Painel.'
         : `Erro ao carregar: ${escErr.message}`)
@@ -1063,6 +1121,7 @@ export default function EscoltaDetalhePage() {
       esc = sobre
     }
 
+    if (!esc && silencioso) return
     setEscolta(esc as EscoltaDetalhe | null)
     if (!esc) { setLoading(false); return }
 
@@ -1402,11 +1461,54 @@ export default function EscoltaDetalhePage() {
       }
     })
     setParadas(paradasProcessadas)
-    setLoading(false)
+    if (!silencioso) setLoading(false)
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, sb])
 
   useEffect(() => { carregar() }, [carregar])
+
+  // ── Atualização sem recarregar a página ──────────────────────────────────────
+  // Teste de 12/11/2026: com o avanço feito no Campo (outra aba), esta tela ficava na etapa
+  // antiga até recarregar. Agora relê em silêncio na volta da aba (visibilitychange e focus),
+  // no tempo real (escolta e pontos, como no Campo) e no aviso da fila de outra aba deste
+  // aparelho (registro guardado sem rede, com a etapa otimista, ou envio concluído).
+  const loadingRef = useRef(loading)
+  loadingRef.current = loading
+  const releituraRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const reler = useCallback(() => {
+    if (releituraRef.current) clearTimeout(releituraRef.current)
+    releituraRef.current = setTimeout(() => {
+      releituraRef.current = null
+      // Gravação em andamento nesta aba: ela mesma relê ao terminar.
+      if (loadingRef.current) return
+      void carregar(true)
+    }, 400)
+  }, [carregar])
+  useEffect(() => () => { if (releituraRef.current) clearTimeout(releituraRef.current) }, [])
+
+  useEffect(() => {
+    const aoVoltar = () => { if (document.visibilityState === 'visible') reler() }
+    document.addEventListener('visibilitychange', aoVoltar)
+    window.addEventListener('focus', reler)
+    const pararAbas = ouvirOutrasAbas(a => { if (a.escoltaId === id) reler() })
+    return () => {
+      document.removeEventListener('visibilitychange', aoVoltar)
+      window.removeEventListener('focus', reler)
+      pararAbas()
+    }
+  }, [id, reler])
+
+  const idsViaturasTempoReal = viaturas.map(v => v.id).sort().join(',')
+  useEffect(() => {
+    if (!id) return
+    let canal = sb.channel(`detalhe-${id}-${Date.now()}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'escoltas', filter: `id=eq.${id}` }, () => reler())
+    if (idsViaturasTempoReal) {
+      canal = canal.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'pontos_controle', filter: `escolta_veiculo_id=in.(${idsViaturasTempoReal})` }, () => reler())
+    }
+    canal.subscribe()
+    return () => { sb.removeChannel(canal) }
+  }, [id, idsViaturasTempoReal, reler, sb])
 
   // Onda L: a primeira leitura costuma sair antes de o usuário ser conhecido. Se ela
   // precisava dele (sem rede, ou com registros guardados no aparelho), lê de novo.
@@ -1819,17 +1921,26 @@ export default function EscoltaDetalhePage() {
 
   const conferirEtapa = async (escoltaId: string, statusEsperado: string) => {
     // Onda L (16.3.10): sem rede, pula; a conferência fica no servidor (conflito, nunca descarte).
-    if (gravacaoRef.current?.semRede || gravacaoRef.current?.pularConferencia) return
-    const { data, error } = await sb.from('escoltas').select('status').eq('id', escoltaId).maybeSingle()
-    if (error && gravacaoRef.current && erroDeRede(error)) return
-    if (error) throw new Error(error.message)
-    if (!data || data.status !== statusEsperado) {
-      // O servidor pode estar atrás do aparelho (etapa anterior ainda na fila; a tela mostra a
-      // otimista). Com o envelope, segue e o servidor confere; sem ele, avisa sem culpar outra tela.
-      const atras = !!data && servidorAtrasDoAparelho(escoltaId, data.status, statusEsperado, authUserId ? await lerPendentes(authUserId) : [])
-      if (atras && gravacaoRef.current) return
-      throw new Error(atras ? MENSAGEM_ETAPA_ANTERIOR_ENVIANDO : ERRO_ETAPA_MUDOU)
+    if (gravacaoRef.current?.pularConferencia) return
+    // Teste de 12/11/2026: navigator.onLine pode continuar true sem rede (service worker ativo)
+    // e a cópia guardada do GET de status voltava com a etapa antiga. Agora a leitura vai só à
+    // rede, e "outra tela" só com leitura fresca que a fila deste aparelho não explica; o resto,
+    // com o envelope, é guardado e o servidor confere no envio (decidirAvanco).
+    const g = gravacaoRef.current
+    const decisao = decidirAvanco({
+      envelope: !!g,
+      leitura: g?.semRede ? { tipo: 'pulada' } : await lerStatusParaConferir(escoltaId),
+      statusTela: statusEsperado,
+      escoltaId,
+      pendentes: authUserId ? await lerPendentes(authUserId) : [],
+    })
+    if (decisao.acao === 'gravar') {
+      if (g && decisao.semConexao) g.semRede = true
+      return
     }
+    throw new Error(decisao.motivo === 'outra_tela'
+      ? ERRO_ETAPA_MUDOU
+      : decisao.motivo === 'anterior_enviando' ? MENSAGEM_ETAPA_ANTERIOR_ENVIANDO : (decisao.mensagem ?? ERRO_ETAPA_MUDOU))
   }
   // Lote 2026-10: com a gravacao atomica, transicao recusada nao deixa ponto nem historico.
   const ERRO_TRANSICAO_NADA_GRAVADO =
@@ -1959,7 +2070,7 @@ export default function EscoltaDetalhePage() {
         fotoCaminho: params.fotoId ? g.fotos.find(f => f.id === params.fotoId)?.caminho ?? null : null,
         soSeAvancou: !!g.etapa,
       },
-    }, setAndamento, semEspera)
+    }, setAndamento, semEspera, g.semRede)
     setAndamento('Atualizando a tela')
     if (r.modo === 'guardado') { setAvisoOffline({ tipo: 'guardado', texto: MENSAGEM_GUARDADO }); return 'guardado' }
     if (r.modo === 'recusado') { setAvisoOffline({ tipo: 'erro', texto: textoRecusado(r.erro) }); return 'recusado' }
@@ -3480,7 +3591,9 @@ export default function EscoltaDetalhePage() {
               <div className="flex justify-end pt-3 border-t">
                 <button
                   type="button"
+                  disabled={fotoProcessando}
                   onClick={() => {
+                    if (fotoProcessando) return
                     if (!fotoMateriais) { setErro('A foto dos materiais é obrigatória.'); return }
                     if (!obsMateriais.trim()) { setErro('As observações são obrigatórias.'); return }
                     if (faltaComplementoDaSugestao(obsMateriais, SUGESTOES_WIZARD.materiais)) { setErro(MENSAGEM_COMPLETAR_SUGESTAO); return }
@@ -3489,7 +3602,7 @@ export default function EscoltaDetalhePage() {
                   }}
                   className="btn-gradient px-6 w-full sm:w-auto"
                 >
-                  Avançar Passo
+                  {fotoProcessando ? TEXTO_PROCESSANDO_FOTO : 'Avançar Passo'}
                 </button>
               </div>
             </div>
@@ -3666,7 +3779,9 @@ export default function EscoltaDetalhePage() {
                 </button>
                 <button
                   type="button"
+                  disabled={fotoProcessando}
                   onClick={() => {
+                    if (fotoProcessando) return
                     const faltando = FOTOS_VIATURA_DEF.filter(f => !fotosViatura[f.key])
                     if (faltando.length > 0) { setErro(`Fotos obrigatórias: ${faltando.map(f => f.label).join(', ')}.`); return }
                     if (!obsViatura.trim()) { setErro('As observações são obrigatórias.'); return }
@@ -3678,7 +3793,7 @@ export default function EscoltaDetalhePage() {
                   }}
                   className="btn-gradient px-6 w-full sm:w-auto"
                 >
-                  Viatura Liberada — Avançar
+                  {fotoProcessando ? TEXTO_PROCESSANDO_FOTO : 'Viatura Liberada — Avançar'}
                 </button>
               </div>
             </div>
@@ -3726,10 +3841,10 @@ export default function EscoltaDetalhePage() {
                 <button
                   type="button"
                   onClick={handleWizardSubmit}
-                  disabled={loading}
+                  disabled={loading || fotoProcessando}
                   className="btn-gradient px-6 w-full sm:w-auto"
                 >
-                  {loading ? (andamento ? `${andamento}...` : 'Iniciando...') : 'Confirmar e Iniciar Escolta'}
+                  {loading ? (andamento ? `${andamento}...` : 'Iniciando...') : fotoProcessando ? TEXTO_PROCESSANDO_FOTO : 'Confirmar e Iniciar Escolta'}
                 </button>
               </div>
             </div>
@@ -5375,10 +5490,10 @@ export default function EscoltaDetalhePage() {
               <button onClick={() => setDialogStartBase(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleStartBase}
-                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosStartBase)}
+                disabled={loading || fotoProcessando || gpsAcaoLoading || !fotosCompletas(fotosStartBase)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? (andamento ? `${andamento}...` : 'Confirmando...') : 'Confirmar Saída'}
+                {loading ? (andamento ? `${andamento}...` : 'Confirmando...') : fotoProcessando ? TEXTO_PROCESSANDO_FOTO : 'Confirmar Saída'}
               </button>
             </div>
           </div>
@@ -5454,11 +5569,11 @@ export default function EscoltaDetalhePage() {
               <button onClick={() => { setDialogCheckin(false); setErro(null) }} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleCheckin}
-                disabled={loading || gpsCheckinLoading || !gpsCheckin || !viaturaCheckinId || fotosCheckin.length < FOTOS_POR_PONTO.min}
+                disabled={loading || fotoProcessando || gpsCheckinLoading || !gpsCheckin || !viaturaCheckinId || fotosCheckin.length < FOTOS_POR_PONTO.min}
                 className="h-11 sm:h-9 px-5 font-black text-[10px] uppercase tracking-widest text-white active:scale-95 transition-all disabled:opacity-50 w-full sm:w-auto"
                 style={{ backgroundColor: '#1E7C52' }}
               >
-                {loading ? (andamento ? `${andamento}...` : 'Registrando...') : 'Confirmar Check-in'}
+                {loading ? (andamento ? `${andamento}...` : 'Registrando...') : fotoProcessando ? TEXTO_PROCESSANDO_FOTO : 'Confirmar Check-in'}
               </button>
             </div>
           </div>
@@ -5524,10 +5639,10 @@ export default function EscoltaDetalhePage() {
               <button onClick={() => { setDialogParada(false); setGpsParada(null); setGpsParadaLoading(false) }} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleParada}
-                disabled={loading || fotosParada.length < FOTOS_POR_PONTO.min || !obsParada.trim()}
+                disabled={loading || fotoProcessando || fotosParada.length < FOTOS_POR_PONTO.min || !obsParada.trim()}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? (andamento ? `${andamento}...` : 'Gravando...') : 'Registrar Parada'}
+                {loading ? (andamento ? `${andamento}...` : 'Gravando...') : fotoProcessando ? TEXTO_PROCESSANDO_FOTO : 'Registrar Parada'}
               </button>
             </div>
           </div>
@@ -5606,10 +5721,10 @@ export default function EscoltaDetalhePage() {
               <button onClick={() => setDialogChegadaOrigem(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleChegadaOrigem}
-                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosOrigem)}
+                disabled={loading || fotoProcessando || gpsAcaoLoading || !fotosCompletas(fotosOrigem)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? (andamento ? `${andamento}...` : 'Confirmando...') : 'Confirmar Chegada'}
+                {loading ? (andamento ? `${andamento}...` : 'Confirmando...') : fotoProcessando ? TEXTO_PROCESSANDO_FOTO : 'Confirmar Chegada'}
               </button>
             </div>
           </div>
@@ -5656,10 +5771,10 @@ export default function EscoltaDetalhePage() {
               <button onClick={() => setDialogTransitoDestino(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleIniciarTransitoDestino}
-                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosTransitoDestino)}
+                disabled={loading || fotoProcessando || gpsAcaoLoading || !fotosCompletas(fotosTransitoDestino)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? (andamento ? `${andamento}...` : 'Iniciando...') : 'Confirmar Trânsito'}
+                {loading ? (andamento ? `${andamento}...` : 'Iniciando...') : fotoProcessando ? TEXTO_PROCESSANDO_FOTO : 'Confirmar Trânsito'}
               </button>
             </div>
           </div>
@@ -5711,10 +5826,10 @@ export default function EscoltaDetalhePage() {
               <button onClick={() => setDialogChegadaDestino(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleChegadaDestino}
-                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosDestino)}
+                disabled={loading || fotoProcessando || gpsAcaoLoading || !fotosCompletas(fotosDestino)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? (andamento ? `${andamento}...` : 'Confirmando...') : 'Confirmar Chegada'}
+                {loading ? (andamento ? `${andamento}...` : 'Confirmando...') : fotoProcessando ? TEXTO_PROCESSANDO_FOTO : 'Confirmar Chegada'}
               </button>
             </div>
           </div>
@@ -5766,10 +5881,10 @@ export default function EscoltaDetalhePage() {
               <button onClick={() => setDialogTransitoRetorno(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleRetornoUmToque}
-                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosTransitoRetorno)}
+                disabled={loading || fotoProcessando || gpsAcaoLoading || !fotosCompletas(fotosTransitoRetorno)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? (andamento ? `${andamento}...` : 'Registrando...') : 'Iniciar retorno'}
+                {loading ? (andamento ? `${andamento}...` : 'Registrando...') : fotoProcessando ? TEXTO_PROCESSANDO_FOTO : 'Iniciar retorno'}
               </button>
             </div>
           </div>
@@ -5816,10 +5931,10 @@ export default function EscoltaDetalhePage() {
               <button onClick={() => setDialogIniciarRetorno(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleIniciarRetorno}
-                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosRetorno)}
+                disabled={loading || fotoProcessando || gpsAcaoLoading || !fotosCompletas(fotosRetorno)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? (andamento ? `${andamento}...` : 'Iniciando...') : 'Confirmar Retorno'}
+                {loading ? (andamento ? `${andamento}...` : 'Iniciando...') : fotoProcessando ? TEXTO_PROCESSANDO_FOTO : 'Confirmar Retorno'}
               </button>
             </div>
           </div>
@@ -5874,10 +5989,10 @@ export default function EscoltaDetalhePage() {
               <button onClick={() => setDialogChegadaBase(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleChegadaBase}
-                disabled={loading || gpsAcaoLoading || !fotosCompletas(fotosChegadaBase)}
+                disabled={loading || fotoProcessando || gpsAcaoLoading || !fotosCompletas(fotosChegadaBase)}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? (andamento ? `${andamento}...` : 'Confirmando...') : 'Confirmar Chegada'}
+                {loading ? (andamento ? `${andamento}...` : 'Confirmando...') : fotoProcessando ? TEXTO_PROCESSANDO_FOTO : 'Confirmar Chegada'}
               </button>
             </div>
           </div>
@@ -6005,10 +6120,10 @@ export default function EscoltaDetalhePage() {
               <button onClick={() => setDialogFinalizacao(false)} className="btn-outline w-full sm:w-auto">Cancelar</button>
               <button
                 onClick={handleFinalizacao}
-                disabled={loading}
+                disabled={loading || fotoProcessando}
                 className="btn-gradient w-full sm:w-auto"
               >
-                {loading ? (andamento ? `${andamento}...` : 'Finalizando...') : 'Finalizar Operação'}
+                {loading ? (andamento ? `${andamento}...` : 'Finalizando...') : fotoProcessando ? TEXTO_PROCESSANDO_FOTO : 'Finalizar Operação'}
               </button>
             </div>
           </div>
