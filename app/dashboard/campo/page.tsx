@@ -39,6 +39,7 @@ import { novoId, salvarSnapshot, lerSnapshot, filaDisponivel } from '@/lib/offli
 import { prepararFoto, MENSAGEM_GUARDADO, type FotoPreparada, type ResultadoRegistroCampo } from '@/lib/offline/registro-campo'
 import { MENSAGEM_ETAPA_ANTERIOR_ENVIANDO, aplicarPendentes, lerPendentes } from '@/lib/offline/pendentes'
 import { decidirAvanco } from '@/lib/offline/reconferencia'
+import { buscarUltimaAlteracao, mensagemConflito, statusMudouNoServidor } from '@/lib/concorrencia'
 import { ouvirOutrasAbas } from '@/lib/offline/avisos-abas'
 import { salvarEscoltasOffline } from '@/lib/offline/sessao'
 import { iniciarRastreioGps, leituraParaConfirmar, textoPrecisao } from '@/lib/gps'
@@ -1289,12 +1290,14 @@ export default function CampoPage() {
           opcoes: { viaturasPorEscolta: { [escoltaAtiva.id]: viaturasDaEscolta.map(v => v.id) } },
         })
         if (decisao.acao === 'bloquear') {
+          // Concorrência (2026-11-12): quem avançou, o quê e quando; a tela é relida.
           showToast('erro', decisao.motivo === 'outra_tela'
-            ? 'A etapa já foi avançada em outra tela. Recarregue a página antes de continuar.'
+            ? mensagemConflito(await buscarUltimaAlteracao(sb, escoltaAtiva.id, user.id))
             : decisao.motivo === 'anterior_enviando'
               ? MENSAGEM_ETAPA_ANTERIOR_ENVIANDO
               : (decisao.mensagem ?? 'Não foi possível conferir a etapa atual.'))
           setExecutando(false)
+          if (decisao.motivo === 'outra_tela') void carregar(true)
           return
         }
         if (env.usar && decisao.semConexao) semRede = true
@@ -1414,9 +1417,17 @@ export default function CampoPage() {
       } else {
         const { data, error: etapaErr } = await sb.rpc('registrar_etapa_escolta', argsEtapa)
         if (etapaErr) {
-          showToast('erro', etapaErr.message === 'ERRO_SEM_TRANSICAO'
-            ? 'A etapa foi avançada em outra tela enquanto este registro era enviado. Nada foi gravado desta vez. Recarregue a página e confira a etapa antes de registrar de novo.'
-            : (etapaErr.message ?? 'Não foi possível registrar a etapa.'))
+          if (etapaErr.message === 'ERRO_SEM_TRANSICAO') {
+            // Concorrência (2026-11-12): quem alterou, o quê e quando; sem mudança de status no
+            // servidor (regra do banco), o texto de sempre.
+            const alt = await buscarUltimaAlteracao(sb, escoltaAtiva.id, user.id)
+            showToast('erro', statusMudouNoServidor(alt, statusAtual)
+              ? mensagemConflito(alt, { nadaGravado: 'Nada foi gravado desta vez.' })
+              : 'A etapa foi avançada em outra tela enquanto este registro era enviado. Nada foi gravado desta vez. Recarregue a página e confira a etapa antes de registrar de novo.')
+            void carregar(true)
+          } else {
+            showToast('erro', etapaErr.message ?? 'Não foi possível registrar a etapa.')
+          }
           setExecutando(false)
           return
         }

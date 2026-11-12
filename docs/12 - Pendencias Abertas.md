@@ -132,3 +132,18 @@ Branch `feat/lancamento-retroativo`, sobre a master `07aac1b`. Detalhe no [`../L
 | 8.4 | **Fotos de Pré-Início e Finalizada, checklists e KM** | O lançamento grava pontos, histórico e status; não lança checklists, KM nem as fotos da viatura da finalização (aviso na prévia). Pré-início lançado deixa a escolta com checklist pendente no início |
 | 8.5 | **Fotos enviadas e lançamento recusado** | As fotos sobem antes da confirmação; se a RPC recusar, ficam no storage e em `fotos` sem ponto (como no fluxo ao vivo quando a etapa falha). Um novo envio sobe de novo |
 | 8.6 | **Resumo do Telegram só pelo banco** | Sai pela fila do banco (chat central). Sem o envio pelo banco ativo, fica só na central de avisos, como nas demais ações da gestão |
+
+
+## 9. Concorrência na mesma escolta (migration 223), 12/11/2026: o que ficou em aberto
+
+Branch `feat/concorrencia`, sobre a master `d42a35f`. Detalhe no [`../LOG-ALTERACOES.md`](../LOG-ALTERACOES.md), entrada de 12/11/2026 (concorrência).
+
+| # | Pendência | Situação |
+|---|---|---|
+| 9.1 | **Aplicar a 223 e rodar os testes de banco** | Criada e não aplicada. Ordem: deploy do código, `223_concorrencia.sql` no SQL Editor, conferência `database/testes/06_concorrencia_conferencia.sql` (tudo true) e, na homologação, `database/testes/06_concorrencia.sql`. O bloco 2 supõe que o operador `qa_um` avança de Agendada para Pré-Início pela `registrar_etapa_escolta` sem outra exigência; o caso de operador fora do efetivo não está no teste (a homologação teria de ter um segundo operador) |
+| 9.2 | **Canal de presença público** | O Presence usa canal público (`escolta:<id>`): quem tem a chave anon do projeto e o id da escolta consegue entrar e ver nome e perfil de quem está olhando (nada da escolta trafega por ali). Fechar exige canal privado (`config: { private: true }`) com política em `realtime.messages` que confira o acesso à escolta pelo tópico, e a autorização do Realtime ligada no projeto. Não feito para não depender de configuração do painel |
+| 9.3 | **Quem/quando no texto do erro do banco** | As RPCs continuam recusando com o texto de sempre; a tela lê a última alteração logo depois. Entre a recusa e a leitura, uma terceira alteração pode entrar e a mensagem citar a mais nova. Raro e sem dano (a mensagem continua verdadeira: a escolta foi alterada) |
+| 9.4 | **Painel Guiado e mapa sem o aviso de atualização** | O aviso "atualizada por X" e a barra de presença são só da página de detalhe. O Campo ganhou a mensagem de conflito, mas continua relendo em silêncio como antes |
+| 9.5 | **Duplicada só na criação pela tela** | O aviso aparece na revisão final de `/dashboard/escoltas/nova`. Lançamento retroativo, edição e qualquer criação fora dessa tela não conferem duplicidade. Duas pessoas criando a mesma escolta no mesmo segundo não se veem (cada uma confere antes da outra gravar) |
+| 9.6 | **Toast do Campo some em 4 s** | A mensagem de conflito no Campo é mais longa que a anterior e usa o mesmo toast de 4 s. Se o piloto achar curto, aumentar o tempo só para erro |
+| 9.7 | **Teste com duas pessoas de verdade** | Realtime (histórico e escolta) e Presence não foram testados contra o Supabase: abrir a mesma escolta em dois usuários (gestor e operador), avançar etapa num e conferir o aviso e a barra no outro |

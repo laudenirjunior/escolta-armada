@@ -25,6 +25,7 @@ A lista completa, com a situação de cada uma, fica em `migrations/README.md`.
 | # | Nome | Descrição | Conferência |
 |---|------|-----------|-------------|
 | 222 | `lancamento_retroativo.sql` | Lançamento retroativo de escolta por gestor e administrador (RPC `lancar_escolta_retroativa`, horário operacional e de registro, fotos da galeria sem GPS, um único aviso). Depois da 221. Reversão: `222_lancamento_retroativo_reverter.sql` | `testes/05_lancamento_retroativo_conferencia.sql` e `testes/05_lancamento_retroativo.sql` |
+| 223 | `concorrencia.sql` | Concorrência na mesma escolta: RPC de leitura `ultima_alteracao_escolta` (quem, perfil, o quê e quando, para a mensagem de conflito e o aviso de atualização), índice da auditoria por escolta e `escoltas`, `escolta_status_historico` e `pontos_controle` na publicação do Realtime. Nenhuma RPC ou RLS existente muda. Depois da 222. Reversão: `223_concorrencia_reverter.sql` | `testes/06_concorrencia_conferencia.sql` e `testes/06_concorrencia.sql` |
 
 ## 🚀 Como Executar
 

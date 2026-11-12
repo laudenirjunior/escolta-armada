@@ -36,6 +36,8 @@ Este diretório guarda a referência legível do que foi aplicado. A fonte de ve
 
 `222_lancamento_retroativo.sql` **pendente** (criada em 2026-11-12, não aplicada; depois da 221). Lançamento retroativo de escolta pela gestão: RPC `lancar_escolta_retroativa`, colunas `registrado_em`, `retroativo` e `motivo_retroativo`, marca na escolta, fotos da galeria sem GPS e um único aviso no fim. Conferência: `database/testes/05_lancamento_retroativo_conferencia.sql`. Reversão: `222_lancamento_retroativo_reverter.sql`. Ver a entrada de 2026-11-12 no `LOG-ALTERACOES.md`.
 
+`223_concorrencia.sql` **pendente** (criada em 2026-11-12, não aplicada; depois da 222). Concorrência na mesma escolta: RPC de leitura `ultima_alteracao_escolta` (quem alterou, perfil, o quê e quando, para a mensagem de conflito e o aviso de atualização da tela), índice `logs_auditoria_registro_data_idx` e as tabelas `escoltas`, `escolta_status_historico` e `pontos_controle` na publicação `supabase_realtime` (só se ainda não estiverem). Nenhuma RPC ou política existente muda. Conferência: `database/testes/06_concorrencia_conferencia.sql`. Reversão: `223_concorrencia_reverter.sql` (a publicação fica). Ver a entrada de 2026-11-12 (concorrência) no `LOG-ALTERACOES.md`.
+
 `111_trigger_validacao_transicao.sql` neste diretório é uma versão consolidada da 111 e da 112 num arquivo só, mantida como referência. **Não precisa ser aplicada**: o conteúdo já está no banco pelas migrations 111 e 112.
 
 ## Regra para migrations novas
