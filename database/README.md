@@ -18,6 +18,14 @@ Este diretório contém as migrações SQL para o banco de dados PostgreSQL do S
 
 **Total: ~80 tabelas + triggers + índices + RLS**
 
+### Migrations recentes (pendentes de aplicação)
+
+A lista completa, com a situação de cada uma, fica em `migrations/README.md`.
+
+| # | Nome | Descrição | Conferência |
+|---|------|-----------|-------------|
+| 222 | `lancamento_retroativo.sql` | Lançamento retroativo de escolta por gestor e administrador (RPC `lancar_escolta_retroativa`, horário operacional e de registro, fotos da galeria sem GPS, um único aviso). Depois da 221. Reversão: `222_lancamento_retroativo_reverter.sql` | `testes/05_lancamento_retroativo_conferencia.sql` e `testes/05_lancamento_retroativo.sql` |
+
 ## 🚀 Como Executar
 
 ### Opção 1: Supabase Dashboard (Recomendado)

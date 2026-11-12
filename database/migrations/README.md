@@ -34,6 +34,8 @@ Este diretório guarda a referência legível do que foi aplicado. A fonte de ve
 
 `221_controle_total_gestao.sql` **pendente** (criada em 2026-11-12, não aplicada). Controle total de gestor e administrador: cancelar finalizada, excluir (lógico) e restaurar, arquivadas e recuperar para o gestor. Reversão: `221_controle_total_gestao_reverter.sql`. Ver a entrada de 2026-11-12 no `LOG-ALTERACOES.md`.
 
+`222_lancamento_retroativo.sql` **pendente** (criada em 2026-11-12, não aplicada; depois da 221). Lançamento retroativo de escolta pela gestão: RPC `lancar_escolta_retroativa`, colunas `registrado_em`, `retroativo` e `motivo_retroativo`, marca na escolta, fotos da galeria sem GPS e um único aviso no fim. Conferência: `database/testes/05_lancamento_retroativo_conferencia.sql`. Reversão: `222_lancamento_retroativo_reverter.sql`. Ver a entrada de 2026-11-12 no `LOG-ALTERACOES.md`.
+
 `111_trigger_validacao_transicao.sql` neste diretório é uma versão consolidada da 111 e da 112 num arquivo só, mantida como referência. **Não precisa ser aplicada**: o conteúdo já está no banco pelas migrations 111 e 112.
 
 ## Regra para migrations novas

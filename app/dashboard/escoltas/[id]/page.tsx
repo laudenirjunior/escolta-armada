@@ -62,6 +62,8 @@ import { carregarLocaisAtivos } from '@/lib/locais'
 import { CombustivelViaturas } from '@/components/escolta/combustivel-viaturas'
 import { rotuloDoPonto } from '@/lib/rotulo-ponto'
 import { AcoesGestao, PendenciasConclusao } from '@/components/escolta/acoes-gestao'
+import { SEM_MARCAS, SeloRetroativo, lerMarcasRetroativo, type MarcasRetroativo } from '@/components/escolta/lancamento-retroativo'
+import { formatarBrasilia, textoHorarioRegistro } from '@/lib/lancamento-retroativo'
 import { COLUNAS_ANULACAO, ehFuncaoAusente, textoAnulado, type Anulacao } from '@/lib/gestao'
 // Lote 2026-10 (onda L, 16.3.10): os handlers de campo passam as mesmas linhas ao envelope.
 import { novoId, lerSnapshot } from '@/lib/offline/fila'
@@ -877,6 +879,8 @@ export default function EscoltaDetalhePage() {
   const [historico, setHistorico] = useState<HistoricoItem[]>([])
   const [ocorrencias, setOcorrencias] = useState<OcorrenciaItem[]>([])
   const [timeline, setTimeline] = useState<TimelineItem[]>([])
+  // Lançamento retroativo (migration 222): marca da escolta, para o selo do cabeçalho.
+  const [marcaRetroativo, setMarcaRetroativo] = useState<MarcasRetroativo['escolta']>(null)
   const [loading, setLoading] = useState(true)
   // Foto ainda sendo carimbada ou reduzida: os botões que dependem dela esperam.
   const fotoProcessando = useFotoEmProcessamento()
@@ -1301,6 +1305,15 @@ export default function EscoltaDetalhePage() {
 
     const tl: TimelineItem[] = []
     const locaisAtivos = await carregarLocaisAtivos(sb)
+    // 222: marcas do lançamento retroativo, lidas à parte (sem a migration, nada muda na tela).
+    const marcas = aparelhoSemRede() || semRedeNaLeitura
+      ? SEM_MARCAS
+      : await lerMarcasRetroativo(sb, id, viaturaIds, todosFotoIds)
+    setMarcaRetroativo(marcas.escolta)
+    const extraRetroativo = (rid: string, dataHora: string) => {
+      const r = marcas.registros[rid]
+      return r ? { retroativo: textoHorarioRegistro({ data_hora: dataHora, registrado_em: r.registrado_em, retroativo: true }) } : {}
+    }
 
     histNorm.forEach((h) => {
       tl.push({
@@ -1310,7 +1323,7 @@ export default function EscoltaDetalhePage() {
         titulo: `${STATUS_INFO[h.status_anterior]?.label ?? h.status_anterior} → ${STATUS_INFO[h.status_novo]?.label ?? h.status_novo}`,
         descricao: h.observacao,
         usuario: h.autor?.nome_completo ?? 'Sistema',
-        extra: { status_anterior: h.status_anterior, status_novo: h.status_novo, anulado: textoAnulado(h) },
+        extra: { status_anterior: h.status_anterior, status_novo: h.status_novo, anulado: textoAnulado(h), ...extraRetroativo(h.id, h.data_hora) },
       })
     })
 
@@ -1331,7 +1344,12 @@ export default function EscoltaDetalhePage() {
         rotulo: rotuloDoPonto({ latitude: p.latitude, longitude: p.longitude, precisao_metros: p.precisao_metros, endereco: info.endereco }, locaisAtivos),
         foto_url: fotosPonto[0] ?? null,
         foto_urls: fotosPonto,
-        extra: { sem_sinal_gps: p.sem_sinal_gps === true, anulado: textoAnulado(p) },
+        extra: {
+          sem_sinal_gps: p.sem_sinal_gps === true, anulado: textoAnulado(p), ...extraRetroativo(p.id, p.data_hora),
+          // 222: foto da galeria (lançamento retroativo) não tem localização.
+          ...(fotoIdsDoPonto({ foto_id: p.foto?.id ?? null, observacoes: p.observacoes }).some((fid) => marcas.fotosGaleria.has(fid))
+            ? { foto_galeria: true } : {}),
+        },
       })
     })
 
@@ -3897,7 +3915,7 @@ export default function EscoltaDetalhePage() {
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-5">
-      <AcoesGestao escolta={escolta} perfil={perfil} onAlterado={carregar} onCancelar={abrirCancelar} />
+      <AcoesGestao escolta={escolta} perfil={perfil} onAlterado={carregar} onCancelar={abrirCancelar} usuarioId={user?.id} />
 
       {/* Onda L: registro guardado no aparelho, ou não aceito (conflito ou recusado). */}
       {avisoOffline && (
@@ -3976,6 +3994,9 @@ export default function EscoltaDetalhePage() {
                         <span className="badge-warning">Checklist pendente</span>
                       )}
                       <PendenciasConclusao escoltaId={escolta.id} modo="faixa" chave={escolta.status} />
+                      {marcaRetroativo && (
+                        <SeloRetroativo titulo={`Lançamento retroativo em ${formatarBrasilia(marcaRetroativo.retroativo_em)} (Brasília)${marcaRetroativo.autor ? ` por ${marcaRetroativo.autor}` : ''}. Motivo: ${marcaRetroativo.retroativo_motivo ?? ''}`} />
+                      )}
                       {escolta.interestadual === true && <span className="badge-warning" data-teste="etiqueta-interestadual">{textoInterestadual(escolta)}</span>}
                     </div>
                     {escolta.cliente && (
@@ -4657,6 +4678,11 @@ export default function EscoltaDetalhePage() {
                                   {typeof item.extra?.anulado === 'string' && (
                                     <p data-teste="anulado" style={{ fontSize: '11px', fontWeight: 700, color: '#B83832', margin: '3px 0 0' }}>{String(item.extra.anulado)}</p>
                                   )}
+                                  {typeof item.extra?.retroativo === 'string' && (
+                                    <p data-teste="registro-retroativo" style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', fontSize: '11px', fontWeight: 600, color: '#B7791F', margin: '3px 0 0' }}>
+                                      <SeloRetroativo /> {String(item.extra.retroativo)}
+                                    </p>
+                                  )}
                                   {item.descricao && (
                                     <p style={{ fontSize: '12px', color: '#5A6A80', margin: '3px 0 0', lineHeight: 1.4 }}>{item.descricao}</p>
                                   )}
@@ -5120,6 +5146,21 @@ export default function EscoltaDetalhePage() {
                     </div>
                   )
                 })()}
+
+                {/* 222: lançamento retroativo, com o horário em que aconteceu e o do registro */}
+                {typeof item.extra?.retroativo === 'string' && (
+                  <div data-teste="detalhe-retroativo">
+                    <p style={{ fontSize: '9px', fontWeight: 900, textTransform: 'uppercase', letterSpacing: '0.12em', color: '#A8B8C2', marginBottom: '6px' }}>Lançamento retroativo</p>
+                    <p style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', fontSize: '12px', fontWeight: 700, color: '#B7791F' }}>
+                      <SeloRetroativo /> {String(item.extra.retroativo)}
+                    </p>
+                    {item.tipo === 'ponto_controle' && (
+                      <p style={{ fontSize: '12px', color: '#5A6A80', marginTop: '4px' }}>
+                        {item.extra?.foto_galeria ? 'Sem localização (galeria).' : 'Sem localização: lançado depois, sem GPS do aparelho.'}
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* Ponto gravado sem sinal: coordenada nula e declarada, nunca 0,0 */}
                 {!item.coordenadas && Boolean(item.extra?.sem_sinal_gps) && (

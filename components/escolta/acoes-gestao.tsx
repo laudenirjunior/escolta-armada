@@ -22,16 +22,21 @@
  * permitir (inclusive no pré-início, em que o detalhe mostra só o wizard). Abre o diálogo de
  * cancelar ou reagendar do próprio detalhe (onCancelar): a mesma regra e a mesma RPC.
  *
+ * Lançamento retroativo (2026-11-12, migration 222): item "Lançamento retroativo" no menu, só
+ * de Agendada até Na Base (podeLancarRetroativo); abre DialogoLancamentoRetroativo.
+ *
  * Fica fora da tela de detalhe de propósito (regra 7 do plano: mudança mínima no detalhe).
  * Também daqui: a faixa "Concluída com pendências" e a seção com a lista.
  */
 import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Archive, ArchiveRestore, CheckCheck, ChevronDown, Pencil, RotateCcw, ShieldAlert, Trash2, Undo2, X, XCircle } from 'lucide-react'
+import { Archive, ArchiveRestore, CheckCheck, ChevronDown, History, Pencil, RotateCcw, ShieldAlert, Trash2, Undo2, X, XCircle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { PODE_PODER_TOTAL, temPermissao } from '@/lib/permissions'
 import { modoCancelamento, podeExcluirEscolta, podeRecuperarArquivada } from '@/lib/controle-total'
 import { DialogoExcluir } from './excluir-escolta'
+import { DialogoLancamentoRetroativo } from './lancamento-retroativo'
+import { podeLancarRetroativo } from '@/lib/lancamento-retroativo'
 import { rotuloStatus, statusAnterior } from '@/lib/fluxo-escolta'
 import {
   MSG_ATUALIZACAO, ehFuncaoAusente, horaBR, totalItensPendentes,
@@ -62,6 +67,7 @@ const STATUS_INICIADOS_ARQUIVO = ['rascunho', 'agendada', 'finalizada', 'cancela
 interface Props {
   escolta: {
     id: string; status: string; codigo_escolta: string | null
+    data_hora_prevista?: string | null
     arquivada_em?: string | null; motivo_arquivamento?: string | null
     arquivador?: { nome_completo?: string | null } | null
   }
@@ -69,13 +75,16 @@ interface Props {
   onAlterado: () => void
   /** Abre o diálogo de cancelar ou reagendar do detalhe. Sem ele, o item não aparece. */
   onCancelar?: () => void
+  /** usuarios.id de quem está na sessão (criado_por das fotos do lançamento retroativo). */
+  usuarioId?: string | null
 }
 
-export function AcoesGestao({ escolta, perfil, onAlterado, onCancelar }: Props) {
+export function AcoesGestao({ escolta, perfil, onAlterado, onCancelar, usuarioId }: Props) {
   const router = useRouter()
   const [menu, setMenu] = useState(false)
   const [acao, setAcao] = useState<Acao | null>(null)
   const [excluindo, setExcluindo] = useState(false)
+  const [retroativo, setRetroativo] = useState(false)
   if (!temPermissao(perfil, PODE_PODER_TOTAL)) return null
 
   // Excluída some para todos (RLS da 221): depois de excluir, volta para a lista.
@@ -131,8 +140,9 @@ export function AcoesGestao({ escolta, perfil, onAlterado, onCancelar }: Props) 
   const podeArquivar = STATUS_INICIADOS_ARQUIVO.includes(st)
 
   const cancelavel = !!onCancelar && modoCancelamento(perfil, escolta) !== null
+  const lancavel = podeLancarRetroativo(perfil, escolta)
 
-  const itens: { chave: Acao | 'editar' | 'cancelar'; rotulo: string; icone: React.ReactNode; ativo: boolean; dica?: string }[] = [
+  const itens: { chave: Acao | 'editar' | 'cancelar' | 'retroativo'; rotulo: string; icone: React.ReactNode; ativo: boolean; dica?: string }[] = [
     { chave: 'editar', rotulo: 'Editar escolta', icone: <Pencil size={14} />, ativo: true },
     { chave: 'voltar', rotulo: 'Voltar uma etapa', icone: <Undo2 size={14} />, ativo: podeVoltar,
       dica: podeVoltar ? `Volta para ${rotuloStatus(statusAnterior(st) ?? '')}` : 'Sem etapa de campo para desfazer' },
@@ -140,6 +150,8 @@ export function AcoesGestao({ escolta, perfil, onAlterado, onCancelar }: Props) 
       dica: podeVoltar ? 'Todos os registros de campo ficam anulados' : 'Sem etapa de campo para desfazer' },
     { chave: 'concluir', rotulo: 'Concluir agora', icone: <CheckCheck size={14} />, ativo: podeConcluir,
       dica: podeConcluir ? 'Mostra o que não foi feito antes de concluir' : 'Escolta já encerrada' },
+    ...(lancavel ? [{ chave: 'retroativo' as const, rotulo: 'Lançamento retroativo', icone: <History size={14} />, ativo: true,
+      dica: 'Lança as etapas que aconteceram e não foram registradas, com os horários reais' }] : []),
     { chave: 'arquivar', rotulo: 'Arquivar', icone: <Archive size={14} />, ativo: podeArquivar,
       dica: podeArquivar ? 'Some das listas, do mural e dos indicadores' : 'Em andamento: conclua ou cancele antes (S7)' },
     ...(cancelavel ? [{ chave: 'cancelar' as const, rotulo: 'Cancelar escolta', icone: <XCircle size={14} />, ativo: true,
@@ -172,6 +184,7 @@ export function AcoesGestao({ escolta, perfil, onAlterado, onCancelar }: Props) 
                   setMenu(false)
                   if (it.chave === 'editar') router.push(`/dashboard/escoltas/nova?editar=${escolta.id}`)
                   else if (it.chave === 'cancelar') onCancelar?.()
+                  else if (it.chave === 'retroativo') setRetroativo(true)
                   else setAcao(it.chave)
                 }}
                 className="w-full text-left px-4 py-2.5 flex items-start gap-2 disabled:opacity-45 hover:bg-[#F4F6FA]"
@@ -202,6 +215,14 @@ export function AcoesGestao({ escolta, perfil, onAlterado, onCancelar }: Props) 
         />
       )}
       {dialogoExcluir}
+      {retroativo && (
+        <DialogoLancamentoRetroativo
+          escolta={escolta}
+          usuarioId={usuarioId}
+          onFechar={() => setRetroativo(false)}
+          onFeito={() => { setRetroativo(false); onAlterado() }}
+        />
+      )}
     </div>
   )
 }
