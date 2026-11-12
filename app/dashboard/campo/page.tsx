@@ -36,12 +36,14 @@ import { enderecoPorExtenso, pedirEnderecoDepois } from '@/lib/geocodificacao'
 // Lote 2026-10 (onda L): gravação pelo envelope (guarda no aparelho e envia) e leitura sem rede.
 import { novoId, salvarSnapshot, lerSnapshot, filaDisponivel } from '@/lib/offline/fila'
 import { prepararFoto, MENSAGEM_GUARDADO, type FotoPreparada, type ResultadoRegistroCampo } from '@/lib/offline/registro-campo'
-import { MENSAGEM_ETAPA_ANTERIOR_ENVIANDO, aplicarPendentes, lerPendentes, servidorAtrasDoAparelho } from '@/lib/offline/pendentes'
+import { MENSAGEM_ETAPA_ANTERIOR_ENVIANDO, aplicarPendentes, lerPendentes } from '@/lib/offline/pendentes'
+import { decidirAvanco } from '@/lib/offline/reconferencia'
+import { ouvirOutrasAbas } from '@/lib/offline/avisos-abas'
 import { salvarEscoltasOffline } from '@/lib/offline/sessao'
 import { iniciarRastreioGps, leituraParaConfirmar, textoPrecisao } from '@/lib/gps'
 import {
   aparelhoSemRede, conferirEspacoParaFoto, envelopeLigado, erroDeRede, gravarPeloEnvelope, textoConflito,
-  textoErroGravacao, textoRecusado,
+  lerStatusParaConferir, textoErroGravacao, textoRecusado,
 } from '@/lib/offline/tela'
 import { EmergenciaSemConexao } from '@/components/offline/emergencia-sem-conexao'
 import { FaixaAndamento } from '@/components/ui/faixa-andamento'
@@ -840,9 +842,13 @@ export default function CampoPage() {
     const aoVoltar = () => { if (document.visibilityState === 'visible') carregar(true) }
     document.addEventListener('visibilitychange', aoVoltar)
     const relogio = setInterval(() => { setAgora(Date.now()); carregar(true) }, 60_000)
+    // A fila deste aparelho mudou em outra aba (registro guardado ou envio concluído): relê,
+    // inclusive sem rede (cópia do aparelho + registros guardados).
+    const pararAbas = ouvirOutrasAbas(() => { carregar(true) })
     return () => {
       document.removeEventListener('visibilitychange', aoVoltar)
       clearInterval(relogio)
+      pararAbas()
     }
   }, [carregar])
 
@@ -1206,7 +1212,9 @@ export default function CampoPage() {
       // caminho direto de sempre.
       const env = await envelopeLigado()
       const quando = new Date().toISOString()
-      const semRede = env.usar && aparelhoSemRede()
+      // Sem rede segundo o aparelho; a reconferência abaixo também liga isto quando a rede falta
+      // de fato com navigator.onLine true (service worker ativo; teste de 12/11/2026).
+      let semRede = env.usar && aparelhoSemRede()
 
       // GPS. Decisao de Pecanha: sem sinal nao bloqueia o avanco, mas tambem nao
       // inventa coordenada. Grava latitude e longitude nulas com sem_sinal_gps
@@ -1261,34 +1269,28 @@ export default function CampoPage() {
       // Isto reduz a janela de segundos para milissegundos, nao a elimina. Fechar de vez
       // exige gravar ponto, status e historico numa unica transacao no banco, por RPC.
       // Onda L: sem rede, a conferência fica no servidor (registro em conflito, nunca descartado).
-      if (!semRede) {
-        const { data: statusConferido, error: confErr } = await sb
-          .from('escoltas')
-          .select('status')
-          .eq('id', escoltaAtiva.id)
-          .maybeSingle()
-        if (confErr && !(env.usar && erroDeRede(confErr))) {
-          showToast('erro', confErr.message ?? 'Não foi possível conferir a etapa atual.')
+      // Teste de 12/11/2026: "outra tela" só com leitura fresca do servidor (nunca a cópia do
+      // service worker) mostrando outra etapa que a fila deste aparelho não explica. Leitura
+      // que falhou, 504 SEM_CONEXAO ou escolta não lida: com o envelope, guarda e segue.
+      {
+        const decisao = decidirAvanco({
+          envelope: env.usar,
+          leitura: semRede ? { tipo: 'pulada' } : await lerStatusParaConferir(escoltaAtiva.id),
+          statusTela: statusAtual,
+          escoltaId: escoltaAtiva.id,
+          pendentes: authUserId ? await lerPendentes(authUserId) : [],
+          opcoes: { viaturasPorEscolta: { [escoltaAtiva.id]: viaturasDaEscolta.map(v => v.id) } },
+        })
+        if (decisao.acao === 'bloquear') {
+          showToast('erro', decisao.motivo === 'outra_tela'
+            ? 'A etapa já foi avançada em outra tela. Recarregue a página antes de continuar.'
+            : decisao.motivo === 'anterior_enviando'
+              ? MENSAGEM_ETAPA_ANTERIOR_ENVIANDO
+              : (decisao.mensagem ?? 'Não foi possível conferir a etapa atual.'))
           setExecutando(false)
           return
         }
-        if (!confErr && (!statusConferido || statusConferido.status !== statusAtual)) {
-          // A etapa da tela pode ser a otimista (aplicarPendentes): a anterior ainda está na
-          // fila deste aparelho e o servidor ficou para trás. Não é outra tela. Com o envelope,
-          // segue: a fila manda na ordem e o servidor confere (conflito, nunca descarte).
-          const atras = !!statusConferido && servidorAtrasDoAparelho(
-            escoltaAtiva.id, statusConferido.status, statusAtual,
-            authUserId ? await lerPendentes(authUserId) : [],
-            { viaturasPorEscolta: { [escoltaAtiva.id]: viaturasDaEscolta.map(v => v.id) } },
-          )
-          if (!(atras && env.usar)) {
-            showToast('erro', atras
-              ? MENSAGEM_ETAPA_ANTERIOR_ENVIANDO
-              : 'A etapa já foi avançada em outra tela. Recarregue a página antes de continuar.')
-            setExecutando(false)
-            return
-          }
-        }
+        if (env.usar && decisao.semConexao) semRede = true
       }
 
       // Lote 2026-10 (onda F): ponto, conferência do comboio, status e histórico numa só
@@ -1391,7 +1393,7 @@ export default function CampoPage() {
           },
           // Telegram de hoje, mandado uma vez depois de aplicado e só se a etapa avançou.
           aviso: { corpo: await corpoTelegram(), fotoCaminho: fotosEnvelope[0]?.caminho ?? null, soSeAvancou: true },
-        }, setAndamento)
+        }, setAndamento, false, semRede)
         if (fechouSemAplicar(r, avisos)) {
           limparFotosCheckpoint()
           setObsAvanco('')
