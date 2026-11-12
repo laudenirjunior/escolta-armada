@@ -88,6 +88,28 @@ export function aplicarPendentes<E extends { id: string; status: string }, P ext
   return { escoltas: escoltasSaida, pontos: pontosSaida }
 }
 
+/**
+ * O servidor está atrás do aparelho: a etapa lida no servidor, somada às etapas ainda na fila
+ * deste aparelho, dá exatamente a etapa mostrada na tela. Não é "avançada em outra tela": a
+ * etapa anterior ainda não chegou. Com o envelope, a tela não bloqueia e deixa o servidor
+ * conferir (status_esperado; conflito, nunca descarte).
+ */
+export function servidorAtrasDoAparelho(
+  escoltaId: string,
+  statusServidor: string,
+  statusTela: string,
+  pendentes: RegistroFila[],
+  opcoes: OpcoesSobreposicao = {},
+): boolean {
+  if (statusServidor === statusTela) return false
+  const [e] = aplicarPendentes([{ id: escoltaId, status: statusServidor }], [], pendentes, opcoes).escoltas
+  return !!e?.status_otimista && e.status === statusTela
+}
+
+/** Texto da tela quando o servidor está atrás do aparelho e o registro não pode ir pelo envelope. */
+export const MENSAGEM_ETAPA_ANTERIOR_ENVIANDO =
+  'A etapa anterior ainda está sendo enviada deste aparelho. Aguarde o envio terminar (com sinal, leva alguns segundos) e tente de novo. Nada foi gravado desta vez.'
+
 /** Pendentes do usuário (para passar a aplicarPendentes); vazio se a fila não abrir. */
 export async function lerPendentes(authUserId: string): Promise<RegistroFila[]> {
   try { return await pendentesDoUsuario(authUserId) } catch { return [] }
