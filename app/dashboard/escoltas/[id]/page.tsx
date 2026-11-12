@@ -7,7 +7,7 @@ import {
   MapPin, ArrowRight, CheckCircle2, XCircle,
   UserCheck, Camera, ClipboardList, Navigation,
   ChevronRight, Shield, AlertCircle, Play, Octagon,
-  RotateCcw, Home, CalendarClock, Radio, FileDown
+  RotateCcw, Home, CalendarClock, Radio, FileDown, X
 } from 'lucide-react'
 import { printEscolta } from '@/utils/print'
 import { createClient } from '@/lib/supabase/client'
@@ -82,6 +82,11 @@ import { emParalelo, FOTOS_EM_PARALELO } from '@/lib/offline/envio'
 import { FaixaAndamento } from '@/components/ui/faixa-andamento'
 import { RegistrarOcorrenciaGestao } from '@/components/escolta/registrar-ocorrencia-gestao'
 import { ErroJuntoAoBotao, levarAoCampo } from '@/components/ui/erro-junto'
+import { BarraPresenca, usePresencaEscolta } from '@/components/escolta/presenca-escolta'
+import {
+  buscarUltimaAlteracao, criarAgrupador, decidirAtualizacao, mensagemConflito, mostrarAvisoAposReler, statusMudouNoServidor,
+  textoAtualizadaPor, textoUltimaAlteracao,
+} from '@/lib/concorrencia'
 import { ALTURA_MAX_MINIATURA, MiniaturaAmpliavel } from '@/components/ui/miniatura-ampliavel'
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
@@ -1516,17 +1521,67 @@ export default function EscoltaDetalhePage() {
     }
   }, [id, reler])
 
+  // ── Concorrência (2026-11-12): tempo real com aviso e presença ──────────────
+  // O Realtime de outra pessoa não relê a escolta por baixo de uma janela de ação ou do
+  // assistente de partida em uso: mostra "Esta escolta foi atualizada por X" com o botão de
+  // atualizar (e relê sozinho quando a janela fecha). Sem nada aberto, relê em silêncio e
+  // avisa quem alterou. Gravação desta aba em andamento: ignora (ela relê ao terminar).
+  const [editandoGestao, setEditandoGestao] = useState(false)
+  const editando = editandoGestao || dialogAvanco || dialogCancelar || dialogOcorrenciaGestao || dialogStartBase || dialogParada
+    || dialogChegadaOrigem || dialogTransitoDestino || dialogChegadaDestino || dialogTransitoRetorno || dialogIniciarRetorno
+    || dialogChegadaBase || dialogFinalizacao || dialogCheckin
+    || (escolta?.status === 'em_pre_inicio' && (wizardStep > 1 || !!fotoMateriais))
+  const editandoRef = useRef(editando)
+  editandoRef.current = editando
+  const gravandoRef = useRef(false)
+  gravandoRef.current = loading || avancando || cancelando
+  const [avisoAtualizacao, setAvisoAtualizacao] = useState<{ texto: string; pendente: boolean } | null>(null)
+  const processarEventosRef = useRef<() => Promise<void>>(async () => {})
+  processarEventosRef.current = async () => {
+    const decisao = decidirAtualizacao({ gravando: gravandoRef.current, editando: editandoRef.current })
+    if (decisao === 'ignorar') return
+    const alt = await buscarUltimaAlteracao(sb, id, user?.id)
+    if (decisao === 'avisar' && editandoRef.current) {
+      setAvisoAtualizacao({ texto: textoAtualizadaPor(alt), pendente: true })
+      return
+    }
+    await carregar(true)
+    if (mostrarAvisoAposReler(alt)) setAvisoAtualizacao({ texto: textoAtualizadaPor(alt), pendente: false })
+  }
+  const agrupadorRef = useRef<ReturnType<typeof criarAgrupador> | null>(null)
+  if (!agrupadorRef.current) agrupadorRef.current = criarAgrupador(() => { void processarEventosRef.current() }, 600, 3000)
+  useEffect(() => () => agrupadorRef.current?.cancelar(), [])
+  const aoEventoRemoto = useCallback(() => { agrupadorRef.current?.evento() }, [])
+  // A janela fechou com atualização pendente: relê agora e deixa o aviso como informação.
+  useEffect(() => {
+    if (editando || !avisoAtualizacao?.pendente) return
+    void carregar(true)
+    setAvisoAtualizacao(a => (a ? { ...a, pendente: false } : a))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editando])
+  const atualizarAgora = () => { setAvisoAtualizacao(null); void carregar(true) }
+  const presentes = usePresencaEscolta(id,
+    user?.id ? { id: user.id, nome: user.nome_completo ?? 'Usuário', perfil: user.perfil?.nome_exibicao ?? null } : null,
+    editando)
+
+  // Escolta, histórico de status (avanço, cancelamento, ações da gestão) e pontos das viaturas,
+  // filtrados por esta escolta. O banco só entrega a quem a RLS de SELECT deixa ver.
   const idsViaturasTempoReal = viaturas.map(v => v.id).sort().join(',')
   useEffect(() => {
     if (!id) return
     let canal = sb.channel(`detalhe-${id}-${Date.now()}`)
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'escoltas', filter: `id=eq.${id}` }, () => reler())
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'escoltas', filter: `id=eq.${id}` }, aoEventoRemoto)
     if (idsViaturasTempoReal) {
-      canal = canal.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'pontos_controle', filter: `escolta_veiculo_id=in.(${idsViaturasTempoReal})` }, () => reler())
+      canal = canal.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'pontos_controle', filter: `escolta_veiculo_id=in.(${idsViaturasTempoReal})` }, aoEventoRemoto)
     }
     canal.subscribe()
-    return () => { sb.removeChannel(canal) }
-  }, [id, idsViaturasTempoReal, reler, sb])
+    // O histórico entra na publicação pela 223: em canal à parte, para uma recusa dele (antes da
+    // 223) não derrubar a assinatura da escolta e dos pontos, que já funcionava.
+    const canalHistorico = sb.channel(`detalhe-historico-${id}-${Date.now()}`)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'escolta_status_historico', filter: `escolta_id=eq.${id}` }, aoEventoRemoto)
+      .subscribe()
+    return () => { sb.removeChannel(canal); sb.removeChannel(canalHistorico) }
+  }, [id, idsViaturasTempoReal, aoEventoRemoto, sb])
 
   // Onda L: a primeira leitura costuma sair antes de o usuário ser conhecido. Se ela
   // precisava dele (sem rede, ou com registros guardados no aparelho), lê de novo.
@@ -1598,10 +1653,9 @@ export default function EscoltaDetalhePage() {
 
     if (error) {
       setErro(error.message === 'ERRO_SEM_TRANSICAO'
-        ? 'A escolta mudou de status em outro dispositivo. Recarregue a página e tente de novo.'
+        ? await explicarConflito({ statusDaTela: escolta.status, original: 'A escolta mudou de status em outro dispositivo. Recarregue a página e tente de novo.' })
         : (error.message ?? 'Erro ao avançar status.'))
       setAvancando(false)
-      if (error.message === 'ERRO_SEM_TRANSICAO') carregar()
       return
     }
 
@@ -1846,7 +1900,11 @@ export default function EscoltaDetalhePage() {
         p_observacao: `Cancelamento: ${motivoCancelamento.trim()}`,
         p_observacao_fechamento: motivoCancelamento.trim(),
       })
-      if (error) throw new Error(error.message === 'ERRO_SEM_TRANSICAO' ? 'A escolta mudou de status em outro dispositivo. Recarregue a página.' : error.message)
+      if (error) {
+        throw new Error(error.message === 'ERRO_SEM_TRANSICAO'
+          ? await explicarConflito({ statusDaTela: escolta!.status, original: 'A escolta mudou de status em outro dispositivo. Recarregue a página.', nadaGravado: 'A escolta não foi cancelada.' })
+          : error.message)
+      }
 
       setDialogCancelar(false)
       setMotivoCancelamento('')
@@ -1877,7 +1935,11 @@ export default function EscoltaDetalhePage() {
         p_observacao: `Reagendamento para ${new Date(novaDataHora).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short', timeZone: 'America/Sao_Paulo' }).replace(',', '')}. Motivo: ${motivoReagendamento.trim()}`,
         p_data_hora_prevista: novaDataHora,
       })
-      if (error) throw new Error(error.message === 'ERRO_SEM_TRANSICAO' ? 'A escolta mudou de status em outro dispositivo. Recarregue a página.' : error.message)
+      if (error) {
+        throw new Error(error.message === 'ERRO_SEM_TRANSICAO'
+          ? await explicarConflito({ statusDaTela: escolta!.status, original: 'A escolta mudou de status em outro dispositivo. Recarregue a página.', nadaGravado: 'A escolta não foi reagendada.' })
+          : error.message)
+      }
 
       setDialogCancelar(false)
       setMotivoReagendamento('')
@@ -1952,6 +2014,19 @@ export default function EscoltaDetalhePage() {
   const ERRO_ETAPA_MUDOU =
     'A etapa já foi avançada em outra tela ou por outra pessoa. Nenhum registro foi gravado. Recarregue a página e confira a etapa atual.'
 
+  /**
+   * Concorrência (2026-11-12): a recusa por conflito diz quem alterou a escolta, o quê e quando
+   * (Brasília), pela última alteração (RPC da 223; sem ela, o histórico), e a tela é relida em
+   * silêncio. ERRO_SEM_TRANSICAO sem mudança de status no servidor não é concorrência (regra do
+   * banco): aí fica o texto `original` de sempre.
+   */
+  const explicarConflito = async (opcoes: { statusDaTela?: string; original?: string; nadaGravado?: string | null; fecho?: string | null } = {}): Promise<string> => {
+    const alt = await buscarUltimaAlteracao(sb, id, user?.id)
+    void carregar(true)
+    if (opcoes.original && opcoes.statusDaTela && !statusMudouNoServidor(alt, opcoes.statusDaTela)) return opcoes.original
+    return mensagemConflito(alt, { nadaGravado: opcoes.nadaGravado, fecho: opcoes.fecho })
+  }
+
   const conferirEtapa = async (escoltaId: string, statusEsperado: string) => {
     // Onda L (16.3.10): sem rede, pula; a conferência fica no servidor (conflito, nunca descarte).
     if (gravacaoRef.current?.pularConferencia) return
@@ -1972,7 +2047,7 @@ export default function EscoltaDetalhePage() {
       return
     }
     throw new Error(decisao.motivo === 'outra_tela'
-      ? ERRO_ETAPA_MUDOU
+      ? await explicarConflito()
       : decisao.motivo === 'anterior_enviando' ? MENSAGEM_ETAPA_ANTERIOR_ENVIANDO : (decisao.mensagem ?? ERRO_ETAPA_MUDOU))
   }
   // Lote 2026-10: com a gravacao atomica, transicao recusada nao deixa ponto nem historico.
@@ -2107,7 +2182,13 @@ export default function EscoltaDetalhePage() {
     setAndamento('Atualizando a tela')
     if (r.modo === 'guardado') { setAvisoOffline({ tipo: 'guardado', texto: MENSAGEM_GUARDADO }); return 'guardado' }
     if (r.modo === 'recusado') { setAvisoOffline({ tipo: 'erro', texto: textoRecusado(r.erro) }); return 'recusado' }
-    if (r.resultado === 'conflito') { setAvisoOffline({ tipo: 'erro', texto: textoConflito(r.motivo) }); return 'conflito' }
+    if (r.resultado === 'conflito') {
+      // Concorrência (2026-11-12): versão ou etapa diferente diz também quem alterou e quando.
+      const ultima = r.motivo === 'versao' || r.motivo === 'status'
+        ? textoUltimaAlteracao(await buscarUltimaAlteracao(sb, escolta!.id, user?.id)) : null
+      setAvisoOffline({ tipo: 'erro', texto: ultima ? `${textoConflito(r.motivo)} Esta escolta foi ${ultima}.` : textoConflito(r.motivo) })
+      return 'conflito'
+    }
     setAvisoOffline(null)
     return 'aplicado'
   }
@@ -2341,7 +2422,14 @@ export default function EscoltaDetalhePage() {
         p_latitude: pos.latitude,
         p_longitude: pos.longitude,
       })
-      if (error) throw new Error(error.message === 'ERRO_SEM_TRANSICAO' ? ERRO_TRANSICAO_NADA_GRAVADO : error.message)
+      if (error) {
+        throw new Error(error.message === 'ERRO_SEM_TRANSICAO'
+          ? await explicarConflito({
+            statusDaTela: params.statusEsperado, original: ERRO_TRANSICAO_NADA_GRAVADO,
+            nadaGravado: 'O ponto, o status e o histórico desta etapa não foram gravados.',
+          })
+          : error.message)
+      }
     } else if (linhas.length > 0) {
       const { error } = await sb.from('pontos_controle').insert(linhas)
       if (error) throw new Error(error.message)
@@ -3325,8 +3413,13 @@ export default function EscoltaDetalhePage() {
         p_longitude: pos.longitude,
       })
       if (escErr) {
+        // O checklist de entrega, se houver, já foi gravado antes: a frase diz só da finalização.
         throw new Error(escErr.message === 'ERRO_SEM_TRANSICAO'
-          ? 'O status da escolta mudou em outro dispositivo ou a regra do banco recusou a finalização. Recarregue a página e repita a etapa.'
+          ? await explicarConflito({
+            statusDaTela: escolta.status,
+            original: 'O status da escolta mudou em outro dispositivo ou a regra do banco recusou a finalização. Recarregue a página e repita a etapa.',
+            nadaGravado: 'A escolta não foi finalizada.', fecho: 'A tela foi atualizada; confira antes de repetir a etapa.',
+          })
           : escErr.message)
       }
 
@@ -3915,7 +4008,31 @@ export default function EscoltaDetalhePage() {
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-5">
-      <AcoesGestao escolta={escolta} perfil={perfil} onAlterado={carregar} onCancelar={abrirCancelar} usuarioId={user?.id} />
+      <AcoesGestao escolta={escolta} perfil={perfil} onAlterado={carregar} onCancelar={abrirCancelar} usuarioId={user?.id}
+        onEditando={setEditandoGestao} />
+
+      {/* Concorrência (2026-11-12): quem mais está com a escolta aberta e a atualização de outra pessoa. */}
+      <BarraPresenca pessoas={presentes} />
+      {avisoAtualizacao && (
+        <div data-teste="aviso-atualizacao" role="status" className="flex flex-wrap items-center justify-between gap-2 p-3 text-xs"
+          style={avisoAtualizacao.pendente
+            ? { backgroundColor: '#FEF6E7', border: '1.5px solid #E9C46A', color: '#8A5A10' }
+            : { backgroundColor: '#EEF3FA', border: '1px solid #C9D6EA', color: '#1A294A' }}>
+          <span className="font-semibold">
+            {avisoAtualizacao.texto}
+            {avisoAtualizacao.pendente && ' Os dados na tela ainda são os de antes.'}
+          </span>
+          {avisoAtualizacao.pendente ? (
+            <button type="button" onClick={atualizarAgora} className="btn-outline px-3 py-1 text-xs" data-teste="botao-atualizar-agora">
+              Atualizar agora
+            </button>
+          ) : (
+            <button type="button" onClick={() => setAvisoAtualizacao(null)} aria-label="Fechar aviso" className="font-bold px-2">
+              <X size={14} />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Onda L: registro guardado no aparelho, ou não aceito (conflito ou recusado). */}
       {avisoOffline && (

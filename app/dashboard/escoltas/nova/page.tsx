@@ -16,11 +16,11 @@ import { ConferenciaCoordenada } from '@/components/endereco/conferencia-coorden
 import { SalvarEnderecoLocal } from '@/components/endereco/salvar-endereco-local'
 import { LocalSalvo, carregarLocaisAtivos, carregarLocaisParaBusca, locaisQueCombinam, mensagemErroLocal, PERFIS_CADASTRAM_LOCAL } from '@/lib/locais'
 import { PODE_PODER_TOTAL, temPermissao } from '@/lib/permissions'
-import { MSG_ATUALIZACAO, ehFuncaoAusente } from '@/lib/gestao'
+import { MSG_ATUALIZACAO, ehFuncaoAusente, horaBR as horaPrevistaBR } from '@/lib/gestao'
 import { rotuloStatus } from '@/lib/fluxo-escolta'
 import { ufDaSugestaoMapbox } from '@/lib/uf-endereco'
 import { corDoCliente } from '@/lib/paleta-clientes'
-
+import { encontrarParecidas, janelaDeBusca, textoMotivos, type EscoltaComparavel, type EscoltaParecida } from '@/lib/duplicidade-escolta'
 // ─── Palette ──────────────────────────────────────────────────────────────────
 const P = {
   navy:     '#1A294A',
@@ -778,6 +778,50 @@ function FormularioEscolta() {
   }
 
   const voltar = () => { setErros([]); setStep(s => (s - 1) as 1|2|3) }
+
+  // ── Concorrência (2026-11-12): escolta parecida já cadastrada ─────────────
+  // Na revisão final de uma escolta NOVA, procura outra do mesmo cliente, no mesmo dia (Brasília)
+  // e na mesma rota, ou com a mesma viatura no mesmo dia. Só aviso: nada é bloqueado. Leitura
+  // direta com a RLS de quem cria (gestão, supervisão e central veem todas; excluídas não vêm);
+  // falhou, segue sem aviso.
+  const [parecidas, setParecidas] = useState<EscoltaParecida[] | null>(null)
+  const idsVeiculosEscolhidos = viaturas.map(v => v.veiculo_id).filter(Boolean).sort().join(',')
+  useEffect(() => {
+    if (step !== 3 || editandoId || !dados.cliente_id || !dados.data_prevista) { setParecidas(null); return }
+    const prevista = new Date(`${dados.data_prevista}T${dados.hora_prevista_h}:${dados.hora_prevista_m}:00`)
+    if (Number.isNaN(prevista.getTime())) { setParecidas(null); return }
+    const iso = prevista.toISOString()
+    const { desde, ate } = janelaDeBusca(iso)
+    let vivo = true
+    ;(async () => {
+      try {
+        const { data, error } = await sb.from('escoltas')
+          .select('id, codigo_escolta, status, cliente_id, data_hora_prevista, origem_endereco, origem_lat, origem_lng, destino_endereco, destino_lat, destino_lng, arquivada_em, viaturas:escolta_veiculos(veiculo_id)')
+          .gte('data_hora_prevista', desde).lt('data_hora_prevista', ate).neq('status', 'cancelada')
+          .limit(300)
+        if (!vivo) return
+        if (error || !Array.isArray(data)) { setParecidas([]); return }
+        const existentes: EscoltaComparavel[] = data.map((e: EscoltaComparavel & { viaturas?: { veiculo_id: string }[] | null }) => ({
+          ...e, veiculo_ids: (e.viaturas ?? []).map(v => v.veiculo_id),
+        }))
+        setParecidas(encontrarParecidas({
+          cliente_id: dados.cliente_id,
+          data_hora_prevista: iso,
+          origem_endereco: enderecoComComplemento(dados.origem_endereco, dados.origem_complemento),
+          origem_lat: dados.origem_lat, origem_lng: dados.origem_lng,
+          destino_endereco: enderecoComComplemento(dados.destino_endereco, dados.destino_complemento),
+          destino_lat: dados.destino_lat, destino_lng: dados.destino_lng,
+          veiculo_ids: idsVeiculosEscolhidos ? idsVeiculosEscolhidos.split(',') : [],
+        }, existentes))
+      } catch {
+        if (vivo) setParecidas([])
+      }
+    })()
+    return () => { vivo = false }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, editandoId, dados.cliente_id, dados.data_prevista, dados.hora_prevista_h, dados.hora_prevista_m,
+      dados.origem_endereco, dados.origem_lat, dados.origem_lng, dados.destino_endereco, dados.destino_lat, dados.destino_lng,
+      idsVeiculosEscolhidos])
 
   // ── Salvar ────────────────────────────────────────────────────────────────
   const salvar = async () => {
@@ -1624,6 +1668,39 @@ function FormularioEscolta() {
                 placeholder="Mínimo de 10 caracteres"
                 data-teste="motivo-edicao"
               />
+            </div>
+          )}
+
+          {/* Concorrência (2026-11-12): escolta parecida já cadastrada. Só aviso: o botão de
+              criar continua liberado (critério em lib/duplicidade-escolta.ts). */}
+          {!editandoId && parecidas && parecidas.length > 0 && (
+            <div className="p-4 space-y-2" data-teste="aviso-duplicidade" style={{ border: '1.5px solid #C8813A', backgroundColor: '#FFFBEB', borderRadius: '2px' }}>
+              <p className="text-xs font-black uppercase tracking-wide flex items-center gap-1.5" style={{ color: '#8A5A10' }}>
+                <AlertTriangle size={13} /> Já existe escolta parecida
+              </p>
+              <p className="text-[11px] leading-relaxed" style={{ color: P.sub }}>
+                Confira se não é a mesma operação lançada de novo. Se for outra escolta, pode criar normalmente.
+              </p>
+              <ul className="space-y-1.5">
+                {parecidas.slice(0, 5).map(p => (
+                  <li key={p.id} className="text-xs flex flex-wrap items-baseline gap-x-2 gap-y-0.5" data-teste="escolta-parecida">
+                    <a href={`/dashboard/escoltas/${p.id}`} target="_blank" rel="noopener noreferrer"
+                      className="font-mono font-black underline" style={{ color: P.navy }}>{p.codigo ?? 'sem código'}</a>
+                    <span style={{ color: P.text }}>{rotuloStatus(p.status ?? '')}</span>
+                    <span style={{ color: P.sub }}>{p.dataHoraPrevista ? horaPrevistaBR(p.dataHoraPrevista) : ''}</span>
+                    <span style={{ color: P.sub }}>{p.origem ?? 'sem origem'} para {p.destino ?? 'sem destino'}</span>
+                    <span className="font-semibold" style={{ color: '#8A5A10' }}>({textoMotivos(p.motivos)})</span>
+                  </li>
+                ))}
+              </ul>
+              {parecidas.length > 5 && <p className="text-[11px]" style={{ color: P.sub }}>E mais {parecidas.length - 5}.</p>}
+              <div className="flex flex-wrap gap-2 pt-1">
+                <button type="button" onClick={() => router.push('/dashboard/escoltas')} data-teste="desistir-duplicada"
+                  className="px-3 py-1.5 text-xs font-bold uppercase tracking-wider"
+                  style={{ color: '#8A5A10', border: '1.5px solid #C8813A', borderRadius: '2px', backgroundColor: P.surface }}>
+                  Desistir e voltar à lista
+                </button>
+              </div>
             </div>
           )}
 

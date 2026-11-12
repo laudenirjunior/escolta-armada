@@ -42,6 +42,7 @@ import {
   MSG_ATUALIZACAO, ehFuncaoAusente, horaBR, totalItensPendentes,
   type ConclusaoAntecipada, type PendenciaEtapa,
 } from '@/lib/gestao'
+import { buscarUltimaAlteracao, classificarConflito, mensagemConflito } from '@/lib/concorrencia'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const sb = createClient() as any
@@ -77,14 +78,21 @@ interface Props {
   onCancelar?: () => void
   /** usuarios.id de quem está na sessão (criado_por das fotos do lançamento retroativo). */
   usuarioId?: string | null
+  /**
+   * Concorrência (2026-11-12): avisa o detalhe quando um diálogo da gestão abre ou fecha, para
+   * a atualização em tempo real não reler a escolta por baixo do que está sendo preenchido.
+   */
+  onEditando?: (editando: boolean) => void
 }
 
-export function AcoesGestao({ escolta, perfil, onAlterado, onCancelar, usuarioId }: Props) {
+export function AcoesGestao({ escolta, perfil, onAlterado, onCancelar, usuarioId, onEditando }: Props) {
   const router = useRouter()
   const [menu, setMenu] = useState(false)
   const [acao, setAcao] = useState<Acao | null>(null)
   const [excluindo, setExcluindo] = useState(false)
   const [retroativo, setRetroativo] = useState(false)
+  const editando = !!acao || excluindo || retroativo
+  useEffect(() => { onEditando?.(editando) }, [editando, onEditando])
   if (!temPermissao(perfil, PODE_PODER_TOTAL)) return null
 
   // Excluída some para todos (RLS da 221): depois de excluir, volta para a lista.
@@ -240,6 +248,7 @@ export function DialogoAcao({ acao, escolta, onFechar, onFeito }: {
   const [enviando, setEnviando] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
   const [feito, setFeito] = useState<string | null>(null)
+  const [avisoConflito, setAvisoConflito] = useState<string | null>(null)
 
   const mensagemDeErro = (e: { code?: string; message?: string }) => ehFuncaoAusente(e) ? MSG_ATUALIZACAO : (e.message ?? 'Erro inesperado.')
 
@@ -271,15 +280,29 @@ export function DialogoAcao({ acao, escolta, onFechar, onFeito }: {
       : acao === 'recuperar' ? sb.rpc('recuperar_escolta', args)
       : sb.rpc('arquivar_escolta', args)
     const { data, error } = await chamada
-    setEnviando(false)
     if (error) {
-      setErro(mensagemDeErro(error))
-      // A escolta mudou desde a prévia: busca a lista nova e pede nova confirmação.
-      if ((acao === 'voltar' || acao === 'zerar') && /mudou desde a prévia/.test(error.message ?? '')) {
+      // Concorrência (2026-11-12): conflito com outra pessoa diz quem alterou, o quê e quando.
+      const conflito = ehFuncaoAusente(error) ? null : classificarConflito(error.message)
+      const refazPrevia = (acao === 'voltar' || acao === 'zerar') && conflito === 'previa'
+      const texto = conflito
+        ? mensagemConflito(await buscarUltimaAlteracao(sb, escolta.id), {
+          nadaGravado: 'Nada foi gravado.',
+          fecho: refazPrevia ? 'A prévia foi atualizada; confira e confirme de novo.' : 'Feche esta janela e confira a escolta.',
+        })
+        : mensagemDeErro(error)
+      setEnviando(false)
+      // A escolta mudou desde a prévia: busca a lista nova e pede nova confirmação. O texto vai
+      // no aviso (o erro bloquearia a nova confirmação, e carregar() o limpa).
+      if (refazPrevia) {
+        setAvisoConflito(texto)
         setConfirmo(false); setPrevia(null); setCarregando(true); carregar()
+      } else {
+        setErro(texto)
       }
       return
     }
+    setAvisoConflito(null)
+    setEnviando(false)
     const d = (data ?? {}) as Record<string, unknown>
     setFeito(acao === 'voltar' || acao === 'zerar'
       ? `Feito: a escolta voltou para ${rotuloStatus(String(d.para ?? ''))}. ${d.anulados ?? 0} registro(s) anulado(s), nada apagado.`
@@ -302,6 +325,7 @@ export function DialogoAcao({ acao, escolta, onFechar, onFeito }: {
         </div>
 
         <div className="px-6 py-4 space-y-4 overflow-y-auto">
+          {avisoConflito && <p className="text-xs p-3" style={{ backgroundColor: C.bgAmber, color: C.amber }} data-teste="aviso-conflito">{avisoConflito}</p>}
           {erro && <p className="text-xs p-3" style={{ backgroundColor: C.bgRed, color: C.red }} data-teste="erro-acao">{erro}</p>}
           {feito && <p className="text-xs p-3" style={{ backgroundColor: '#EAF6EF', color: '#1E7C52' }} data-teste="acao-feita">{feito}</p>}
           {carregando && <p className="text-sm" style={{ color: C.sub }}>Carregando a prévia…</p>}

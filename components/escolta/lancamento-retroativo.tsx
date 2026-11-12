@@ -22,6 +22,7 @@ import { History, ImagePlus, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import { rotuloStatus } from '@/lib/fluxo-escolta'
 import { ehFuncaoAusente } from '@/lib/gestao'
+import { buscarUltimaAlteracao, classificarConflito, mensagemConflito } from '@/lib/concorrencia'
 import {
   MAX_FOTOS_ETAPA, MOTIVO_MINIMO, MSG_DEPENDE_222, OBSERVACAO_MAXIMA, PREFIXO_FOTO_RETROATIVA,
   brasiliaParaIso, colunasFotoGaleria, erroMotivo, etapaTemPonto, etapasQueFaltam, isoParaBrasilia, montarPEtapas,
@@ -137,8 +138,15 @@ export function DialogoLancamentoRetroativo({ escolta, usuarioId, onFechar, onFe
         p_previa: false, p_resumo: previa.resumo,
       })
       if (error) {
+        // Concorrência (2026-11-12): a escolta mudou desde a conferência; diz quem, o quê e quando.
+        if (!ehFuncaoAusente(error) && classificarConflito(error.message) === 'previa') {
+          setErros([mensagemConflito(await buscarUltimaAlteracao(sb, escolta.id), {
+            nadaGravado: 'Nenhuma etapa foi lançada.', fecho: 'Confira de novo antes de confirmar.',
+          })])
+          setPrevia(null); setConfirmo(false)
+          return
+        }
         setErros([mensagem(error)])
-        if (/mudaram desde a conferência/.test(error.message ?? '')) { setPrevia(null); setConfirmo(false) }
         return
       }
       const d = (data ?? {}) as Record<string, unknown>
