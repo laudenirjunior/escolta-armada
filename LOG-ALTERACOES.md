@@ -8,6 +8,47 @@ Branch de trabalho: `master` (producao serve master; ver a entrada de 19/08 sobr
 
 ---
 
+## 2026-11-13 - Criar escolta dava erro: numeração que nunca repete e criação atômica
+
+Branch `fix/numeracao-escolta`, sobre a master `81ba7ea` (já com a 223). Pedido de Peçanha em 13/11/2026 (pelo Grokbot): ao criar escolta nova, o app dava erro. Migration `224_numeracao_escolta.sql` (e `_reverter`) criada e **não aplicada em produção**. Depois da 223 (depende só da 195 e da 221).
+
+### Causa
+
+1. O código `ESC-AAAA-NNNN` vem da trigger `tr_gerar_codigo_escolta` (`public.gerar_codigo_escolta`, versão de produção na 195): MAX do número do ano + 1.
+2. A função era SECURITY INVOKER: o MAX rodava com a RLS de quem cria e só enxergava as escoltas visíveis para ele.
+3. A 221 esconde as excluídas de todos os perfis (`escoltas_excluida_oculta`, RESTRICTIVE). Com a escolta de maior número do ano excluída (ex.: ESC-2026-0010 e 0011), o MAX devolvia um número já gravado e o INSERT colidia com `escoltas_codigo_escolta_key` (23505). O mesmo já acontecia antes da 221 para o supervisor quando a maior estava arquivada (`escoltas_arquivada_so_admin`).
+4. Duas criações ao mesmo tempo também calculavam o mesmo número (nenhuma trava).
+5. A tela (`app/dashboard/escoltas/nova/page.tsx`) gravava escolta, viaturas e equipe com INSERTs separados do navegador e trocava o erro do banco por "Erro ao criar a escolta.". Uma falha na viatura ou na equipe deixava a escolta pela metade.
+
+Reproduzido na homologação antes da correção: gestor, maior ESC excluída, INSERT recusado com 23505 em `escoltas_codigo_escolta_key`.
+
+### O que mudou
+
+1. **Contador próprio** `lote_interno.escolta_codigo_contador (ano, ultimo)`, carregado com o maior número gravado de cada ano em TODAS as escoltas; RLS ligada e sem acesso para anon e authenticated.
+2. **`gerar_codigo_escolta` SECURITY DEFINER**: lê o maior código sem a RLS e reserva o número com `INSERT ... ON CONFLICT DO UPDATE` no contador (a linha do ano fica travada até o fim da transação; a segunda criação simultânea espera e sai com o número seguinte). Número = maior entre contador e maior código gravado, mais um. Número de escolta excluída nunca volta. Transação desfeita devolve o número (sem buraco). Formato e ano iguais aos de antes; código informado no INSERT continua respeitado.
+3. **RPC `criar_escolta(p_campos, p_viaturas)`**: escolta, viaturas e equipe numa transação (tudo ou nada). SECURITY INVOKER de propósito: valem as mesmas policies e triggers do INSERT direto (`escoltas_insert`, `escolta_veiculos_escrita`, `escolta_efetivo_escrita`), nenhuma permissão nova. Lista fechada de campos (a da `editar_escolta`), status, data da solicitação, checklist pendente e autor definidos no servidor; valida cliente, data, endereços, coordenadas, viatura obrigatória, veículo e vigilante repetidos e comandante em viatura com gente. Colisão do código: tenta de novo até 5 vezes dentro da transação.
+4. **Tela de criação**: chama a `criar_escolta` (`lib/criar-escolta.ts`), com nova tentativa no cliente se a colisão escapar (até 3); valida os passos 1 e 2 de novo antes do envio e a data e hora de partida; trava síncrona contra o duplo clique (o estado `salvando` só valia no render seguinte); mostra a mensagem real do banco (texto, detalhe e código), nunca a genérica. Sem a 224 no banco, cai no caminho antigo (INSERT direto), agora com a mensagem real e dizendo qual escolta ficou incompleta se a viatura ou a equipe falhar. A edição continua pela `editar_escolta`, agora também com a mensagem real.
+5. **Varredura (mesmo risco, corrigidos)**: `cadastros/page.tsx` salvar veículo, excluir veículo e excluir vigilante ignoravam o erro e a recusa silenciosa da RLS (fechavam como salvo); `campo/page.tsx` `uploadFoto` subia o arquivo e engolia a falha da linha em `fotos` (o registro seguia sem foto). Todos passam a avisar com o texto do banco.
+
+### Varredura: o que ficou listado (sem correção nesta branch)
+
+1. Nenhum outro gerador "maior + 1" no banco (funções de `public` e `lote_interno` da homologação) nem no código. Os outros MAX são de data (último registro, último check-in).
+2. `cadastrar_operador` gera login com sufixo por `WHILE EXISTS` (SECURITY DEFINER, enxerga tudo): duas criações simultâneas com o mesmo nome podem colidir em `usuarios_email_key`; a mensagem real já chega à tela (`setErroVigilante(error.message)`). Risco baixo.
+3. `notificacoes/page.tsx` `enviarMensagem`: insert em `chat_mensagens` sem ler o erro (mensagem some sem aviso). Risco baixo, fora do fluxo de escolta.
+4. `usuarios/page.tsx` excluir usuário: o DELETE em `usuarios` falha sem aviso para quem tem histórico (34 chaves estrangeiras sem cascata) e o acesso de login é apagado mesmo assim; o cadastro fica sem login e sem mensagem. Não mexido: na prática é assim que a tela tira o acesso de quem tem histórico, e mudar exige decisão (sugestão: avisar "acesso removido; o cadastro fica pelo histórico" e marcar o usuário como inativo).
+5. `escoltas/[id]/page.tsx` e `campo/page.tsx` têm outros `catch` silenciosos de leitura (presença, Realtime, endereço aproximado), intencionais e comentados.
+
+### Como aplicar
+
+1. SQL Editor: `224_numeracao_escolta.sql` (idempotente). Conferir com as 4 consultas do fim do arquivo (gerar_codigo_escolta com prosecdef true; criar_escolta false; contador com o ano corrente no maior número gravado; anon sem EXECUTE).
+2. Deploy do código (merge da branch). A ordem importa pouco: sem a 224 a tela usa o caminho antigo; mas o erro só some com a 224 aplicada.
+3. Homologação: `database/testes/07_numeracao_escolta.sql` (só PASSOU e BLOQUEADO CORRETAMENTE) e `database/testes/07_numeracao_escolta_concorrencia.mjs` (duas sessões).
+4. Reversão: `224_numeracao_escolta_reverter.sql` (volta a 195; o contador fica, explicado no arquivo) e git revert.
+
+### Como foi verificado
+
+Homologação local (Supabase da VPS, 127.0.0.1:54322, com a 221, a 222 e a 223 aplicadas antes): `07_numeracao_escolta.sql` 20/20 (estrutura e privilégios, gestor com a maior excluída, INSERT direto também corrigido, supervisor com a maior arquivada, tudo ou nada com falha na segunda viatura, validações, operador e central recusados, criação desfeita sem consumir número); com a reversão aplicada o mesmo teste falha (prova de que cobre a causa) e a 224 reaplicada duas vezes (idempotente) volta a passar. `07_numeracao_escolta_concorrencia.mjs` 6/6 (segunda criação espera a trava, números diferentes e seguidos, número devolvido na criação desfeita, colisão real com código gravado por outra transação tratada pela nova tentativa, limpeza). E2E com o app desta branch (build de produção, porta local) e Chromium: gestor cria com a maior ESC excluída, duplo clique gera uma escolta só, viatura e comandante gravados juntos, mensagem real do banco na recusa, nada pela metade, botão volta a ficar disponível. `node --test tests/*.test.ts` 115/115 (11 novos em `tests/criar-escolta.test.ts`); tsc 0 erros; lint 0 erros e 25 avisos (os mesmos da master); `npm run build` ok. Nada aplicado em produção.
+
 ## 2026-11-12 - Concorrência na mesma escolta (conflito claro, tempo real, presença e duplicada)
 
 Branch `feat/concorrencia`, sobre a master `d42a35f` (já com a 222). Pedido de Peçanha em 12/11/2026: gestão, central, supervisor e operador mexem na mesma escolta ao mesmo tempo; a tela precisa dizer quem alterou, se atualizar sozinha, mostrar quem mais está olhando e avisar escolta lançada duas vezes. Migration `223_concorrencia.sql` (e `_reverter`) criada e **não aplicada**. Depois da 222. Só leitura e configuração: nenhuma RPC existente mudou de corpo e nenhuma política RLS mudou.

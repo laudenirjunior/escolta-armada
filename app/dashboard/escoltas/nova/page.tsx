@@ -20,6 +20,7 @@ import { MSG_ATUALIZACAO, ehFuncaoAusente, horaBR as horaPrevistaBR } from '@/li
 import { rotuloStatus } from '@/lib/fluxo-escolta'
 import { ufDaSugestaoMapbox } from '@/lib/uf-endereco'
 import { corDoCliente } from '@/lib/paleta-clientes'
+import { criarEscolta, criarTrava, dataHoraPrevistaISO, mensagemErroBanco } from '@/lib/criar-escolta'
 import { encontrarParecidas, janelaDeBusca, textoMotivos, type EscoltaComparavel, type EscoltaParecida } from '@/lib/duplicidade-escolta'
 // ─── Palette ──────────────────────────────────────────────────────────────────
 const P = {
@@ -455,6 +456,8 @@ function FormularioEscolta() {
   const [step, setStep]         = useState<1|2|3>(1)
   const [erros, setErros]       = useState<string[]>([])
   const [salvando, setSalvando] = useState(false)
+  // 2026-11-13: trava síncrona contra o duplo clique (o estado salvando só vale no próximo render).
+  const travaSalvar = useRef(criarTrava())
 
   const [dados, setDados] = useState<DadosBasicos>({
     cliente_id: '', data_prevista: '',
@@ -825,10 +828,23 @@ function FormularioEscolta() {
 
   // ── Salvar ────────────────────────────────────────────────────────────────
   const salvar = async () => {
+    if (!travaSalvar.current.tentar()) return
     setSalvando(true)
     setErros([])
     try {
-      const dtStr = `${dados.data_prevista}T${dados.hora_prevista_h}:${dados.hora_prevista_m}:00`
+      // 2026-11-13: as regras dos passos 1 e 2 de novo, antes do envio (o formulário pode ter
+      // mudado depois do passo em que foram conferidas). Na edição, o banco confere (editar_escolta).
+      if (!editandoId) {
+        const invalidos = [...validar1(), ...validar2()]
+        if (invalidos.length) {
+          setErros(invalidos)
+          setSalvando(false)
+          travaSalvar.current.soltar()
+          return
+        }
+      }
+      const dataHoraPrevista = dataHoraPrevistaISO(dados.data_prevista, dados.hora_prevista_h, dados.hora_prevista_m)
+      if (!dataHoraPrevista) throw new Error('Data ou hora de partida inválida. Confira o passo 1.')
 
       // O complemento vai junto no endereco, para aparecer no mapa e no relatorio, E
       // separado em metadados, para a edicao conseguir recuperar sem adivinhar onde ele
@@ -840,7 +856,7 @@ function FormularioEscolta() {
 
       const camposEscolta = {
         cliente_id:          dados.cliente_id,
-        data_hora_prevista:  new Date(dtStr).toISOString(),
+        data_hora_prevista:  dataHoraPrevista,
         origem_endereco:     enderecoComComplemento(dados.origem_endereco, dados.origem_complemento),
         origem_lat:          dados.origem_lat,
         origem_lng:          dados.origem_lng,
@@ -867,6 +883,11 @@ function FormularioEscolta() {
       }
 
       let escoltaId: string
+      let codigoCriado: string | null = null
+      // Caminho antigo: a escolta já existe quando a viatura ou a equipe falha. A mensagem diz
+      // qual escolta ficou incompleta, para a gestão completar pela edição.
+      const incompleta = (texto: string) =>
+        `A escolta ${codigoCriado ?? ''} foi criada, mas ficou incompleta: ${texto} Abra a escolta e complete pela edição antes de criar outra.`.replace('  ', ' ')
       // Lote 2026-10 (M3): a edição recria as viaturas; o combustível lançado e o valor
       // pago aos vigilantes são guardados antes e devolvidos às que continuam.
       const combustivelAntes = new Map<string, { litros: number | null; valor: number | null }>()
@@ -899,10 +920,26 @@ function FormularioEscolta() {
           })),
           p_motivo: motivoEdicao.trim() || null,
         })
-        if (eRpc) throw new Error(ehFuncaoAusente(eRpc) ? MSG_ATUALIZACAO : eRpc.message)
+        if (eRpc) throw new Error(ehFuncaoAusente(eRpc) ? MSG_ATUALIZACAO : mensagemErroBanco(eRpc, 'salvar as alterações'))
         router.push(`/dashboard/escoltas/${editandoId}`)
         return
       } else {
+        // 2026-11-13 (migration 224): escolta, viaturas e equipe numa só transação pela RPC
+        // criar_escolta, com nova tentativa se o código ESC colidir. Antes eram três INSERTs
+        // soltos e o erro real virava "Erro ao criar a escolta.".
+        const criada = await criarEscolta(sb, camposEscolta, viaturas.map(v => ({
+          veiculo_id: v.veiculo_id,
+          membros: v.membros.map(m => ({
+            vigilante_id: m.vigilante_id,
+            papel_na_escolta: m.papel_na_escolta,
+            ...(verFinanceiro ? { valor_pago_vigilante: m.valor_pago ? parseFloat(m.valor_pago) : null } : {}),
+          })),
+        })))
+        if (criada.ok) {
+          router.push(`/dashboard/escoltas/${criada.id}`)
+          return
+        }
+        // Sem a migration 224 no banco: caminho antigo (INSERT direto), agora com o erro real.
         const { data: nova, error: e1 } = await sb
           .from('escoltas')
           .insert({
@@ -912,10 +949,11 @@ function FormularioEscolta() {
             checklist_pendente_no_inicio: true,
             criada_por: user?.id,
           })
-          .select('id').single()
+          .select('id, codigo_escolta').single()
 
-        if (e1 || !nova) throw new Error('Erro ao criar a escolta.')
+        if (e1 || !nova) throw new Error(mensagemErroBanco(e1, 'criar a escolta'))
         escoltaId = nova.id
+        codigoCriado = nova.codigo_escolta ?? null
       }
 
       for (const v of viaturas) {
@@ -931,7 +969,7 @@ function FormularioEscolta() {
           })
           .select('id').single()
 
-        if (e2 || !ev) throw new Error('Erro ao vincular viatura.')
+        if (e2 || !ev) throw new Error(incompleta(mensagemErroBanco(e2, 'vincular a viatura')))
 
         for (const m of v.membros) {
           const { error: e3 } = await sb.from('escolta_efetivo').insert({
@@ -946,14 +984,15 @@ function FormularioEscolta() {
           })
           // Antes o erro era engolido: a escolta nascia com viatura e sem equipe, e
           // ninguem ficava sabendo ate a hora de sair da base.
-          if (e3) throw new Error('Erro ao escalar vigilante: ' + e3.message)
+          if (e3) throw new Error(incompleta(mensagemErroBanco(e3, 'escalar o vigilante')))
         }
       }
 
       router.push(`/dashboard/escoltas/${escoltaId}`)
     } catch (err) {
-      setErros([err instanceof Error ? err.message : 'Erro inesperado.'])
+      setErros([err instanceof Error ? err.message || 'Erro inesperado.' : mensagemErroBanco(err as any)])
       setSalvando(false)
+      travaSalvar.current.soltar()
     }
   }
 

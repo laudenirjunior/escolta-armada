@@ -38,6 +38,8 @@ Este diretório guarda a referência legível do que foi aplicado. A fonte de ve
 
 `223_concorrencia.sql` **pendente** (criada em 2026-11-12, não aplicada; depois da 222). Concorrência na mesma escolta: RPC de leitura `ultima_alteracao_escolta` (quem alterou, perfil, o quê e quando, para a mensagem de conflito e o aviso de atualização da tela), índice `logs_auditoria_registro_data_idx` e as tabelas `escoltas`, `escolta_status_historico` e `pontos_controle` na publicação `supabase_realtime` (só se ainda não estiverem). Nenhuma RPC ou política existente muda. Conferência: `database/testes/06_concorrencia_conferencia.sql`. Reversão: `223_concorrencia_reverter.sql` (a publicação fica). Ver a entrada de 2026-11-12 (concorrência) no `LOG-ALTERACOES.md`.
 
+`224_numeracao_escolta.sql` **pendente** (criada em 2026-11-13, não aplicada; depois da 223). Numeração que nunca repete: `gerar_codigo_escolta` passa a SECURITY DEFINER com contador próprio `lote_interno.escolta_codigo_contador` (trava contra criação simultânea; conta também excluídas e arquivadas) e RPC `criar_escolta` (escolta, viaturas e equipe numa transação, SECURITY INVOKER, nova tentativa se o código colidir). Conferência: consultas do fim do arquivo; teste `database/testes/07_numeracao_escolta.sql` e `07_numeracao_escolta_concorrencia.mjs`. Reversão: `224_numeracao_escolta_reverter.sql`. Ver a entrada de 2026-11-13 no `LOG-ALTERACOES.md`.
+
 `111_trigger_validacao_transicao.sql` neste diretório é uma versão consolidada da 111 e da 112 num arquivo só, mantida como referência. **Não precisa ser aplicada**: o conteúdo já está no banco pelas migrations 111 e 112.
 
 ## Regra para migrations novas
