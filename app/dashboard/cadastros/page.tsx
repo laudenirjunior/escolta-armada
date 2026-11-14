@@ -242,23 +242,36 @@ export default function CadastrosPage() {
 
   const deleteVigilante = async (id: string) => {
     if (!confirm('Excluir vigilante?')) return
-    await sb.from('vigilantes').delete().eq('id', id)
+    // 2026-11-13: com RLS, exclusão negada volta sem erro e sem linha; antes nada era avisado.
+    const { data, error } = await sb.from('vigilantes').delete().eq('id', id).select('id')
+    if (error || !data?.length) {
+      alert(error?.message ?? 'Você não tem permissão para excluir vigilantes.')
+      return
+    }
     loadVigilantes()
   }
 
   const saveVeiculo = async () => {
     setSaving(true)
-    if (editVeiculo) {
-      await sb.from('veiculos').update({ ...formVeiculo, atualizado_por: user?.id }).eq('id', editVeiculo)
-    } else {
-      await sb.from('veiculos').insert({ ...formVeiculo, criado_por: user?.id })
+    // 2026-11-13: o erro (placa repetida, permissão) era ignorado e o diálogo fechava como salvo.
+    const r = editVeiculo
+      ? await sb.from('veiculos').update({ ...formVeiculo, atualizado_por: user?.id }).eq('id', editVeiculo).select('id')
+      : await sb.from('veiculos').insert({ ...formVeiculo, criado_por: user?.id }).select('id')
+    setSaving(false)
+    if (r.error || !r.data?.length) {
+      alert(r.error?.message ?? 'Você não tem permissão para alterar veículos.')
+      return
     }
-    setSaving(false); setDialogVeiculo(false); loadVeiculos()
+    setDialogVeiculo(false); loadVeiculos()
   }
 
   const deleteVeiculo = async (id: string) => {
     if (!confirm('Excluir veículo?')) return
-    await sb.from('veiculos').delete().eq('id', id)
+    const { data, error } = await sb.from('veiculos').delete().eq('id', id).select('id')
+    if (error || !data?.length) {
+      alert(error?.message ?? 'Você não tem permissão para excluir veículos.')
+      return
+    }
     loadVeiculos()
   }
 

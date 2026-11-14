@@ -947,7 +947,7 @@ export default function CampoPage() {
     // com rede ruim esse era o caminho mais provavel.
     if (upErr) throw new Error('Falha ao enviar a foto: ' + upErr.message)
 
-    const { data: fotoRow } = await sb.from('fotos').insert({
+    const { data: fotoRow, error: fotoErr } = await sb.from('fotos').insert({
       caminho_arquivo: path,
       tipo_foto_id: tipoFotoId,
       latitude: captura.gps?.lat ?? null,
@@ -959,8 +959,10 @@ export default function CampoPage() {
       sincronizada: true,
       criado_por: user?.id ?? null,
     }).select('id').single()
+    // 2026-11-13: o arquivo subia, a linha de fotos falhava em silêncio e o registro seguia sem foto.
+    if (fotoErr || !fotoRow) throw new Error('A foto foi enviada, mas o registro dela não foi gravado: ' + (fotoErr?.message ?? 'sem resposta do servidor.'))
 
-    return fotoRow?.id ?? null
+    return fotoRow.id
   }
 
   // ── Onda L: peças do envelope (gravação guardada no aparelho e enviada) ─────
